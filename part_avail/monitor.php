@@ -16,7 +16,13 @@ $todayStr = date('Y-m-d');
 $schedules = [];
 try {
     $schedules = $pdo->query("
-        SELECT * FROM schedules ORDER BY remaining_day ASC
+        SELECT s.*,
+               COALESCE(p.plant_name, s.department) AS department,
+               COALESCE(l.line_name, s.line) AS line
+        FROM schedules s
+        LEFT JOIN plants p ON p.id = s.department
+        LEFT JOIN line l ON l.id = s.line
+        ORDER BY s.remaining_day ASC
     ")->fetchAll(PDO::FETCH_ASSOC);
 } catch (\Exception $e) {
     error_log('[Monitor] schedules: ' . $e->getMessage());
@@ -30,7 +36,13 @@ $todayCount = count($todaySchedArr);
 $prevSchedules = [];
 try {
     $prevSchedules = $pdo->query("
-        SELECT * FROM schedules_preventive ORDER BY remaining_day ASC
+        SELECT s.*,
+               COALESCE(p.plant_name, s.department) AS department,
+               COALESCE(l.line_name, s.line) AS line
+        FROM schedules_preventive s
+        LEFT JOIN plants p ON p.id = s.department
+        LEFT JOIN line l ON l.id = s.line
+        ORDER BY s.remaining_day ASC
     ")->fetchAll(PDO::FETCH_ASSOC);
 } catch (\Exception $e) {
     error_log('[Monitor] schedules_preventive: ' . $e->getMessage());
@@ -212,7 +224,7 @@ function partOrderBadge(string $v): string
             display: flex;
             flex-direction: column;
             gap: .25rem;
-            overflow-y: auto;
+            overflow: hidden;
         }
 
         .sidebar-back {
@@ -537,9 +549,9 @@ function partOrderBadge(string $v): string
             max-height: calc(100vh - 280px);
         }
 
-        /* Predictive table: no horizontal scroll */
+        /* Predictive table: allow horizontal scroll if needed */
         #schedPredTab .table-scroll {
-            overflow-x: hidden;
+            overflow-x: auto;
         }
 
         /* Compact badge for tight columns */
@@ -638,6 +650,14 @@ function partOrderBadge(string $v): string
                             <i class="fas fa-display text-violet-500 mr-2"></i>Monitor
                         </h1>
                     </div>
+                    <!-- Digital Clock -->
+                    <div class="flex flex-col items-end">
+                        <div id="live-clock"
+                            class="font-mono font-black text-slate-800 tracking-tight tabular-nums"
+                            style="font-size:2rem;line-height:1;letter-spacing:-.02em;"></div>
+                        <div id="live-date"
+                            class="text-xs font-semibold text-slate-400 mt-1 tracking-wide"></div>
+                    </div>
                 </div>
 
                 <!-- ═══════════════════════════════════════════════════════════
@@ -664,21 +684,50 @@ function partOrderBadge(string $v): string
                     </div>
 
                     <!-- ── PREDICTIVE TAB ── -->
+                    <?php
+                    $todaySchedArrVal = array_values($todaySchedArr);
+                    $predTodayJson = json_encode(array_map(fn($r) => [
+                        'machine'  => $r['machine_name'] ?? '-',
+                        'point'    => $r['maintenance_point'] ?? '-',
+                        'dept'     => $r['department'] ?? '',
+                        'line'     => $r['line'] ?? '',
+                        'interval' => ($r['interval_month'] ?? 0) . ' mo',
+                    ], $todaySchedArrVal), JSON_UNESCAPED_UNICODE);
+                    ?>
                     <div id="schedPredTab" class="<?= $activeTab === 'preventive' ? 'hidden' : '' ?>">
-                        <!-- Today banner -->
+                        <!-- Today ticker banner — Predictive -->
                         <?php if ($todayCount > 0): ?>
                             <div class="today-banner mb-4" style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;">
                                 <div class="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center flex-shrink-0">
                                     <i class="fas fa-calendar-day text-white text-sm"></i>
                                 </div>
-                                <div class="flex-1 min-w-0">
-                                    <span class="text-blue-800">Today's Schedule</span>
-                                    <span class="ml-2 bg-blue-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full"><?= $todayCount ?></span>
+                                <div class="flex-1 min-w-0 flex items-center gap-2">
+                                    <span class="text-blue-800 font-bold whitespace-nowrap">Today's Schedule</span>
+                                    <span class="bg-blue-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full flex-shrink-0"><?= $todayCount ?></span>
                                 </div>
-                                <div class="text-blue-600 text-xs font-semibold truncate max-w-xs hidden sm:block">
-                                    <?php $first = reset($todaySchedArr);
-                                    echo htmlspecialchars($first['machine_name'] ?? ''); ?>
-                                    <?php if ($todayCount > 1): ?> <span class="text-blue-400">+<?= $todayCount - 1 ?> more</span><?php endif; ?>
+                                <!-- Ticker text area -->
+                                <div class="relative flex-1 min-w-0 overflow-hidden" style="height:36px;">
+                                    <?php foreach ($todaySchedArrVal as $i => $td): ?>
+                                        <div class="pred-ticker-item absolute inset-0 flex flex-col justify-center transition-all duration-500"
+                                            style="opacity:<?= $i === 0 ? '1' : '0' ?>;transform:translateY(<?= $i === 0 ? '0' : '6px' ?>);">
+                                            <p class="text-blue-800 text-xs font-black truncate leading-tight"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
+                                            <p class="text-blue-500 text-[10px] font-semibold truncate leading-tight"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <!-- Dots + index -->
+                                <div class="flex-shrink-0 flex flex-col items-end gap-1">
+                                    <span class="text-blue-600 text-[10px] font-black tabular-nums">
+                                        <span id="predTickerIdx">1</span>/<?= $todayCount ?>
+                                    </span>
+                                    <?php if ($todayCount > 1): ?>
+                                        <div class="flex gap-1">
+                                            <?php for ($di = 0; $di < min($todayCount, 8); $di++): ?>
+                                                <span class="pred-dot block rounded-full transition-all duration-300"
+                                                    style="height:5px;width:<?= $di === 0 ? '12' : '5' ?>px;background:<?= $di === 0 ? '#2563eb' : '#bfdbfe' ?>;"></span>
+                                            <?php endfor; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         <?php else: ?>
@@ -696,14 +745,14 @@ function partOrderBadge(string $v): string
                                 <table class="w-full text-left border-collapse" style="table-layout:fixed;width:100%;">
                                     <colgroup>
                                         <col style="width:2.2rem;"> <!-- No -->
-                                        <col style="width:18%;"> <!-- Machine Info -->
-                                        <col style="width:20%;"> <!-- Maintenance Point -->
+                                        <col style="width:16%;"> <!-- Machine Info -->
+                                        <col style="width:26%;"> <!-- Maintenance Point — lebih lebar agar full -->
                                         <col style="width:9%;"> <!-- Last Change -->
-                                        <col style="width:6%;"> <!-- Interval -->
+                                        <col style="width:5%;"> <!-- Interval -->
                                         <col style="width:9%;"> <!-- Change Date Plan -->
                                         <col style="width:7%;"> <!-- Remaining -->
                                         <col style="width:8%;"> <!-- Part Order -->
-                                        <col style="width:10%;"> <!-- Part Availability -->
+                                        <col style="width:9%;"> <!-- Part Availability -->
                                         <col style="width:8%;"> <!-- Maint. Status -->
                                     </colgroup>
                                     <thead style="background:linear-gradient(135deg, #1e40af, #2563eb);position:sticky;top:0;z-index:10;">
@@ -746,10 +795,10 @@ function partOrderBadge(string $v): string
                                                             <?= htmlspecialchars($row['department'] ?? '') ?><?= !empty($row['line']) ? ' · ' . htmlspecialchars($row['line']) : '' ?>
                                                         </div>
                                                     </td>
-                                                    <td class="tbl-td px-2 py-2" style="overflow:hidden;">
-                                                        <span style="font-size:.72rem;color:#334155;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?= htmlspecialchars($row['maintenance_point'] ?? '-') ?>"><?= htmlspecialchars($row['maintenance_point'] ?? '-') ?></span>
+                                                    <td class="tbl-td px-2 py-2">
+                                                        <span style="font-size:.72rem;color:#334155;display:block;word-break:break-word;white-space:normal;line-height:1.4;" title="<?= htmlspecialchars($row['maintenance_point'] ?? '-') ?>"><?= htmlspecialchars($row['maintenance_point'] ?? '-') ?></span>
                                                         <?php if (!empty($row['name_unit'])): ?>
-                                                            <div class="text-slate-400 italic mt-0.5" style="font-size:.62rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><?= htmlspecialchars($row['name_unit']) ?></div>
+                                                            <div class="text-slate-400 italic mt-0.5" style="font-size:.62rem;word-break:break-word;white-space:normal;"><?= htmlspecialchars($row['name_unit']) ?></div>
                                                         <?php endif; ?>
                                                     </td>
                                                     <td class="tbl-td text-center text-slate-500 px-1 py-2" style="font-size:.65rem;"><?= $useDate ?></td>
@@ -778,21 +827,50 @@ function partOrderBadge(string $v): string
                     </div>
 
                     <!-- ── PREVENTIVE TAB ── -->
+                    <?php
+                    $prevTodayArrVal = array_values($prevTodayArr);
+                    $prevTodayJson = json_encode(array_map(fn($r) => [
+                        'machine'  => $r['machine_name'] ?? '-',
+                        'point'    => $r['maintenance_point'] ?? '-',
+                        'dept'     => $r['department'] ?? '',
+                        'line'     => $r['line'] ?? '',
+                        'interval' => ($r['interval_month'] ?? 0) . ' mo',
+                    ], $prevTodayArrVal), JSON_UNESCAPED_UNICODE);
+                    ?>
                     <div id="schedPrevTab" class="<?= $activeTab === 'predictive' ? 'hidden' : '' ?>">
-                        <!-- Today banner -->
+                        <!-- Today ticker banner — Preventive -->
                         <?php if ($prevTodayCount > 0): ?>
-                            <div class="today-banner mb-4" style="background:linear-gradient(135deg, #3730a3, #4f46e5);border:1px solid #99f6e4;">
+                            <div class="today-banner mb-4" style="background:linear-gradient(135deg,#eef2ff,#e0e7ff);border:1px solid #a5b4fc;">
                                 <div class="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0">
                                     <i class="fas fa-calendar-day text-white text-sm"></i>
                                 </div>
-                                <div class="flex-1 min-w-0">
-                                    <span class="text-indigo-800">Today's Schedule</span>
-                                    <span class="ml-2 bg-indigo-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full"><?= $prevTodayCount ?></span>
+                                <div class="flex-1 min-w-0 flex items-center gap-2">
+                                    <span class="text-indigo-800 font-bold whitespace-nowrap">Today's Schedule</span>
+                                    <span class="bg-indigo-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full flex-shrink-0"><?= $prevTodayCount ?></span>
                                 </div>
-                                <div class="text-indigo-600 text-xs font-semibold truncate max-w-xs hidden sm:block">
-                                    <?php $firstPrev = reset($prevTodayArr);
-                                    echo htmlspecialchars($firstPrev['machine_name'] ?? ''); ?>
-                                    <?php if ($prevTodayCount > 1): ?> <span class="text-indigo-400">+<?= $prevTodayCount - 1 ?> more</span><?php endif; ?>
+                                <!-- Ticker text area -->
+                                <div class="relative flex-1 min-w-0 overflow-hidden" style="height:36px;">
+                                    <?php foreach ($prevTodayArrVal as $i => $td): ?>
+                                        <div class="prev-ticker-item absolute inset-0 flex flex-col justify-center transition-all duration-500"
+                                            style="opacity:<?= $i === 0 ? '1' : '0' ?>;transform:translateY(<?= $i === 0 ? '0' : '6px' ?>);">
+                                            <p class="text-indigo-800 text-xs font-black truncate leading-tight"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
+                                            <p class="text-indigo-500 text-[10px] font-semibold truncate leading-tight"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <!-- Dots + index -->
+                                <div class="flex-shrink-0 flex flex-col items-end gap-1">
+                                    <span class="text-indigo-600 text-[10px] font-black tabular-nums">
+                                        <span id="prevTickerIdx">1</span>/<?= $prevTodayCount ?>
+                                    </span>
+                                    <?php if ($prevTodayCount > 1): ?>
+                                        <div class="flex gap-1">
+                                            <?php for ($di = 0; $di < min($prevTodayCount, 8); $di++): ?>
+                                                <span class="prev-dot block rounded-full transition-all duration-300"
+                                                    style="height:5px;width:<?= $di === 0 ? '12' : '5' ?>px;background:<?= $di === 0 ? '#4f46e5' : '#c7d2fe' ?>;"></span>
+                                            <?php endfor; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         <?php else: ?>
@@ -1216,8 +1294,8 @@ function partOrderBadge(string $v): string
         //  - Section tanpa tab (parts): scroll down → up → ... (loop)
         //  - Berhenti saat kursor gerak, resume 2 detik setelah diam
         // ══════════════════════════════════════════════════════════════
-        const SCROLL_SPEED = 1.2; // px per frame
-        const SCROLL_PAUSE = 1200; // ms jeda di atas/bawah sebelum balik / ganti tab
+        const SCROLL_SPEED = 1.0; // px per frame
+        const SCROLL_PAUSE = 2000; // ms jeda di atas/bawah sebelum balik / ganti tab
         const RESUME_DELAY = 2000; // ms tunggu setelah kursor diam
 
         let scrollRAF = null;
@@ -1360,8 +1438,88 @@ function partOrderBadge(string $v): string
             setTimeout(hideStatus, 2000);
             scrollRAF = requestAnimationFrame(doScroll);
         });
+
+        // ══════════════════════════════════════════════════════════════
+        //  TODAY TICKER — Predictive & Preventive
+        // ══════════════════════════════════════════════════════════════
+        const TICKER_DATA = {
+            pred: <?= $predTodayJson ?? '[]' ?>,
+            prev: <?= $prevTodayJson ?? '[]' ?>,
+        };
+
+        const tickerState = {
+            pred: 0,
+            prev: 0
+        };
+        const tickerTimers = {
+            pred: null,
+            prev: null
+        };
+
+        function updateTicker(type) {
+            const items = document.querySelectorAll(`.${type}-ticker-item`);
+            const dots = document.querySelectorAll(`.${type}-dot`);
+            const idxEl = document.getElementById(`${type}TickerIdx`);
+            const ivEl = document.getElementById(`${type}TickerInterval`);
+            const data = TICKER_DATA[type];
+            const i = tickerState[type];
+
+            items.forEach((el, n) => {
+                el.style.opacity = n === i ? '1' : '0';
+                el.style.transform = n === i ? 'translateY(0)' : 'translateY(8px)';
+            });
+            dots.forEach((el, n) => {
+                const isPred = type === 'pred';
+                el.style.width = n === i ? '14px' : '6px';
+                el.style.background = isPred ?
+                    (n === i ? '#2563eb' : '#bfdbfe') :
+                    (n === i ? '#4f46e5' : '#c7d2fe');
+            });
+            if (idxEl) idxEl.textContent = i + 1;
+            if (ivEl && data[i]) ivEl.textContent = data[i].interval || '-';
+        }
+
+        function startTicker(type) {
+            const data = TICKER_DATA[type];
+            if (!data || data.length <= 1) return;
+            if (tickerTimers[type]) clearInterval(tickerTimers[type]);
+            tickerTimers[type] = setInterval(() => {
+                tickerState[type] = (tickerState[type] + 1) % data.length;
+                updateTicker(type);
+            }, 2500);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            startTicker('pred');
+            startTicker('prev');
+        });
+
+        // ══════════════════════════════════════════════════════════════
+        //  Live Digital Clock
+        // ══════════════════════════════════════════════════════════════
+        (function() {
+            const DAYS = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+            const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+
+            function tick() {
+                const now = new Date();
+                const hh = String(now.getHours()).padStart(2, '0');
+                const mm = String(now.getMinutes()).padStart(2, '0');
+                const ss = String(now.getSeconds()).padStart(2, '0');
+                const day = DAYS[now.getDay()];
+                const date = now.getDate();
+                const mon = MONTHS[now.getMonth()];
+                const yr = now.getFullYear();
+
+                document.getElementById('live-clock').textContent = hh + ':' + mm + ':' + ss;
+                document.getElementById('live-date').textContent = day + ', ' + date + ' ' + mon + ' ' + yr;
+            }
+
+            tick();
+            setInterval(tick, 1000);
+        })();
     </script>
 
 </body>
 
-</html>
+</html> 

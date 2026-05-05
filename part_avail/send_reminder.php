@@ -18,25 +18,31 @@ function sendMail(string $to, string $subject, string $body): bool
   $ch = curl_init('https://api.brevo.com/v3/smtp/email');
   curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_POST => true,
+    CURLOPT_POST           => true,
     CURLOPT_POSTFIELDS     => $payload,
     CURLOPT_HTTPHEADER     => [
       'accept: application/json',
       'api-key: ' . BREVO_API_KEY,
       'content-type: application/json',
     ],
-    CURLOPT_TIMEOUT => 20,
+    CURLOPT_TIMEOUT        => 20,
+    CURLOPT_SSL_VERIFYPEER => false,
+    CURLOPT_SSL_VERIFYHOST => false,
   ]);
   $response = curl_exec($ch);
   $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
   $curlErr  = curl_error($ch);
   curl_close($ch);
   if ($curlErr) {
-    error_log('[Reminder] cURL error: ' . $curlErr);
+    error_log('[Reminder] cURL error ke ' . $to . ': ' . $curlErr);
     return false;
   }
   $ok = $httpCode === 201;
-  if (!$ok) error_log('[Reminder] HTTP ' . $httpCode . ': ' . $response);
+  if ($ok) {
+    error_log('[Reminder] Email berhasil dikirim ke: ' . $to);
+  } else {
+    error_log('[Reminder] GAGAL kirim ke ' . $to . ' — HTTP ' . $httpCode . ': ' . $response);
+  }
   return $ok;
 }
 
@@ -71,7 +77,7 @@ function getNotificationRecipients(PDO $pdo): array
 // Gabungkan admin + notification_recipients (tanpa duplikat email)
 function getAllRecipients(PDO $pdo): array
 {
-  $admins     = getAllRecipients($pdo);
+  $admins     = getActiveAdmins($pdo);
   $recipients = getNotificationRecipients($pdo);
 
   // Normalisasi ke format seragam: ['name' => ..., 'email' => ...]
@@ -283,17 +289,23 @@ function processOverdueReminders(PDO $pdo): void
   $listHtml .= '</ul>';
 
   $subject = '🚨 OVERDUE: ' . count($tasks) . ' Jadwal Maintenance Terlewat!';
+  $sent = 0;
   foreach ($admins as $admin) {
-    sendMail($admin['email'], $subject, buildEmailBody(
+    $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
       '#7f1d1d',
       'OVERDUE',
       'Berikut jadwal yang <b>sudah terlewat</b>. Tindakan segera diperlukan:',
       $listHtml
     ));
+    if ($ok) $sent++;
   }
-  logSent($pdo, 'batch-overdue');
-  error_log('[Reminder] batch-overdue terkirim ke ' . count($admins) . ' admin.');
+  if ($sent > 0) {
+    logSent($pdo, 'batch-overdue');
+    error_log('[Reminder] batch-overdue BERHASIL terkirim ke ' . $sent . ' dari ' . count($admins) . ' penerima.');
+  } else {
+    error_log('[Reminder] batch-overdue GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
+  }
 }
 
 /** Dipanggil saat schedule baru ditambah dan masuk kategori reminder/alert/overdue */
@@ -543,17 +555,23 @@ function processPrevOverdueReminders(PDO $pdo): void
   $listHtml .= '</ul>';
 
   $subject = '🚨 [Preventive] OVERDUE: ' . count($tasks) . ' Jadwal Maintenance Terlewat!';
+  $sent = 0;
   foreach ($admins as $admin) {
-    sendMail($admin['email'], $subject, buildEmailBody(
+    $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
       '#7f1d1d',
       'OVERDUE',
       'Berikut jadwal <b>Preventive</b> yang <b>sudah terlewat</b>. Tindakan segera diperlukan:',
       $listHtml
     ));
+    if ($ok) $sent++;
   }
-  logSent($pdo, 'prev-batch-overdue');
-  error_log('[PrevReminder] prev-batch-overdue terkirim ke ' . count($admins) . ' admin.');
+  if ($sent > 0) {
+    logSent($pdo, 'prev-batch-overdue');
+    error_log('[PrevReminder] prev-batch-overdue BERHASIL terkirim ke ' . $sent . ' dari ' . count($admins) . ' penerima.');
+  } else {
+    error_log('[PrevReminder] prev-batch-overdue GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
+  }
 }
 
 /**
