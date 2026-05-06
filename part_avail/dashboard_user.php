@@ -32,18 +32,9 @@ try {
           AND DATEDIFF(change_date_plan, CURDATE()) <= reminder_activity
           AND DATEDIFF(change_date_plan, CURDATE()) >= 0
     ");
-    // Auto-open: jika status 'soon' dan remaining_day <= reminder_activity,
-    // pastikan part_order & part_availability = 'open'
-    $pdo->exec("
-        UPDATE schedules
-        SET part_order        = 'open',
-            part_availability = 'open'
-        WHERE maintenance_status = 'soon'
-          AND change_date_plan IS NOT NULL
-          AND DATEDIFF(change_date_plan, CURDATE()) <= reminder_activity
-          AND DATEDIFF(change_date_plan, CURDATE()) >= 0
-          AND (part_order = 'close' OR part_availability = 'close')
-    ");
+    // NOTE: Auto-open dihapus agar user bisa mengubah part_order/part_availability ke 'close'
+    // secara manual meskipun status masih reminder atau alert (sebelum hari-H).
+    // Part order/availability hanya di-open otomatis saat transisi 'done' → 'soon' (query di atas).
 } catch (\Exception $e) {
     error_log('[Dashboard] Gagal update remaining_day: ' . $e->getMessage());
 }
@@ -168,8 +159,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                  reminder_activity, remaining_day, maintenance_status, part_order, part_availability)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             $stmt->execute([
-                $_POST['dept_name']           ?? '',
-                $_POST['line_name']            ?? '',
+                (int)($_POST['department']     ?? 0),   // FIX: kirim ID integer, bukan nama string
+                (int)($_POST['line']           ?? 0),   // FIX: kirim ID integer, bukan nama string
                 $_POST['operation_process']    ?? '',
                 $_POST['machine_name']         ?? '',
                 $_POST['process_machine']      ?? '',
@@ -212,8 +203,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 maintenance_status = ?
                 WHERE id = ?");
             $stmt->execute([
-                $_POST['dept_name']           ?? '',
-                $_POST['line_name']            ?? '',
+                (int)($_POST['department']     ?? 0),   // FIX: ID integer
+                (int)($_POST['line']           ?? 0),   // FIX: ID integer
                 $_POST['operation_process']    ?? '',
                 $_POST['machine_name']         ?? '',
                 $_POST['process_machine']      ?? '',
@@ -366,8 +357,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                  reminder_activity, remaining_day, maintenance_status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'soon')");
             $stmt->execute([
-                $_POST['dept_name']        ?? '',
-                $_POST['line_name']        ?? '',
+                (int)($_POST['department']        ?? 0),   // FIX: ID integer
+                (int)($_POST['line']              ?? 0),   // FIX: ID integer
                 $_POST['operation_process'] ?? '',
                 $_POST['machine_name']     ?? '',
                 $_POST['process_machine']  ?? '',
@@ -405,8 +396,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                 reminder_activity = ?, remaining_day = ?, maintenance_status = ?
                 WHERE id = ?");
             $stmt->execute([
-                $_POST['dept_name']        ?? '',
-                $_POST['line_name']        ?? '',
+                (int)($_POST['department']        ?? 0),   // FIX: ID integer
+                (int)($_POST['line']              ?? 0),   // FIX: ID integer
                 $_POST['operation_process'] ?? '',
                 $_POST['machine_name']     ?? '',
                 $_POST['process_machine']  ?? '',
@@ -1469,6 +1460,8 @@ HTML;
             <form id="editForm" class="p-8 max-h-[85vh] overflow-y-auto">
                 <input type="hidden" name="action" value="edit">
                 <input type="hidden" name="edit_id" id="edit_id">
+                <input type="hidden" name="department" id="edit_dept_id_val">
+                <input type="hidden" name="line" id="edit_line_id_val">
                 <input type="hidden" name="dept_name" id="edit_dept_name_val">
                 <input type="hidden" name="line_name" id="edit_line_name_val">
                 <?php echo renderFormFields('edit', $plants); ?>
@@ -1853,6 +1846,11 @@ HTML;
             const data = await res.json();
             if (!data) return alert('Data tidak ditemukan');
             document.getElementById('edit_id').value = data.id;
+            // Isi hidden ID fields untuk department dan line (integer FK)
+            const editDeptIdEl = document.getElementById('edit_dept_id_val');
+            const editLineIdEl = document.getElementById('edit_line_id_val');
+            if (editDeptIdEl) editDeptIdEl.value = data.department ?? '';
+            if (editLineIdEl) editLineIdEl.value = data.line ?? '';
             // Part status selects — populate dari DB
             const poSel = document.getElementById('edit_part_order');
             const paSel = document.getElementById('edit_part_availability');
@@ -2102,6 +2100,11 @@ HTML;
                 return;
             }
             document.getElementById('prev_edit_id').value = data.id;
+            // Isi hidden ID fields untuk department dan line (integer FK)
+            const prevDeptIdEl = document.getElementById('prev_edit_dept_id_val');
+            const prevLineIdEl = document.getElementById('prev_edit_line_id_val');
+            if (prevDeptIdEl) prevDeptIdEl.value = data.department ?? '';
+            if (prevLineIdEl) prevLineIdEl.value = data.line ?? '';
             document.getElementById('prev_edit_machine_name').value = data.machine_name ?? '';
             document.getElementById('prev_edit_process_machine').value = data.process_machine ?? '';
             document.getElementById('prev_edit_name_unit').value = data.name_unit ?? '';
@@ -2300,6 +2303,8 @@ HTML;
             <form id="prevEditForm" class="p-8 max-h-[85vh] overflow-y-auto">
                 <input type="hidden" name="prev_action" value="prev_edit">
                 <input type="hidden" name="prev_edit_id" id="prev_edit_id">
+                <input type="hidden" name="department" id="prev_edit_dept_id_val">
+                <input type="hidden" name="line" id="prev_edit_line_id_val">
                 <input type="hidden" name="dept_name" id="prev_edit_dept_name_val">
                 <input type="hidden" name="line_name" id="prev_edit_line_name_val">
                 <?php echo renderFormFields('prev_edit', $plants); ?>

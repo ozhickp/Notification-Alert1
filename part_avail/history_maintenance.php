@@ -229,16 +229,10 @@ if (isset($_GET['export'])) {
                 </span>
             </div>
             <div class="flex gap-2">
-                <a id="btnExportPred"
-                    href="?tab=predictive&search=<?= urlencode($search) ?>&department=<?= urlencode($filterDep) ?>&date=<?= urlencode($filterDate) ?>&export=1"
-                    class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-amber-200 transition-all <?= $activeTab === 'preventive' ? 'hidden' : '' ?>">
-                    <i class="fas fa-file-export"></i> Export CSV
-                </a>
-                <a id="btnExportPrev"
-                    href="?tab=preventive&search=<?= urlencode($search) ?>&department=<?= urlencode($filterDep) ?>&date=<?= urlencode($filterDate) ?>&export=1"
-                    class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg transition-all <?= $activeTab === 'predictive' ? 'hidden' : '' ?>">
-                    <i class="fas fa-file-export"></i> Export CSV
-                </a>
+                <button onclick="openExportModal()"
+                    class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-emerald-200 transition-all">
+                    <i class="fas fa-file-excel"></i> Export Excel
+                </button>
             </div>
         </div>
 
@@ -455,20 +449,100 @@ if (isset($_GET['export'])) {
         </div>
     </div>
 
+    <!-- ═══════════════════ MODAL EXPORT EXCEL ═══════════════════ -->
+    <div id="exportModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
+        <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden">
+
+            <!-- Header modal -->
+            <div class="bg-gradient-to-r from-emerald-600 to-emerald-700 px-7 py-5 flex justify-between items-center">
+                <div>
+                    <p class="text-white/60 text-[10px] font-black uppercase tracking-widest mb-0.5">Export Data</p>
+                    <h3 class="text-base font-bold text-white"><i class="fas fa-file-excel mr-2"></i>Export History ke Excel</h3>
+                </div>
+                <button onclick="closeExportModal()" class="text-white/60 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <!-- Body modal -->
+            <div class="p-7 space-y-5">
+
+                <!-- Pilihan tipe maintenance -->
+                <div>
+                    <label class="block text-xs font-black text-slate-500 uppercase tracking-wide mb-2">Tipe Maintenance</label>
+                    <div class="flex gap-2">
+                        <button id="exportTypePred" onclick="setExportType('predictive')"
+                            class="flex-1 py-2.5 rounded-xl text-sm font-bold border-2 border-amber-500 bg-amber-500 text-white transition-all">
+                            <i class="fas fa-chart-line mr-1"></i> Predictive
+                        </button>
+                        <button id="exportTypePrev" onclick="setExportType('preventive')"
+                            class="flex-1 py-2.5 rounded-xl text-sm font-bold border-2 border-slate-200 bg-white text-slate-500 transition-all">
+                            <i class="fas fa-shield-halved mr-1"></i> Preventive
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Pilihan periode (Daily / Monthly) via pill tab -->
+                <div>
+                    <label class="block text-xs font-black text-slate-500 uppercase tracking-wide mb-2">Periode</label>
+                    <div class="flex bg-slate-100 rounded-xl p-1 gap-1">
+                        <button id="periodTabDaily" onclick="setPeriodTab('daily')"
+                            class="flex-1 py-2 rounded-lg text-xs font-bold transition-all bg-white shadow text-slate-800">
+                            Per Hari
+                        </button>
+                        <button id="periodTabMonthly" onclick="setPeriodTab('monthly')"
+                            class="flex-1 py-2 rounded-lg text-xs font-bold transition-all text-slate-500">
+                            Per Bulan
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Input tanggal (daily) -->
+                <div id="inputDaily">
+                    <label class="block text-xs font-black text-slate-500 uppercase tracking-wide mb-2">Pilih Tanggal</label>
+                    <input type="date" id="exportTanggal"
+                        class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                        value="<?= date('Y-m-d') ?>">
+                </div>
+
+                <!-- Input bulan (monthly) -->
+                <div id="inputMonthly" class="hidden">
+                    <label class="block text-xs font-black text-slate-500 uppercase tracking-wide mb-2">Pilih Bulan</label>
+                    <input type="month" id="exportBulan"
+                        class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                        value="<?= date('Y-m') ?>">
+                </div>
+
+                <!-- Tombol aksi -->
+                <div class="flex justify-end gap-3 pt-2">
+                    <button onclick="closeExportModal()"
+                        class="px-6 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-all">
+                        Batal
+                    </button>
+                    <button onclick="doExport()"
+                        class="bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-emerald-200 transition-all">
+                        <i class="fas fa-download mr-1"></i> Export
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
     <script>
         // ── Tab switching ─────────────────────────────────────────────
         const INIT_TAB = '<?= $activeTab ?>';
+        let currentTab = INIT_TAB; // track active tab untuk export
 
         function switchTab(tab) {
+            currentTab = tab;
             const isPred = tab === 'predictive';
             document.getElementById('predictiveTab').classList.toggle('hidden', !isPred);
             document.getElementById('preventiveTab').classList.toggle('hidden', isPred);
 
-            // Labels & export buttons
+            // Labels
             document.getElementById('labelPredictive').classList.toggle('hidden', !isPred);
             document.getElementById('labelPreventive').classList.toggle('hidden', isPred);
-            document.getElementById('btnExportPred').classList.toggle('hidden', !isPred);
-            document.getElementById('btnExportPrev').classList.toggle('hidden', isPred);
 
             // Filter dept dropdowns
             document.getElementById('deptFilterPred').classList.toggle('hidden', !isPred);
@@ -481,14 +555,12 @@ if (isset($_GET['export'])) {
             const indicator = document.getElementById('tabIndicator');
             indicator.style.transform = isPred ? 'translateX(0)' : 'translateX(calc(100% + 4px))';
             indicator.style.background = isPred ?
-                'linear-gradient(135deg,#f59e0b,#d97706)' : // Amber (Predictive)
-                'linear-gradient(135deg,#f97316,#ea580c)'; // Orange (Preventive)
+                'linear-gradient(135deg,#f59e0b,#d97706)' :
+                'linear-gradient(135deg,#f97316,#ea580c)';
 
-            // Text colors
             document.getElementById('tabPredictive').style.color = isPred ? '#fff' : '#64748b';
             document.getElementById('tabPreventive').style.color = !isPred ? '#fff' : '#64748b';
 
-            // Badges
             const bp = document.getElementById('badgePredictive');
             const bv = document.getElementById('badgePreventive');
             if (bp) bp.className = isPred ?
@@ -498,10 +570,76 @@ if (isset($_GET['export'])) {
                 'ml-1 bg-white/20 text-white text-[10px] font-black px-2 py-0.5 rounded-full' :
                 'ml-1 bg-slate-300/60 text-slate-600 text-[10px] font-black px-2 py-0.5 rounded-full';
 
-            // Update URL tanpa reload
             const url = new URL(window.location);
             url.searchParams.set('tab', tab);
             window.history.replaceState({}, '', url);
+        }
+
+        // ── Export modal ──────────────────────────────────────────────
+        let exportType = INIT_TAB; // 'predictive' | 'preventive'
+        let exportPeriod = 'daily'; // 'daily' | 'monthly'
+
+        function openExportModal() {
+            // Sinkronkan tipe dengan tab yang sedang aktif
+            setExportType(currentTab);
+            document.getElementById('exportModal').style.display = 'flex';
+        }
+
+        function closeExportModal() {
+            document.getElementById('exportModal').style.display = 'none';
+        }
+
+        document.getElementById('exportModal').addEventListener('click', function(e) {
+            if (e.target === this) closeExportModal();
+        });
+
+        function setExportType(type) {
+            exportType = type;
+            const isPred = type === 'predictive';
+            document.getElementById('exportTypePred').className =
+                'flex-1 py-2.5 rounded-xl text-sm font-bold border-2 transition-all ' +
+                (isPred ? 'border-amber-500 bg-amber-500 text-white' : 'border-slate-200 bg-white text-slate-500');
+            document.getElementById('exportTypePrev').className =
+                'flex-1 py-2.5 rounded-xl text-sm font-bold border-2 transition-all ' +
+                (!isPred ? 'border-teal-500 bg-teal-500 text-white' : 'border-slate-200 bg-white text-slate-500');
+        }
+
+        function setPeriodTab(period) {
+            exportPeriod = period;
+            const isDaily = period === 'daily';
+            document.getElementById('inputDaily').classList.toggle('hidden', !isDaily);
+            document.getElementById('inputMonthly').classList.toggle('hidden', isDaily);
+            document.getElementById('periodTabDaily').className =
+                'flex-1 py-2 rounded-lg text-xs font-bold transition-all ' +
+                (isDaily ? 'bg-white shadow text-slate-800' : 'text-slate-500');
+            document.getElementById('periodTabMonthly').className =
+                'flex-1 py-2 rounded-lg text-xs font-bold transition-all ' +
+                (!isDaily ? 'bg-white shadow text-slate-800' : 'text-slate-500');
+        }
+
+        function doExport() {
+            let periodParam = '';
+            if (exportPeriod === 'daily') {
+                const val = document.getElementById('exportTanggal').value;
+                if (!val) {
+                    alert('Pilih tanggal terlebih dahulu.');
+                    return;
+                }
+                periodParam = '&tanggal=' + encodeURIComponent(val);
+            } else {
+                const val = document.getElementById('exportBulan').value;
+                if (!val) {
+                    alert('Pilih bulan terlebih dahulu.');
+                    return;
+                }
+                periodParam = '&bulan=' + encodeURIComponent(val);
+            }
+            const url = 'export_history_maintenance.php' +
+                '?type=' + exportType +
+                '&mode=' + exportPeriod +
+                periodParam;
+            window.location.href = url;
+            closeExportModal();
         }
 
         // ── Detail modal ──────────────────────────────────────────────
@@ -518,7 +656,6 @@ if (isset($_GET['export'])) {
             document.getElementById('detailBody').innerHTML =
                 '<div class="text-center py-8 text-slate-400"><i class="fas fa-spinner fa-spin text-2xl"></i></div>';
 
-            // Sesuaikan warna header berdasarkan tipe
             const header = document.getElementById('detailModalHeader');
             const typeLabel = document.getElementById('detailModalType');
             if (type === 'preventive') {
@@ -564,8 +701,7 @@ if (isset($_GET['export'])) {
                 'bg-teal-50 text-teal-700 border-teal-100' :
                 'bg-emerald-50 text-emerald-700 border-emerald-100';
             const photoHtml = d.photo_path ?
-                `<div class="mt-2"><a href="${d.photo_path}" target="_blank" class="inline-block rounded-xl overflow-hidden border border-slate-200 hover:opacity-90 transition"><img src="${d.photo_path}" alt="Foto" class="max-h-48 object-contain w-full"></a></div>` :
-                '';
+                `<div class="mt-2"><a href="${d.photo_path}" target="_blank" class="inline-block rounded-xl overflow-hidden border border-slate-200 hover:opacity-90 transition"><img src="${d.photo_path}" alt="Foto" class="max-h-48 object-contain w-full"></a></div>` : '';
 
             document.getElementById('detailBody').innerHTML = `
             <div class="space-y-3">
