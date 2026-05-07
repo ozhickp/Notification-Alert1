@@ -11,28 +11,38 @@
  * - Mapping kolom disesuaikan untuk tabel schedules (dashboard_user)
  */
 
+// Tangkap SEMUA output liar (PHP warnings, Composer notices, dll)
+// ob_end_clean() dipanggil tepat sebelum echo json pertama
 ob_start();
+@ini_set('display_errors', 0);
+@ini_set('log_errors', 1);
+error_reporting(0);
+set_time_limit(120);
+
 include 'config.php';
 if (file_exists(__DIR__ . '/send_reminder.php')) require_once __DIR__ . '/send_reminder.php';
 if (session_status() === PHP_SESSION_NONE) session_start();
-@ini_set('display_errors', 0);
-set_time_limit(120);
-ob_end_clean();
 
-header('Content-Type: application/json; charset=utf-8');
+// Helper: bersihkan semua output liar lalu kirim JSON
+function jsonOut(array $data): void
+{
+    ob_end_clean();
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data);
+}
 
 if (!isset($_SESSION['user_id'])) {
-    echo json_encode(['status' => 'error', 'message' => 'Unauthorized']);
+    jsonOut(['status' => 'error', 'message' => 'Unauthorized']);
     exit;
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_FILES['excel_file'])) {
-    echo json_encode(['status' => 'error', 'message' => 'Tidak ada file yang dikirim']);
+    jsonOut(['status' => 'error', 'message' => 'Tidak ada file yang dikirim']);
     exit;
 }
 
 if (!file_exists(__DIR__ . '/vendor/autoload.php')) {
-    echo json_encode(['status' => 'error', 'message' => 'vendor/autoload.php tidak ditemukan. Jalankan: composer install']);
+    jsonOut(['status' => 'error', 'message' => 'vendor/autoload.php tidak ditemukan. Jalankan: composer install']);
     exit;
 }
 require_once __DIR__ . '/vendor/autoload.php';
@@ -44,7 +54,7 @@ $file = $_FILES['excel_file'];
 $ext  = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
 
 if (!in_array($ext, ['xlsx', 'xls'])) {
-    echo json_encode(['status' => 'error', 'message' => 'Format file harus .xlsx atau .xls']);
+    jsonOut(['status' => 'error', 'message' => 'Format file harus .xlsx atau .xls']);
     exit;
 }
 if ($file['error'] !== UPLOAD_ERR_OK) {
@@ -56,17 +66,17 @@ if ($file['error'] !== UPLOAD_ERR_OK) {
         UPLOAD_ERR_NO_TMP_DIR => 'Folder temporary tidak ditemukan',
         UPLOAD_ERR_CANT_WRITE => 'Gagal menulis file ke disk',
     ];
-    echo json_encode(['status' => 'error', 'message' => $uploadErrors[$file['error']] ?? 'Upload error: ' . $file['error']]);
+    jsonOut(['status' => 'error', 'message' => $uploadErrors[$file['error']] ?? 'Upload error: ' . $file['error']]);
     exit;
 }
 if ($file['size'] > 10 * 1024 * 1024) {
-    echo json_encode(['status' => 'error', 'message' => 'Ukuran file maksimal 10MB']);
+    jsonOut(['status' => 'error', 'message' => 'Ukuran file maksimal 10MB']);
     exit;
 }
 
 $tmpPath = sys_get_temp_dir() . '/maint_' . uniqid() . '.' . $ext;
 if (!move_uploaded_file($file['tmp_name'], $tmpPath)) {
-    echo json_encode(['status' => 'error', 'message' => 'Gagal menyimpan file sementara']);
+    jsonOut(['status' => 'error', 'message' => 'Gagal menyimpan file sementara']);
     exit;
 }
 
@@ -175,7 +185,7 @@ try {
     }
 
     if (!$headerRowNum) {
-        echo json_encode([
+        jsonOut([
             'status'  => 'error',
             'message' => 'Baris header tidak ditemukan. Pastikan ada kolom DEPARTEMENT di sheet Excel. '
                 . 'Sheet yang dicari: "' . ($targetName ?? 'aktif') . '". '
@@ -404,7 +414,7 @@ try {
     if ($skipped > 0)    $msg .= " {$skipped} baris dilewati (kosong/summary/tanpa tanggal).";
     if (!empty($errors)) $msg .= ' ' . count($errors) . ' baris gagal.';
 
-    echo json_encode([
+    jsonOut([
         'status'   => $total > 0 ? 'success' : 'error',
         'message'  => $msg,
         'imported' => $total,
@@ -421,5 +431,5 @@ try {
     ]);
 } catch (\Exception $e) {
     @unlink($tmpPath ?? '');
-    echo json_encode(['status' => 'error', 'message' => 'Gagal memproses file: ' . $e->getMessage()]);
+    jsonOut(['status' => 'error', 'message' => 'Gagal memproses file: ' . $e->getMessage()]);
 }

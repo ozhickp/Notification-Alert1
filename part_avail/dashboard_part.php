@@ -19,13 +19,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 echo json_encode(['status' => 'error', 'message' => 'Item Code wajib diisi']);
                 exit;
             }
+            // Cek apakah item_code sudah ada (duplikat)
+            $chkStmt = $pdo->prepare("SELECT id FROM expenses_part WHERE item_code = ? LIMIT 1");
+            $chkStmt->execute([$itemCode]);
+            if ($chkStmt->fetchColumn()) {
+                echo json_encode(['status' => 'error', 'message' => "Item Code '{$itemCode}' sudah ada. Gunakan Edit untuk mengubah stok."]);
+                exit;
+            }
             $effective = $actual - $safety;
             $status    = getPartStatusStr($actual, $safety);
-            $stmt = $pdo->prepare("INSERT INTO expenses_part (item_code,item_description,safety_stock,actual_stock,effective_stock,status) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE item_description=VALUES(item_description),safety_stock=VALUES(safety_stock),actual_stock=VALUES(actual_stock),effective_stock=VALUES(effective_stock),status=VALUES(status)");
+            $stmt = $pdo->prepare("INSERT INTO expenses_part (item_code,item_description,safety_stock,actual_stock,effective_stock,status) VALUES (?,?,?,?,?,?)");
             $stmt->execute([$itemCode, $itemDesc, $safety, $actual, $effective, $status]);
-            $pid = $pdo->lastInsertId();
+            $pid = (int)$pdo->lastInsertId();
             if ($actual > 0) $pdo->prepare("INSERT INTO stock_log (part_id,change_amount,note,changed_by) VALUES (?,?,?,?)")->execute([$pid, $actual, 'Initial stock', $_SESSION['user_id'] ?? null]);
-            echo json_encode(['status' => 'success', 'message' => 'Part berhasil ditambahkan']);
+            echo json_encode(['status' => 'success', 'message' => "Part '{$itemCode}' berhasil ditambahkan."]);
         } elseif ($_POST['action'] === 'update_stock') {
             $partId = (int)$_POST['part_id'];
             $change = (int)$_POST['change_amount'];
@@ -92,10 +99,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 echo json_encode(['status' => 'error', 'message' => 'Header tidak ditemukan.']);
                 exit;
             }
-            $stmt = $pdo->prepare("INSERT INTO expenses_part (item_code,item_description,safety_stock,actual_stock,effective_stock,status) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE item_description=VALUES(item_description),safety_stock=VALUES(safety_stock),actual_stock=VALUES(actual_stock),effective_stock=VALUES(effective_stock),status=VALUES(status)");
+            $stmtInsertPart = $pdo->prepare("INSERT INTO expenses_part (item_code,item_description,safety_stock,actual_stock,effective_stock,status) VALUES (?,?,?,?,?,?)");
+            $stmtUpdatePart = $pdo->prepare("UPDATE expenses_part SET item_description=?,safety_stock=?,actual_stock=?,effective_stock=?,status=? WHERE item_code=?");
+            $stmtCheckPart  = $pdo->prepare("SELECT id FROM expenses_part WHERE item_code = ? LIMIT 1");
             $success = 0;
+            $updated = 0;
             $skipped = 0;
-            $errors = [];
+            $errors  = [];
             for ($r = $headerRow + 1; $r <= $highestRow; $r++) {
                 $g = function ($col) use ($sheet, $colMap, $r) {
                     if (!isset($colMap[$col])) return null;
@@ -108,16 +118,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $skipped++;
                     continue;
                 }
-                $safety = (int)($g('safety_stock') ?? 0);
-                $actual = (int)($g('actual_stock') ?? 0);
+                $safety   = (int)($g('safety_stock') ?? 0);
+                $actual   = (int)($g('actual_stock') ?? 0);
+                $desc     = $g('item_description');
+                $effective = $actual - $safety;
+                $status    = getPartStatusStr($actual, $safety);
                 try {
-                    $stmt->execute([$code, $g('item_description'), $safety, $actual, $actual - $safety, getPartStatusStr($actual, $safety)]);
-                    $success++;
+                    // UPSERT: cek apakah item_code sudah ada
+                    $stmtCheckPart->execute([$code]);
+                    $existingId = $stmtCheckPart->fetchColumn();
+                    if ($existingId) {
+                        // Sudah ada → UPDATE data lama
+                        $stmtUpdatePart->execute([$desc, $safety, $actual, $effective, $status, $code]);
+                        $updated++;
+                    } else {
+                        // Belum ada → INSERT baru
+                        $stmtInsertPart->execute([$code, $desc, $safety, $actual, $effective, $status]);
+                        $success++;
+                    }
                 } catch (\Exception $e) {
                     $errors[] = "Baris $r: " . $e->getMessage();
                 }
             }
-            echo json_encode(['status' => $success > 0 ? 'success' : 'error', 'message' => "$success berhasil" . ($skipped ? ", $skipped dilewati" : '') . (!empty($errors) ? ', ' . count($errors) . ' gagal' : ''), 'errors' => array_slice($errors, 0, 5), 'sheet' => $targetSheet]);
+            $total = $success + $updated;
+            $msg   = "{$total} part berhasil diimport ({$success} baru, {$updated} diperbarui)";
+            if ($skipped) $msg .= ", {$skipped} dilewati";
+            if (!empty($errors)) $msg .= ', ' . count($errors) . ' gagal';
+            echo json_encode(['status' => $total > 0 ? 'success' : 'error', 'message' => $msg, 'inserted' => $success, 'updated' => $updated, 'skipped' => $skipped, 'errors' => array_slice($errors, 0, 5), 'sheet' => $targetSheet]);
         }
     } catch (\Exception $e) {
         echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
@@ -855,7 +882,9 @@ $partsByCategory = [
                 })).json();
                 document.getElementById('importLoading').classList.add('hidden');
                 if (r.status === 'success') {
-                    showAlert('importAlert', 'success', '✅ ' + r.message + (r.sheet ? ' (sheet: ' + r.sheet + ')' : ''));
+                    let msg = '✅ ' + r.message;
+                    if (r.sheet) msg += ' (sheet: ' + r.sheet + ')';
+                    showAlert('importAlert', 'success', msg);
                     setTimeout(() => location.reload(), 2000);
                 } else {
                     let msg = '❌ ' + r.message;
@@ -865,7 +894,7 @@ $partsByCategory = [
                 }
             } catch (e) {
                 document.getElementById('importLoading').classList.add('hidden');
-                showAlert('importAlert', 'error', '❌ Gagal: ' + e.message);
+                showAlert('importAlert', 'error', '❌ Gagal menghubungi server: ' + e.message);
                 document.getElementById('btnImport').disabled = false;
             }
         }
