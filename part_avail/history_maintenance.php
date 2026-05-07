@@ -273,6 +273,19 @@ if (isset($_GET['export'])) {
             <!-- Filter Tanggal -->
             <input type="date" name="date" value="<?= htmlspecialchars($filterDate) ?>"
                 class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <!-- Filter Bulan (client-side) -->
+            <div class="flex items-center gap-2">
+                <i class="fas fa-calendar-alt text-slate-400 text-sm"></i>
+                <input type="month" id="monthFilter" value=""
+                    placeholder="Filter bulan"
+                    class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-amber-400 transition"
+                    onchange="applyMonthFilter()">
+                <button type="button" onclick="clearMonthFilter()"
+                    class="text-slate-400 hover:text-red-500 hover:bg-red-50 px-2 py-2 rounded-xl transition text-xs font-bold"
+                    title="Reset filter bulan">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
             <!-- Tombol -->
             <button type="submit"
                 class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all">
@@ -320,8 +333,9 @@ if (isset($_GET['export'])) {
                                     $reportedAt = $h['reported_at'] ? date('d M Y H:i', strtotime($h['reported_at'])) : '-';
                                     $planDate   = $h['change_date_plan'] ? date('d M Y', strtotime($h['change_date_plan'])) : '-';
                                     $noteShort  = mb_strlen($h['note'] ?? '') > 60 ? mb_substr($h['note'], 0, 60) . '…' : ($h['note'] ?? '-');
+                                    $rowMonth   = $h['reported_at'] ? date('Y-m', strtotime($h['reported_at'])) : '';
                                     ?>
-                                    <tr class="hist-row transition-colors fade-in">
+                                    <tr class="hist-row hist-pred-row transition-colors fade-in" data-month="<?= $rowMonth ?>">
                                         <td class="px-5 py-3 text-slate-400 font-mono text-xs"><?= $i + 1 ?></td>
                                         <td class="px-5 py-3">
                                             <div class="font-bold text-slate-800 whitespace-nowrap text-sm"><?= htmlspecialchars($h['machine_name'] ?? '-') ?></div>
@@ -391,8 +405,9 @@ if (isset($_GET['export'])) {
                                     $reportedAt = $h['reported_at'] ? date('d M Y H:i', strtotime($h['reported_at'])) : '-';
                                     $planDate   = $h['change_date_plan'] ? date('d M Y', strtotime($h['change_date_plan'])) : '-';
                                     $noteShort  = mb_strlen($h['note'] ?? '') > 60 ? mb_substr($h['note'], 0, 60) . '…' : ($h['note'] ?? '-');
+                                    $rowMonth   = $h['reported_at'] ? date('Y-m', strtotime($h['reported_at'])) : '';
                                     ?>
-                                    <tr class="hist-row transition-colors fade-in">
+                                    <tr class="hist-row hist-prev-row transition-colors fade-in" data-month="<?= $rowMonth ?>">
                                         <td class="px-5 py-3 text-slate-400 font-mono text-xs"><?= $i + 1 ?></td>
                                         <td class="px-5 py-3">
                                             <div class="font-bold text-slate-800 whitespace-nowrap text-sm"><?= htmlspecialchars($h['machine_name'] ?? '-') ?></div>
@@ -550,6 +565,9 @@ if (isset($_GET['export'])) {
 
             // Form tab hidden input
             document.getElementById('formTab').value = tab;
+
+            // Re-apply month filter for the newly active tab
+            applyMonthFilter();
 
             // Pill indicator
             const indicator = document.getElementById('tabIndicator');
@@ -721,6 +739,46 @@ if (isset($_GET['export'])) {
                 ${d.photo_path ? row('Foto', `<a href="${d.photo_path}" target="_blank" class="text-amber-600 font-bold text-xs hover:underline"><i class="fas fa-image mr-1"></i>Lihat Foto</a>` + photoHtml) : ''}
             </div>`;
         }
+
+        // ── Month Filter (client-side) ─────────────────────────────────
+        function applyMonthFilter() {
+            const val = document.getElementById('monthFilter').value; // 'YYYY-MM' or ''
+            const isPred = currentTab === 'predictive';
+            let shown = 0,
+                total = 0;
+            const rowClass = isPred ? '.hist-pred-row' : '.hist-prev-row';
+            document.querySelectorAll(rowClass).forEach(tr => {
+                total++;
+                const vis = !val || tr.dataset.month === val;
+                tr.style.display = vis ? '' : 'none';
+                if (vis) shown++;
+            });
+            // Update count label
+            const labelId = isPred ? 'labelPredictive' : 'labelPreventive';
+            const lbl = document.getElementById(labelId);
+            if (lbl && val) {
+                const [yr, mo] = val.split('-');
+                const monthLabel = new Date(yr, mo - 1).toLocaleDateString('id-ID', {
+                    month: 'long',
+                    year: 'numeric'
+                });
+                lbl.textContent = shown + ' laporan ' + (isPred ? 'predictive' : 'preventive') + ' — ' + monthLabel;
+            }
+        }
+
+        function clearMonthFilter() {
+            document.getElementById('monthFilter').value = '';
+            // Reset all rows
+            document.querySelectorAll('.hist-pred-row, .hist-prev-row').forEach(tr => {
+                tr.style.display = '';
+            });
+            // Restore original label text
+            document.getElementById('labelPredictive').textContent = '<?= count($historiesPred) ?> laporan predictive';
+            document.getElementById('labelPreventive').textContent = '<?= count($historiesPrev) ?> laporan preventive';
+        }
+
+        // Re-apply month filter when switching tabs (so filter stays consistent)
+        // (handled inline inside switchTab function above)
     </script>
 
 </body>

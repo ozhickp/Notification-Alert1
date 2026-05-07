@@ -549,6 +549,12 @@ function partOrderBadge(string $v): string
             max-height: calc(100vh - 280px);
         }
 
+        /* History tables: fill remaining viewport height (same logic as schedule) */
+        #histPredTab .table-scroll,
+        #histPrevTab .table-scroll {
+            max-height: calc(100vh - 280px);
+        }
+
         /* Predictive table: allow horizontal scroll if needed */
         #schedPredTab .table-scroll {
             overflow-x: auto;
@@ -644,20 +650,10 @@ function partOrderBadge(string $v): string
             <div class="max-w-[1400px] mx-auto">
 
                 <!-- ═══════════════════════ HEADER ═══════════════════════ -->
-                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-                    <div>
-                        <h1 class="text-2xl font-extrabold text-slate-900">
-                            <i class="fas fa-display text-violet-500 mr-2"></i>Monitor
-                        </h1>
-                    </div>
-                    <!-- Digital Clock -->
-                    <div class="flex flex-col items-end">
-                        <div id="live-clock"
-                            class="font-mono font-black text-slate-800 tracking-tight tabular-nums"
-                            style="font-size:2rem;line-height:1;letter-spacing:-.02em;"></div>
-                        <div id="live-date"
-                            class="text-xs font-semibold text-slate-400 mt-1 tracking-wide"></div>
-                    </div>
+                <div class="mb-4">
+                    <h1 class="text-2xl font-extrabold text-slate-900">
+                        <i class="fas fa-display text-violet-500 mr-2"></i>Monitor
+                    </h1>
                 </div>
 
                 <!-- ═══════════════════════════════════════════════════════════
@@ -665,9 +661,9 @@ function partOrderBadge(string $v): string
     ═══════════════════════════════════════════════════════════ -->
                 <div id="sectionSchedule" class="section-enter <?= $activeSection !== 'schedule' ? 'hidden' : '' ?>">
 
-                    <!-- Sub-tab (Predictive / Preventive) -->
-                    <div class="mb-5">
-                        <div class="relative bg-slate-100 rounded-2xl p-1.5 flex gap-1 shadow-inner" style="max-width:520px;">
+                    <!-- Sub-tab (Predictive / Preventive) + Clock -->
+                    <div class="mb-5 flex items-center gap-3">
+                        <div class="relative bg-slate-100 rounded-2xl p-1.5 flex gap-1 shadow-inner" style="max-width:520px;flex:1;">
                             <div id="schedTabIndicator" class="subtab-indicator"
                                 style="background:<?= $activeTab === 'preventive' ? 'linear-gradient(135deg,#4338ca,#6366f1)' : 'linear-gradient(135deg,#2563eb,#1d4ed8)' ?>;width:calc(50% - 4px);transform:<?= $activeTab === 'preventive' ? 'translateX(calc(100% + 4px))' : 'translateX(0)' ?>;"></div>
                             <button id="schedTabPred" onclick="switchSchedTab('predictive')"
@@ -680,6 +676,11 @@ function partOrderBadge(string $v): string
                                 <i class="fas fa-shield-halved"></i> Preventive
                                 <span class="ml-1 text-[10px] font-black px-2 py-0.5 rounded-full <?= $activeTab === 'preventive' ? 'bg-white/20 text-white' : 'bg-slate-300/60 text-slate-600' ?>"><?= count($prevSchedules) ?></span>
                             </button>
+                        </div>
+                        <!-- Digital Clock — Schedule -->
+                        <div class="flex flex-col items-end ml-auto flex-shrink-0">
+                            <div id="live-clock" class="font-mono font-black text-slate-800 tabular-nums" style="font-size:1.7rem;line-height:1;letter-spacing:-.02em;"></div>
+                            <div id="live-date" class="font-semibold text-slate-400 mt-0.5 tracking-wide" style="font-size:.65rem;"></div>
                         </div>
                     </div>
 
@@ -695,6 +696,30 @@ function partOrderBadge(string $v): string
                     ], $todaySchedArrVal), JSON_UNESCAPED_UNICODE);
                     ?>
                     <div id="schedPredTab" class="<?= $activeTab === 'preventive' ? 'hidden' : '' ?>">
+                        <!-- ── Status Checkbox Filter — Predictive ── -->
+                        <div class="mb-1.5 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-1" style="font-size:.65rem;">
+                            <span class="font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Filter:</span>
+                            <label class="flex items-center gap-1 cursor-pointer select-none">
+                                <input type="checkbox" id="predCbOverdue" checked onchange="applyPredFilter()" class="w-3 h-3 accent-red-500">
+                                <span class="font-bold text-red-600 whitespace-nowrap">Overdue</span>
+                            </label>
+                            <label class="flex items-center gap-1 cursor-pointer select-none">
+                                <input type="checkbox" id="predCbAlert" checked onchange="applyPredFilter()" class="w-3 h-3 accent-yellow-500">
+                                <span class="font-bold text-yellow-600 whitespace-nowrap">Alert</span>
+                            </label>
+                            <label class="flex items-center gap-1 cursor-pointer select-none">
+                                <input type="checkbox" id="predCbReminder" checked onchange="applyPredFilter()" class="w-3 h-3 accent-orange-500">
+                                <span class="font-bold text-orange-500 whitespace-nowrap">Reminder</span>
+                            </label>
+                            <label class="flex items-center gap-1 cursor-pointer select-none">
+                                <input type="checkbox" id="predCbSecure" checked onchange="applyPredFilter()" class="w-3 h-3 accent-emerald-500">
+                                <span class="font-bold text-emerald-600 whitespace-nowrap">Secure</span>
+                            </label>
+                            <div class="w-px h-3 bg-slate-200"></div>
+                            <button onclick="predCheckAll(true)" class="font-bold text-slate-400 hover:text-blue-600 transition px-1 rounded hover:bg-blue-50">All</button>
+                            <button onclick="predCheckAll(false)" class="font-bold text-slate-400 hover:text-red-500 transition px-1 rounded hover:bg-red-50">None</button>
+                            <span id="predFilterCount" class="ml-auto font-bold text-slate-300 whitespace-nowrap"></span>
+                        </div>
                         <!-- Today ticker banner — Predictive -->
                         <?php if ($todayCount > 0): ?>
                             <div class="today-banner mb-4" style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;">
@@ -783,8 +808,13 @@ function partOrderBadge(string $v): string
                                                 $daysCls = remainingClass($days);
                                                 $useDate = $row['use_date'] ? date('d M Y', strtotime($row['use_date'])) : '-';
                                                 $planDate = $row['change_date_plan'] ? date('d M Y', strtotime($row['change_date_plan'])) : '-';
+                                                $reminder = (int)($row['reminder_activity'] ?? 30);
+                                                if ($days <= 0) $rowStatus = 'overdue';
+                                                elseif ($days <= 7) $rowStatus = 'alert';
+                                                elseif ($days <= $reminder) $rowStatus = 'reminder';
+                                                else $rowStatus = 'secure';
                                             ?>
-                                                <tr>
+                                                <tr class="pred-sched-row" data-status="<?= $rowStatus ?>">
                                                     <td class="tbl-td text-slate-400 font-mono px-2 py-2" style="font-size:.68rem;"><?= $i + 1 ?></td>
                                                     <td class="tbl-td px-2 py-2" style="overflow:hidden;">
                                                         <div class="font-bold text-slate-800 leading-tight" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?= htmlspecialchars($row['machine_name'] ?? '-') ?>"><?= htmlspecialchars($row['machine_name'] ?? '-') ?></div>
@@ -838,6 +868,30 @@ function partOrderBadge(string $v): string
                     ], $prevTodayArrVal), JSON_UNESCAPED_UNICODE);
                     ?>
                     <div id="schedPrevTab" class="<?= $activeTab === 'predictive' ? 'hidden' : '' ?>">
+                        <!-- ── Status Checkbox Filter — Preventive ── -->
+                        <div class="mb-1.5 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-1" style="font-size:.65rem;">
+                            <span class="font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Filter:</span>
+                            <label class="flex items-center gap-1 cursor-pointer select-none">
+                                <input type="checkbox" id="prevCbOverdue" checked onchange="applyPrevFilter()" class="w-3 h-3 accent-red-500">
+                                <span class="font-bold text-red-600 whitespace-nowrap">Overdue</span>
+                            </label>
+                            <label class="flex items-center gap-1 cursor-pointer select-none">
+                                <input type="checkbox" id="prevCbAlert" checked onchange="applyPrevFilter()" class="w-3 h-3 accent-yellow-500">
+                                <span class="font-bold text-yellow-600 whitespace-nowrap">Alert</span>
+                            </label>
+                            <label class="flex items-center gap-1 cursor-pointer select-none">
+                                <input type="checkbox" id="prevCbReminder" checked onchange="applyPrevFilter()" class="w-3 h-3 accent-orange-500">
+                                <span class="font-bold text-orange-500 whitespace-nowrap">Reminder</span>
+                            </label>
+                            <label class="flex items-center gap-1 cursor-pointer select-none">
+                                <input type="checkbox" id="prevCbSecure" checked onchange="applyPrevFilter()" class="w-3 h-3 accent-emerald-500">
+                                <span class="font-bold text-emerald-600 whitespace-nowrap">Secure</span>
+                            </label>
+                            <div class="w-px h-3 bg-slate-200"></div>
+                            <button onclick="prevCheckAll(true)" class="font-bold text-slate-400 hover:text-indigo-600 transition px-1 rounded hover:bg-indigo-50">All</button>
+                            <button onclick="prevCheckAll(false)" class="font-bold text-slate-400 hover:text-red-500 transition px-1 rounded hover:bg-red-50">None</button>
+                            <span id="prevFilterCount" class="ml-auto font-bold text-slate-300 whitespace-nowrap"></span>
+                        </div>
                         <!-- Today ticker banner — Preventive -->
                         <?php if ($prevTodayCount > 0): ?>
                             <div class="today-banner mb-4" style="background:linear-gradient(135deg,#eef2ff,#e0e7ff);border:1px solid #a5b4fc;">
@@ -912,8 +966,13 @@ function partOrderBadge(string $v): string
                                                 $daysCls = remainingClass($days);
                                                 $useDate = !empty($row['use_date']) ? date('d M Y', strtotime($row['use_date'])) : '-';
                                                 $planDate = !empty($row['change_date_plan']) ? date('d M Y', strtotime($row['change_date_plan'])) : '-';
+                                                $pReminder = (int)($row['reminder_activity'] ?? 30);
+                                                if ($days <= 0) $pRowStatus = 'overdue';
+                                                elseif ($days <= 7) $pRowStatus = 'alert';
+                                                elseif ($days <= $pReminder) $pRowStatus = 'reminder';
+                                                else $pRowStatus = 'secure';
                                             ?>
-                                                <tr>
+                                                <tr class="prev-sched-row" data-status="<?= $pRowStatus ?>">
                                                     <td class="tbl-td text-slate-400 text-xs font-mono"><?= $i + 1 ?></td>
                                                     <td class="tbl-td" style="min-width:160px;">
                                                         <div class="font-bold text-slate-800 text-sm leading-tight"><?= htmlspecialchars($row['machine_name'] ?? '-') ?></div>
@@ -1025,9 +1084,9 @@ function partOrderBadge(string $v): string
     ═══════════════════════════════════════════════════════════ -->
                 <div id="sectionHistory" class="section-enter <?= $activeSection !== 'history' ? 'hidden' : '' ?>">
 
-                    <!-- Sub-tab -->
-                    <div class="mb-5">
-                        <div class="relative bg-slate-100 rounded-2xl p-1.5 flex gap-1 shadow-inner" style="max-width:520px;">
+                    <!-- Sub-tab + Clock -->
+                    <div class="mb-5 flex items-center gap-3">
+                        <div class="relative bg-slate-100 rounded-2xl p-1.5 flex gap-1 shadow-inner" style="max-width:520px;flex:1;">
                             <div id="histTabIndicator" class="subtab-indicator"
                                 style="background:linear-gradient(135deg,#f59e0b,#d97706);width:calc(50% - 4px);transform:translateX(0);"></div>
                             <button id="histTabPred" onclick="switchHistTab('predictive')"
@@ -1041,6 +1100,24 @@ function partOrderBadge(string $v): string
                                 <span class="ml-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-300/60 text-slate-600"><?= count($historiesPrev) ?></span>
                             </button>
                         </div>
+                        <!-- Digital Clock — History -->
+                        <div class="flex flex-col items-end ml-auto flex-shrink-0">
+                            <div class="live-clock-mirror font-mono font-black text-slate-800 tabular-nums" style="font-size:1.7rem;line-height:1;letter-spacing:-.02em;"></div>
+                            <div class="live-date-mirror font-semibold text-slate-400 mt-0.5 tracking-wide" style="font-size:.65rem;"></div>
+                        </div>
+                    </div>
+
+                    <!-- ── Month filter bar — History ── -->
+                    <div class="mb-1.5 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-1" style="font-size:.65rem;">
+                        <i class="fas fa-calendar-alt text-amber-500" style="font-size:.6rem;"></i>
+                        <span class="font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Bulan:</span>
+                        <input type="month" id="histMonthFilter" value=""
+                            class="bg-transparent border-0 text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-amber-400 rounded px-1 py-0 transition"
+                            style="font-size:.65rem;height:1.3rem;"
+                            onchange="applyHistMonthFilter()">
+                        <button onclick="clearHistMonthFilter()"
+                            class="font-bold text-slate-400 hover:text-red-500 transition px-1 rounded hover:bg-red-50">&#10007;</button>
+                        <span id="histMonthCount" class="ml-auto font-bold text-slate-300 whitespace-nowrap"></span>
                     </div>
 
                     <!-- ── History: Predictive table ── -->
@@ -1072,8 +1149,9 @@ function partOrderBadge(string $v): string
                                                 $planDate   = !empty($h['change_date_plan']) ? date('d M Y', strtotime($h['change_date_plan'])) : '-';
                                                 $reportedAt = !empty($h['reported_at']) ? date('d M Y H:i', strtotime($h['reported_at'])) : '-';
                                                 $noteShort  = mb_strlen($h['note'] ?? '') > 55 ? mb_substr($h['note'], 0, 55) . '…' : ($h['note'] ?? '-');
+                                                $rowMonth   = !empty($h['reported_at']) ? date('Y-m', strtotime($h['reported_at'])) : '';
                                             ?>
-                                                <tr>
+                                                <tr class="hist-pred-row" data-month="<?= $rowMonth ?>">
                                                     <td class="tbl-td text-slate-400 text-xs font-mono"><?= $i + 1 ?></td>
                                                     <td class="tbl-td" style="min-width:160px;">
                                                         <div class="font-bold text-slate-800 text-sm leading-tight whitespace-nowrap"><?= htmlspecialchars($h['machine_name'] ?? '-') ?></div>
@@ -1132,8 +1210,9 @@ function partOrderBadge(string $v): string
                                                 $planDate   = !empty($h['change_date_plan']) ? date('d M Y', strtotime($h['change_date_plan'])) : '-';
                                                 $reportedAt = !empty($h['reported_at']) ? date('d M Y H:i', strtotime($h['reported_at'])) : '-';
                                                 $noteShort  = mb_strlen($h['note'] ?? '') > 55 ? mb_substr($h['note'], 0, 55) . '…' : ($h['note'] ?? '-');
+                                                $rowMonth   = !empty($h['reported_at']) ? date('Y-m', strtotime($h['reported_at'])) : '';
                                             ?>
-                                                <tr>
+                                                <tr class="hist-prev-row" data-month="<?= $rowMonth ?>">
                                                     <td class="tbl-td text-slate-400 text-xs font-mono"><?= $i + 1 ?></td>
                                                     <td class="tbl-td" style="min-width:160px;">
                                                         <div class="font-bold text-slate-800 text-sm leading-tight whitespace-nowrap"><?= htmlspecialchars($h['machine_name'] ?? '-') ?></div>
@@ -1510,16 +1589,133 @@ function partOrderBadge(string $v): string
                 const date = now.getDate();
                 const mon = MONTHS[now.getMonth()];
                 const yr = now.getFullYear();
+                const timeStr = hh + ':' + mm + ':' + ss;
+                const dateStr = day + ', ' + date + ' ' + mon + ' ' + yr;
 
-                document.getElementById('live-clock').textContent = hh + ':' + mm + ':' + ss;
-                document.getElementById('live-date').textContent = day + ', ' + date + ' ' + mon + ' ' + yr;
+                // Schedule tab clock (id)
+                const clk = document.getElementById('live-clock');
+                const dt = document.getElementById('live-date');
+                if (clk) clk.textContent = timeStr;
+                if (dt) dt.textContent = dateStr;
+
+                // History tab clock mirrors (class)
+                document.querySelectorAll('.live-clock-mirror').forEach(el => el.textContent = timeStr);
+                document.querySelectorAll('.live-date-mirror').forEach(el => el.textContent = dateStr);
             }
 
             tick();
             setInterval(tick, 1000);
         })();
+
+        // ══════════════════════════════════════════════════════════════
+        //  SCHEDULE STATUS CHECKBOX FILTER — Predictive
+        // ══════════════════════════════════════════════════════════════
+        function applyPredFilter() {
+            const checked = {
+                overdue: document.getElementById('predCbOverdue').checked,
+                alert: document.getElementById('predCbAlert').checked,
+                reminder: document.getElementById('predCbReminder').checked,
+                secure: document.getElementById('predCbSecure').checked,
+            };
+            let shown = 0,
+                total = 0;
+            document.querySelectorAll('.pred-sched-row').forEach(tr => {
+                total++;
+                const vis = checked[tr.dataset.status] !== false && checked[tr.dataset.status];
+                tr.style.display = vis ? '' : 'none';
+                if (vis) shown++;
+            });
+            const cnt = document.getElementById('predFilterCount');
+            if (cnt) cnt.textContent = shown + ' / ' + total + ' jadwal';
+        }
+
+        function predCheckAll(val) {
+            ['predCbOverdue', 'predCbAlert', 'predCbReminder', 'predCbSecure'].forEach(id => {
+                document.getElementById(id).checked = val;
+            });
+            applyPredFilter();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  SCHEDULE STATUS CHECKBOX FILTER — Preventive
+        // ══════════════════════════════════════════════════════════════
+        function applyPrevFilter() {
+            const checked = {
+                overdue: document.getElementById('prevCbOverdue').checked,
+                alert: document.getElementById('prevCbAlert').checked,
+                reminder: document.getElementById('prevCbReminder').checked,
+                secure: document.getElementById('prevCbSecure').checked,
+            };
+            let shown = 0,
+                total = 0;
+            document.querySelectorAll('.prev-sched-row').forEach(tr => {
+                total++;
+                const vis = checked[tr.dataset.status] !== false && checked[tr.dataset.status];
+                tr.style.display = vis ? '' : 'none';
+                if (vis) shown++;
+            });
+            const cnt = document.getElementById('prevFilterCount');
+            if (cnt) cnt.textContent = shown + ' / ' + total + ' jadwal';
+        }
+
+        function prevCheckAll(val) {
+            ['prevCbOverdue', 'prevCbAlert', 'prevCbReminder', 'prevCbSecure'].forEach(id => {
+                document.getElementById(id).checked = val;
+            });
+            applyPrevFilter();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  HISTORY MONTH FILTER
+        // ══════════════════════════════════════════════════════════════
+        function applyHistMonthFilter() {
+            const val = document.getElementById('histMonthFilter').value; // 'YYYY-MM' or ''
+            let predShown = 0,
+                predTotal = 0,
+                prevShown = 0,
+                prevTotal = 0;
+
+            document.querySelectorAll('.hist-pred-row').forEach(tr => {
+                predTotal++;
+                const vis = !val || tr.dataset.month === val;
+                tr.style.display = vis ? '' : 'none';
+                if (vis) predShown++;
+            });
+            document.querySelectorAll('.hist-prev-row').forEach(tr => {
+                prevTotal++;
+                const vis = !val || tr.dataset.month === val;
+                tr.style.display = vis ? '' : 'none';
+                if (vis) prevShown++;
+            });
+
+            const cnt = document.getElementById('histMonthCount');
+            if (cnt) {
+                if (val) {
+                    const [yr, mo] = val.split('-');
+                    const label = new Date(yr, mo - 1).toLocaleDateString('id-ID', {
+                        month: 'long',
+                        year: 'numeric'
+                    });
+                    cnt.textContent = label + ' — ' + predShown + ' pred · ' + prevShown + ' prev';
+                } else {
+                    cnt.textContent = predTotal + ' pred · ' + prevTotal + ' prev (semua)';
+                }
+            }
+        }
+
+        function clearHistMonthFilter() {
+            document.getElementById('histMonthFilter').value = '';
+            applyHistMonthFilter();
+        }
+
+        // Init filter counts on load
+        document.addEventListener('DOMContentLoaded', function() {
+            applyPredFilter();
+            applyPrevFilter();
+            applyHistMonthFilter();
+        });
     </script>
 
 </body>
 
-</html> 
+</html>

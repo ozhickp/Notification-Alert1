@@ -194,6 +194,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         if ($_POST['action'] === 'edit') {
+            $editId  = (int)($_POST['edit_id'] ?? 0);
+            $remAct  = (int)($_POST['reminder_activity'] ?? 0);
+
+            // Ambil status saat ini dari DB
+            $currEditRow = $pdo->prepare("SELECT maintenance_status FROM schedules WHERE id = ?");
+            $currEditRow->execute([$editId]);
+            $currEditStatus = $currEditRow->fetchColumn() ?: 'done';
+
+            // Auto-hitung maintenance_status:
+            // Masuk window (overdue/alert/reminder) → 'soon'
+            // Keluar window (aman) → 'done'
+            // Jika sudah 'soon' tapi tanggal diubah keluar window → reset ke 'done'
+            $editInWindow = ($remaining_day !== null && (
+                $remaining_day <= 0 ||
+                ($remaining_day >= 1 && $remaining_day <= 7) ||
+                ($remAct > 0 && $remaining_day <= $remAct)
+            ));
+            $autoEditMaintStatus = $editInWindow ? 'soon' : 'done';
+
             $stmt = $pdo->prepare("UPDATE schedules SET
                 department = ?, line = ?, operation_process = ?, machine_name = ?,
                 process_machine = ?, name_unit = ?, maintenance_point = ?,
@@ -217,12 +236,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $remaining_day,
                 $_POST['part_order']           ?? 'close',
                 $_POST['part_availability']    ?? 'close',
-                $_POST['maintenance_status']   ?? 'soon',
-                (int)($_POST['edit_id']        ?? 0),
+                $autoEditMaintStatus,
+                $editId,
             ]);
             // ── Kirim notifikasi email jika data yang diedit masuk kondisi reminder ──
-            $editId     = (int)($_POST['edit_id'] ?? 0);
-            $remAct     = (int)($_POST['reminder_activity'] ?? 0);
             $needsEmail = ($remaining_day !== null && $editId > 0 && (
                 $remaining_day <= 0 ||
                 ($remaining_day >= 1 && $remaining_day <= 7) ||
@@ -298,6 +315,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $newRemainingDay = ($cdp >= $now) ? $diff : -$diff;
             }
 
+            // ── Resolve department ID → plant_name, line ID → line_name ──
+            $histDept = $sched['department'];
+            $histLine = $sched['line'];
+            try {
+                $rDept = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ?");
+                $rDept->execute([$sched['department']]);
+                $rDeptVal = $rDept->fetchColumn();
+                if ($rDeptVal !== false) $histDept = $rDeptVal;
+            } catch (\Exception $e) {
+            }
+            try {
+                $rLine = $pdo->prepare("SELECT line_name FROM line WHERE id = ?");
+                $rLine->execute([$sched['line']]);
+                $rLineVal = $rLine->fetchColumn();
+                if ($rLineVal !== false) $histLine = $rLineVal;
+            } catch (\Exception $e) {
+            }
+
             // ── Simpan ke history_maintenance ──
             $pdo->prepare("INSERT INTO history_maintenance
                 (schedule_id, department, line, operation_process, machine_name,
@@ -306,8 +341,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                 ->execute([
                     $schedId,
-                    $sched['department'],
-                    $sched['line'],
+                    $histDept,
+                    $histLine,
                     $sched['operation_process'],
                     $sched['machine_name'],
                     $sched['process_machine'],
@@ -351,11 +386,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
         $remaining_day    = calculateRemainingDays($change_date_plan);
 
         if ($_POST['prev_action'] === 'prev_add') {
+            $remAct_padd = (int)($_POST['reminder_activity'] ?? 0);
+            // Status awal: 'soon' hanya jika sudah masuk window reminder/alert/overdue
+            // 'done' jika masih jauh dari reminder (kondisi aman/secure)
+            $prevAddInWindow = ($remaining_day !== null && (
+                $remaining_day <= 0 ||
+                ($remaining_day >= 1 && $remaining_day <= 7) ||
+                ($remAct_padd > 0 && $remaining_day <= $remAct_padd)
+            ));
+            $initPrevStatus = $prevAddInWindow ? 'soon' : 'done';
+
             $stmt = $pdo->prepare("INSERT INTO schedules_preventive
                 (department, line, operation_process, machine_name, process_machine, name_unit,
                  maintenance_point, interval_month, use_date, change_date_plan,
                  reminder_activity, remaining_day, maintenance_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'soon')");
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             $stmt->execute([
                 (int)($_POST['department']        ?? 0),   // FIX: ID integer
                 (int)($_POST['line']              ?? 0),   // FIX: ID integer
@@ -369,14 +414,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                 $change_date_plan,
                 (int)($_POST['reminder_activity'] ?? 0),
                 $remaining_day,
+                $initPrevStatus,
             ]);
             $newPrevId      = (int)$pdo->lastInsertId();
-            $remAct_padd    = (int)($_POST['reminder_activity'] ?? 0);
-            $needsEmailPrev = ($remaining_day !== null && (
-                $remaining_day <= 0 ||
-                $remaining_day <= 7 ||
-                ($remAct_padd > 0 && $remaining_day <= $remAct_padd)
-            ));
+            $needsEmailPrev = $prevAddInWindow;
             if ($needsEmailPrev && $newPrevId > 0) {
                 $reminderFile = __DIR__ . '/send_reminder.php';
                 if (file_exists($reminderFile)) {
@@ -389,6 +430,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
         }
 
         if ($_POST['prev_action'] === 'prev_edit') {
+            $prevEditId  = (int)($_POST['prev_edit_id'] ?? 0);
+            $prevRemAct  = (int)($_POST['reminder_activity'] ?? 0);
+
+            // Ambil status saat ini agar bisa tetap 'soon' jika sudah masuk window
+            $currPrevRow = $pdo->prepare("SELECT maintenance_status FROM schedules_preventive WHERE id = ?");
+            $currPrevRow->execute([$prevEditId]);
+            $currPrevStatus = $currPrevRow->fetchColumn() ?: 'done';
+
+            // Auto-hitung maintenance_status:
+            // - Jika remaining masuk window → 'soon' (termasuk yang sudah overdue tapi belum report)
+            // - Jika masih aman (jauh dari reminder) DAN status saat ini 'done' → tetap 'done'
+            // - Jika status saat ini 'soon' (misal sudah overdue belum report) → tetap 'soon'
+            $prevEditInWindow = ($remaining_day !== null && (
+                $remaining_day <= 0 ||
+                ($remaining_day >= 1 && $remaining_day <= 7) ||
+                ($prevRemAct > 0 && $remaining_day <= $prevRemAct)
+            ));
+            if ($prevEditInWindow) {
+                $autoMaintStatus = 'soon';
+            } elseif ($currPrevStatus === 'soon') {
+                // Masih 'soon' tapi belum tentu di window — pertahankan 'soon' hanya jika memang masih dalam window
+                // Jika tidak dalam window lagi, berarti tanggal/reminder diubah, reset ke 'done'
+                $autoMaintStatus = 'done';
+            } else {
+                $autoMaintStatus = 'done';
+            }
+
             $stmt = $pdo->prepare("UPDATE schedules_preventive SET
                 department = ?, line = ?, operation_process = ?, machine_name = ?,
                 process_machine = ?, name_unit = ?, maintenance_point = ?,
@@ -408,11 +476,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                 $change_date_plan,
                 (int)($_POST['reminder_activity'] ?? 0),
                 $remaining_day,
-                $_POST['maintenance_status'] ?? 'soon',
-                (int)($_POST['prev_edit_id'] ?? 0),
+                $autoMaintStatus,
+                $prevEditId,
             ]);
-            $prevEditId      = (int)($_POST['prev_edit_id'] ?? 0);
-            $prevRemAct      = (int)($_POST['reminder_activity'] ?? 0);
             $needsEmailEdit  = ($remaining_day !== null && $prevEditId > 0 && (
                 $remaining_day <= 0 ||
                 ($remaining_day >= 1 && $remaining_day <= 7) ||
@@ -474,6 +540,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                 $newRemainingDay = ($cdp >= $now) ? $diff : -$diff;
             }
 
+            // ── Resolve department ID → plant_name, line ID → line_name ──
+            $prevHistDept = $sched['department'];
+            $prevHistLine = $sched['line'];
+            try {
+                $rDept2 = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ?");
+                $rDept2->execute([$sched['department']]);
+                $rDeptVal2 = $rDept2->fetchColumn();
+                if ($rDeptVal2 !== false) $prevHistDept = $rDeptVal2;
+            } catch (\Exception $e) {
+            }
+            try {
+                $rLine2 = $pdo->prepare("SELECT line_name FROM line WHERE id = ?");
+                $rLine2->execute([$sched['line']]);
+                $rLineVal2 = $rLine2->fetchColumn();
+                if ($rLineVal2 !== false) $prevHistLine = $rLineVal2;
+            } catch (\Exception $e) {
+            }
+
             // ── Simpan ke history_preventive ──
             try {
                 $pdo->prepare("INSERT INTO history_preventive
@@ -483,8 +567,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                     ->execute([
                         $schedId,
-                        $sched['department'],
-                        $sched['line'],
+                        $prevHistDept,
+                        $prevHistLine,
                         $sched['operation_process'],
                         $sched['machine_name'],
                         $sched['process_machine'],
@@ -499,6 +583,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
             }
 
             // ── Update schedules_preventive ──
+            // maintenance_status → 'done', use_date & change_date_plan diperbarui
             $pdo->prepare("UPDATE schedules_preventive SET
                 maintenance_status = 'done',
                 use_date           = ?,
@@ -2118,8 +2203,7 @@ HTML;
             document.getElementById('prev_edit_op_display').value = data.operation_process ?? '';
             document.getElementById('prev_edit_dept_name_val').value = data.department ?? '';
             document.getElementById('prev_edit_line_name_val').value = data.line ?? '';
-            const ms = document.getElementById('prev_edit_maintenance_status');
-            if (ms) ms.value = data.maintenance_status || 'soon';
+            // maintenance_status dikelola otomatis oleh server — tidak perlu diisi
             showModal('prevEditModal');
         }
         // Report modal preventive
@@ -2309,12 +2393,11 @@ HTML;
                 <input type="hidden" name="line_name" id="prev_edit_line_name_val">
                 <?php echo renderFormFields('prev_edit', $plants); ?>
                 <div class="mb-6 border-t pt-6">
-                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Maintenance Status</label>
-                    <select name="maintenance_status" id="prev_edit_maintenance_status"
-                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-teal-100 outline-none transition text-sm font-bold">
-                        <option value="soon">SOON</option>
-                        <option value="done">DONE</option>
-                    </select>
+                    <div class="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 text-sm text-teal-700 font-medium">
+                        <i class="fas fa-info-circle mr-2"></i>
+                        <strong>Maintenance Status</strong> dikelola otomatis oleh sistem:
+                        <span class="block mt-1 text-xs text-teal-600">• Jauh dari reminder → <strong>DONE</strong> &nbsp;|&nbsp; Masuk window reminder → <strong>SOON</strong> &nbsp;|&nbsp; Setelah submit report → <strong>DONE</strong></span>
+                    </div>
                 </div>
                 <div class="flex justify-end gap-3">
                     <button type="button" onclick="hideModal('prevEditModal')" class="px-8 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition">Batal</button>

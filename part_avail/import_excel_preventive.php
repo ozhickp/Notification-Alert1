@@ -188,9 +188,26 @@ try {
              :name_unit, :maintenance_point, :interval_month, :use_date, :change_date_plan,
              :reminder_activity, :remaining_day, :maintenance_status)
     ");
+    $stmtUpdate = $pdo->prepare("
+        UPDATE schedules_preventive SET
+            department = :department, line = :line,
+            operation_process = :operation_process, machine_name = :machine_name,
+            process_machine = :process_machine, name_unit = :name_unit,
+            maintenance_point = :maintenance_point, interval_month = :interval_month,
+            use_date = :use_date, change_date_plan = :change_date_plan,
+            reminder_activity = :reminder_activity, remaining_day = :remaining_day,
+            maintenance_status = :maintenance_status
+        WHERE id = :id
+    ");
+    $stmtCheck = $pdo->prepare("
+        SELECT id FROM schedules_preventive
+        WHERE machine_name = ? AND maintenance_point = ? AND operation_process = ?
+        LIMIT 1
+    ");
 
     $today   = new DateTime('today');
     $success = 0;
+    $updated = 0;
     $skipped = 0;
     $errors  = [];
     $importEmailQueue = [];
@@ -305,37 +322,54 @@ try {
         );
         $maintStatus = $needsAction ? 'soon' : 'done';
 
+        $params = [
+            ':department'        => $deptId,
+            ':line'              => $lineId,
+            ':operation_process' => $opProcess,
+            ':machine_name'      => $machineName,
+            ':process_machine'   => prevCleanStr($get('process_machine')),
+            ':name_unit'         => prevCleanStr($get('name_unit')),
+            ':maintenance_point' => $maintPoint,
+            ':interval_month'    => $intervalMonth,
+            ':use_date'          => prevToDateStr($get('use_date')),
+            ':change_date_plan'  => $changeDatePlan,
+            ':reminder_activity' => $remActivity,
+            ':remaining_day'     => $remainingDay,
+            ':maintenance_status' => $maintStatus,
+        ];
+
         try {
-            $stmtInsert->execute([
-                ':department'        => $deptId,
-                ':line'              => $lineId,
-                ':operation_process' => $opProcess,
-                ':machine_name'      => $machineName,
-                ':process_machine'   => prevCleanStr($get('process_machine')),
-                ':name_unit'         => prevCleanStr($get('name_unit')),
-                ':maintenance_point' => $maintPoint,
-                ':interval_month'    => $intervalMonth,
-                ':use_date'          => prevToDateStr($get('use_date')),
-                ':change_date_plan'  => $changeDatePlan,
-                ':reminder_activity' => $remActivity,
-                ':remaining_day'     => $remainingDay,
-                ':maintenance_status' => $maintStatus,
-            ]);
-            $success++;
+            // UPSERT: cek apakah sudah ada data dengan kombinasi kunci yang sama
+            $stmtCheck->execute([$machineName, $maintPoint, $opProcess]);
+            $existingId = $stmtCheck->fetchColumn();
+
+            if ($existingId) {
+                // Data sudah ada → UPDATE (timpa data lama)
+                $stmtUpdate->execute(array_merge($params, [':id' => (int)$existingId]));
+                $newId = (int)$existingId;
+                $updated++;
+            } else {
+                // Belum ada → INSERT baru
+                $stmtInsert->execute($params);
+                $newId = (int)$pdo->lastInsertId();
+                $success++;
+            }
             $needsEmail = (
                 $remainingDay <= 0 ||
                 ($remainingDay >= 1 && $remainingDay <= 7) ||
                 ($remActivity > 0 && $remainingDay > 7 && $remainingDay <= $remActivity)
             );
-            if ($needsEmail) {
-                $importEmailQueue[] = ['id' => (int)$pdo->lastInsertId(), 'remaining_day' => $remainingDay];
+            if ($needsEmail && $newId > 0) {
+                $importEmailQueue[] = ['id' => $newId, 'remaining_day' => $remainingDay];
             }
         } catch (\Exception $e) {
             $errors[] = "Baris $r: " . $e->getMessage();
         }
     }
 
-    $msg = "{$success} data preventive berhasil diimport dari Excel.";
+    $inserted = $success;
+    $total    = $inserted + $updated;
+    $msg = "{$total} data preventive berhasil diimport dari Excel ({$inserted} baru, {$updated} diperbarui).";
     if ($skipped > 0)    $msg .= " {$skipped} baris dilewati (kosong/summary/tanpa tanggal).";
     if (!empty($errors)) $msg .= ' ' . count($errors) . ' baris gagal.';
 
@@ -349,9 +383,11 @@ try {
     }
 
     echo json_encode([
-        'status'   => $success > 0 ? 'success' : 'error',
+        'status'   => $total > 0 ? 'success' : 'error',
         'message'  => $msg,
-        'imported' => $success,
+        'imported' => $total,
+        'inserted' => $inserted,
+        'updated'  => $updated,
         'skipped'  => $skipped,
         'errors'   => array_slice($errors, 0, 10),
         'debug'    => [
