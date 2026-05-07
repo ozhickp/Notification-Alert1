@@ -200,7 +200,7 @@ if (isset($_GET['export'])) {
             <div class="relative bg-slate-100 rounded-2xl p-1.5 flex gap-1 shadow-inner">
                 <div id="tabIndicator"
                     class="absolute top-1.5 left-1.5 bottom-1.5 rounded-xl transition-all duration-300 ease-in-out shadow-md pointer-events-none"
-                    style="background:linear-gradient(135deg,#f59e0b,#d97706);width:calc(50% - 4px);transform:<?= $activeTab === 'preventive' ? 'translateX(calc(100% + 4px))' : 'translateX(0)' ?>;">
+                    style="background:<?= $activeTab === 'preventive' ? 'linear-gradient(135deg,#ea580c,#f97316)' : 'linear-gradient(135deg,#f59e0b,#d97706)' ?>;width:calc(50% - 4px);transform:<?= $activeTab === 'preventive' ? 'translateX(calc(100% + 4px))' : 'translateX(0)' ?>;">
                 </div>
                 <button id="tabPredictive" onclick="switchTab('predictive')"
                     class="relative z-10 flex-1 flex items-center justify-center gap-2 py-3.5 px-6 font-bold text-sm rounded-xl transition-all duration-300 <?= $activeTab === 'predictive' ? 'text-white' : 'text-slate-500' ?>">
@@ -577,15 +577,12 @@ if (isset($_GET['export'])) {
             // Form tab hidden input
             document.getElementById('formTab').value = tab;
 
-            // Re-apply month filter for the newly active tab
-            applyMonthFilter();
-
-            // Pill indicator
+            // Pill indicator — slide ke posisi tab yang aktif
             const indicator = document.getElementById('tabIndicator');
             indicator.style.transform = isPred ? 'translateX(0)' : 'translateX(calc(100% + 4px))';
             indicator.style.background = isPred ?
                 'linear-gradient(135deg,#f59e0b,#d97706)' :
-                'linear-gradient(135deg,#f97316,#ea580c)';
+                'linear-gradient(135deg,#ea580c,#f97316)';
 
             document.getElementById('tabPredictive').style.color = isPred ? '#fff' : '#64748b';
             document.getElementById('tabPreventive').style.color = !isPred ? '#fff' : '#64748b';
