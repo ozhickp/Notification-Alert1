@@ -11,12 +11,14 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
 $activeTab = ($_GET['tab'] ?? 'predictive') === 'preventive' ? 'preventive' : 'predictive';
 
 // ── Filter params ──────────────────────────────────────────────────────────────
-$search     = trim($_GET['search']     ?? '');
-$filterDep  = trim($_GET['department'] ?? '');
-$filterDate = trim($_GET['date']       ?? '');
+$search      = trim($_GET['search']      ?? '');
+$filterDep   = trim($_GET['department']  ?? '');
+$filterMode  = ($_GET['filter_mode']     ?? 'date') === 'month' ? 'month' : 'date';
+$filterDate  = trim($_GET['date']        ?? '');
+$filterMonth = trim($_GET['month']       ?? '');
 
 // ── Query helper — shared WHERE builder ───────────────────────────────────────
-function buildWhere(string $search, string $filterDep, string $filterDate, string $alias = 'h'): array
+function buildWhere(string $search, string $filterDep, string $filterMode, string $filterDate, string $filterMonth, string $alias = 'h'): array
 {
     $where  = [];
     $params = [];
@@ -29,7 +31,10 @@ function buildWhere(string $search, string $filterDep, string $filterDate, strin
         $where[]  = "{$alias}.department = ?";
         $params[] = $filterDep;
     }
-    if ($filterDate !== '') {
+    if ($filterMode === 'month' && $filterMonth !== '') {
+        $where[]  = "DATE_FORMAT({$alias}.reported_at, '%Y-%m') = ?";
+        $params[] = $filterMonth;
+    } elseif ($filterMode === 'date' && $filterDate !== '') {
         $where[]  = "DATE({$alias}.reported_at) = ?";
         $params[] = $filterDate;
     }
@@ -38,7 +43,7 @@ function buildWhere(string $search, string $filterDep, string $filterDate, strin
 }
 
 // ── Query history_maintenance (Predictive) ─────────────────────────────────────
-[$whereSqlPred, $paramsPred] = buildWhere($search, $filterDep, $filterDate, 'h');
+[$whereSqlPred, $paramsPred] = buildWhere($search, $filterDep, $filterMode, $filterDate, $filterMonth, 'h');
 $stmtPred = $pdo->prepare("
     SELECT
         h.id, h.schedule_id, h.department, h.line, h.operation_process,
@@ -56,7 +61,7 @@ $historiesPred = $stmtPred->fetchAll(PDO::FETCH_ASSOC);
 // ── Query history_preventive (Preventive) ─────────────────────────────────────
 $historiesPrev = [];
 try {
-    [$whereSqlPrev, $paramsPrev] = buildWhere($search, $filterDep, $filterDate, 'h');
+    [$whereSqlPrev, $paramsPrev] = buildWhere($search, $filterDep, $filterMode, $filterDate, $filterMonth, 'h');
     $stmtPrev = $pdo->prepare("
         SELECT
             h.id, h.schedule_id, h.department, h.line, h.operation_process,
@@ -270,28 +275,34 @@ if (isset($_GET['export'])) {
                     <?php endforeach; ?>
                 </select>
             </div>
-            <!-- Filter Tanggal -->
-            <input type="date" name="date" value="<?= htmlspecialchars($filterDate) ?>"
-                class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
-            <!-- Filter Bulan (client-side) -->
-            <div class="flex items-center gap-2">
-                <i class="fas fa-calendar-alt text-slate-400 text-sm"></i>
-                <input type="month" id="monthFilter" value=""
-                    placeholder="Filter bulan"
-                    class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-amber-400 transition"
-                    onchange="applyMonthFilter()">
-                <button type="button" onclick="clearMonthFilter()"
-                    class="text-slate-400 hover:text-red-500 hover:bg-red-50 px-2 py-2 rounded-xl transition text-xs font-bold"
-                    title="Reset filter bulan">
-                    <i class="fas fa-times"></i>
+            <!-- Filter Tanggal / Bulan (unified) -->
+            <input type="hidden" name="filter_mode" id="filterModeInput" value="<?= htmlspecialchars($filterMode) ?>">
+            <div class="flex items-center gap-0 bg-slate-100 rounded-xl p-1 text-xs font-bold flex-shrink-0">
+                <button type="button" id="toggleDate"
+                    onclick="setFilterMode('date')"
+                    class="px-3 py-1.5 rounded-lg transition-all <?= $filterMode === 'date' ? 'bg-white shadow text-slate-800' : 'text-slate-500' ?>">
+                    <i class="fas fa-calendar-day mr-1"></i>Tanggal
                 </button>
+                <button type="button" id="toggleMonth"
+                    onclick="setFilterMode('month')"
+                    class="px-3 py-1.5 rounded-lg transition-all <?= $filterMode === 'month' ? 'bg-white shadow text-slate-800' : 'text-slate-500' ?>">
+                    <i class="fas fa-calendar-alt mr-1"></i>Bulan
+                </button>
+            </div>
+            <div id="inputWrapDate" class="<?= $filterMode === 'month' ? 'hidden' : '' ?>">
+                <input type="date" name="date" id="inputDate" value="<?= htmlspecialchars($filterDate) ?>"
+                    class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div id="inputWrapMonth" class="<?= $filterMode === 'date' ? 'hidden' : '' ?>">
+                <input type="month" name="month" id="inputMonth" value="<?= htmlspecialchars($filterMonth) ?>"
+                    class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-amber-400">
             </div>
             <!-- Tombol -->
             <button type="submit"
                 class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all">
                 <i class="fas fa-filter mr-1"></i> Filter
             </button>
-            <?php if ($search || $filterDep || $filterDate): ?>
+            <?php if ($search || $filterDep || $filterDate || $filterMonth): ?>
                 <a href="?tab=<?= $activeTab ?>"
                     class="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm font-bold transition-all">
                     <i class="fas fa-times mr-1"></i> Reset
@@ -740,45 +751,26 @@ if (isset($_GET['export'])) {
             </div>`;
         }
 
-        // ── Month Filter (client-side) ─────────────────────────────────
-        function applyMonthFilter() {
-            const val = document.getElementById('monthFilter').value; // 'YYYY-MM' or ''
-            const isPred = currentTab === 'predictive';
-            let shown = 0,
-                total = 0;
-            const rowClass = isPred ? '.hist-pred-row' : '.hist-prev-row';
-            document.querySelectorAll(rowClass).forEach(tr => {
-                total++;
-                const vis = !val || tr.dataset.month === val;
-                tr.style.display = vis ? '' : 'none';
-                if (vis) shown++;
-            });
-            // Update count label
-            const labelId = isPred ? 'labelPredictive' : 'labelPreventive';
-            const lbl = document.getElementById(labelId);
-            if (lbl && val) {
-                const [yr, mo] = val.split('-');
-                const monthLabel = new Date(yr, mo - 1).toLocaleDateString('id-ID', {
-                    month: 'long',
-                    year: 'numeric'
-                });
-                lbl.textContent = shown + ' laporan ' + (isPred ? 'predictive' : 'preventive') + ' — ' + monthLabel;
+        // ── Filter mode toggle (Tanggal / Bulan) ────────────────────────
+        function setFilterMode(mode) {
+            document.getElementById('filterModeInput').value = mode;
+            const isDate = mode === 'date';
+            document.getElementById('inputWrapDate').classList.toggle('hidden', !isDate);
+            document.getElementById('inputWrapMonth').classList.toggle('hidden', isDate);
+            // Update toggle button styles
+            document.getElementById('toggleDate').className =
+                'px-3 py-1.5 rounded-lg transition-all ' +
+                (isDate ? 'bg-white shadow text-slate-800' : 'text-slate-500');
+            document.getElementById('toggleMonth').className =
+                'px-3 py-1.5 rounded-lg transition-all ' +
+                (!isDate ? 'bg-white shadow text-slate-800' : 'text-slate-500');
+            // Clear the unused input to avoid sending stale value
+            if (isDate) {
+                document.getElementById('inputMonth').value = '';
+            } else {
+                document.getElementById('inputDate').value = '';
             }
         }
-
-        function clearMonthFilter() {
-            document.getElementById('monthFilter').value = '';
-            // Reset all rows
-            document.querySelectorAll('.hist-pred-row, .hist-prev-row').forEach(tr => {
-                tr.style.display = '';
-            });
-            // Restore original label text
-            document.getElementById('labelPredictive').textContent = '<?= count($historiesPred) ?> laporan predictive';
-            document.getElementById('labelPreventive').textContent = '<?= count($historiesPrev) ?> laporan preventive';
-        }
-
-        // Re-apply month filter when switching tabs (so filter stays consistent)
-        // (handled inline inside switchTab function above)
     </script>
 
 </body>
