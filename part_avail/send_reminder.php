@@ -80,8 +80,7 @@ function getAllRecipients(PDO $pdo): array
   $admins     = getActiveAdmins($pdo);
   $recipients = getNotificationRecipients($pdo);
 
-  // Normalisasi ke format seragam: ['name' => ..., 'email' => ...]
-  $all = [];
+  $all  = [];
   $seen = [];
 
   foreach ($admins as $a) {
@@ -103,7 +102,6 @@ function getAllRecipients(PDO $pdo): array
 }
 
 // Catat ke notification_log dengan message unik per kategori per hari
-// Cek sudah kirim hari ini: SELECT COUNT dari notification_log WHERE DATE=today AND message=key
 function alreadySentToday(PDO $pdo, string $messageKey): bool
 {
   $count = $pdo->prepare("
@@ -145,6 +143,11 @@ function buildEmailBody(string $username, string $headerColor, string $badgeLabe
  * Reminder berdasarkan reminder_activity dari DB (bukan hardcoded 30).
  * Dipanggil dari dashboard dengan key 'batch-reminder'.
  * 1x per hari — cek via alreadySentToday().
+ *
+ * [BUGFIX] Return value sendMail() sekarang dicek via $sent counter.
+ * logSent() dan error_log sukses hanya dipanggil jika $sent > 0.
+ * Sebelumnya: logSent() selalu dipanggil meski semua email gagal,
+ * menyebabkan key masuk ke notification_log dan esok hari tidak dikirim ulang.
  */
 function processReminderByThreshold(PDO $pdo, ?int $specificId = null): void
 {
@@ -184,17 +187,27 @@ function processReminderByThreshold(PDO $pdo, ?int $specificId = null): void
 
   $minDay  = min(array_column($tasks, 'remaining_day'));
   $subject = "📅 Maintenance Reminder: {$minDay} Hari Lagi";
+
+  // [BUGFIX] Hitung email yang benar-benar berhasil terkirim
+  $sent = 0;
   foreach ($admins as $admin) {
-    sendMail($admin['email'], $subject, buildEmailBody(
+    $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
       '#ea580c',
       "{$minDay} Hari",
       'Berikut jadwal yang <b>mencapai batas reminder</b> hari ini:',
       $listHtml
     ));
+    if ($ok) $sent++;
   }
-  logSent($pdo, $key);
-  error_log('[Reminder] batch-reminder terkirim ke ' . count($admins) . ' penerima.');
+
+  // [BUGFIX] logSent() hanya dipanggil jika minimal 1 email berhasil
+  if ($sent > 0) {
+    logSent($pdo, $key);
+    error_log('[Reminder] batch-reminder BERHASIL terkirim ke ' . $sent . ' dari ' . count($admins) . ' penerima.');
+  } else {
+    error_log('[Reminder] batch-reminder GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
+  }
 }
 
 /** Alias untuk update_remaining_days.php */
@@ -203,6 +216,14 @@ function processThirtyDayReminders(PDO $pdo): void
   processReminderByThreshold($pdo);
 }
 
+/**
+ * Alert 7 hari predictive.
+ * Key: 'batch-alert7'
+ *
+ * [BUGFIX] Return value sendMail() sekarang dicek via $sent counter.
+ * logSent() hanya dipanggil jika $sent > 0.
+ * Sebelumnya: logSent() selalu dipanggil meski semua email gagal.
+ */
 function processSevenDayReminders(PDO $pdo): void
 {
   if (alreadySentToday($pdo, 'batch-alert7')) {
@@ -222,13 +243,12 @@ function processSevenDayReminders(PDO $pdo): void
   }
 
   $nearestDay = (int)$tasks[0]['remaining_day'];
-
-  $admins = getAllRecipients($pdo);
+  $admins     = getAllRecipients($pdo);
   if (empty($admins)) return;
 
   $listHtml = '<ul style="color:#334155;">';
   foreach ($tasks as $t) {
-    $daysLeft = $t['remaining_day'];
+    $daysLeft  = $t['remaining_day'];
     $listHtml .= "<li>"
       . "<span style='color:#2563eb; font-weight:bold;'>[H-{$daysLeft}]</span> "
       . "<b>{$t['machine_name']}</b> [{$t['department']} | {$t['line']}]"
@@ -237,24 +257,38 @@ function processSevenDayReminders(PDO $pdo): void
       . "</li>";
   }
   $listHtml .= '</ul>';
-  // PERBAIKAN: $intro = teks paragraf, $badgeLabel = label badge di header
+
   $badgeLabel = "H-{$nearestDay}";
   $intro      = "Berikut mesin yang harus dimaintenance dalam <b>{$nearestDay} hari ke depan</b>:";
+  $subject    = "⚠️ ALERT: Maintenance {$nearestDay} Hari Lagi!";
 
-  $subject = "⚠️ ALERT: Maintenance {$nearestDay} Hari Lagi!";
+  // [BUGFIX] Hitung email yang benar-benar berhasil terkirim
+  $sent = 0;
   foreach ($admins as $admin) {
-    sendMail($admin['email'], $subject, buildEmailBody(
+    $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
       '#dc2626',
       $badgeLabel,
       $intro,
       $listHtml
     ));
+    if ($ok) $sent++;
   }
-  logSent($pdo, 'batch-alert7');
-  error_log('[Reminder] batch-alert7 terkirim ke ' . count($admins) . ' penerima.');
+
+  // [BUGFIX] logSent() hanya dipanggil jika minimal 1 email berhasil
+  if ($sent > 0) {
+    logSent($pdo, 'batch-alert7');
+    error_log('[Reminder] batch-alert7 BERHASIL terkirim ke ' . $sent . ' dari ' . count($admins) . ' penerima.');
+  } else {
+    error_log('[Reminder] batch-alert7 GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
+  }
 }
 
+/**
+ * Overdue predictive harian.
+ * Key: 'batch-overdue'
+ * Fungsi ini sudah benar sejak awal — tidak diubah.
+ */
 function processOverdueReminders(PDO $pdo): void
 {
   if (alreadySentToday($pdo, 'batch-overdue')) {
@@ -281,7 +315,7 @@ function processOverdueReminders(PDO $pdo): void
 
   $listHtml = '<ul style="color:#334155;">';
   foreach ($tasks as $t) {
-    $late = abs((int)$t['remaining_day']);
+    $late      = abs((int)$t['remaining_day']);
     $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department']} | {$t['line']}]"
       . " — {$t['maintenance_point']}"
       . " (Plan: {$t['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>";
@@ -289,7 +323,7 @@ function processOverdueReminders(PDO $pdo): void
   $listHtml .= '</ul>';
 
   $subject = '🚨 OVERDUE: ' . count($tasks) . ' Jadwal Maintenance Terlewat!';
-  $sent = 0;
+  $sent    = 0;
   foreach ($admins as $admin) {
     $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
@@ -316,12 +350,14 @@ function sendNewScheduleAlert(PDO $pdo, int $scheduleId): void
 
 /**
  * Dipanggil saat data schedule diedit dan kondisi berubah masuk kategori reminder.
- * Menggunakan key unik per schedule per hari agar tidak spam.
- * Mengirim email sesuai kategori: overdue, 7-hari, atau threshold.
+ *
+ * [BUGFIX] Return value sendMail() sekarang dicek via $sent counter.
+ * logSent() hanya dipanggil jika $sent > 0.
+ * Sebelumnya: logSent() selalu dipanggil meski semua email gagal,
+ * menyebabkan key masuk ke notification_log dan notifikasi tidak dikirim ulang esok hari.
  */
 function sendEditedScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): void
 {
-  // Ambil data schedule yang baru saja diedit
   $stmt = $pdo->prepare("SELECT * FROM schedules WHERE id = ?");
   $stmt->execute([$scheduleId]);
   $schedule = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -330,85 +366,83 @@ function sendEditedScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): 
   $admins = getAllRecipients($pdo);
   if (empty($admins)) return;
 
-  // Tentukan kategori dan key unik per schedule per hari
   if ($remainingDay <= 0) {
-    // Kategori OVERDUE
     $key = "edit-overdue-{$scheduleId}";
     if (alreadySentToday($pdo, $key)) return;
-
-    $late       = abs($remainingDay);
-    $listHtml   = "<ul style='color:#334155;'>"
+    $late        = abs($remainingDay);
+    $listHtml    = "<ul style='color:#334155;'>"
       . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department']} | {$schedule['line']}]"
       . " — {$schedule['maintenance_point']}"
       . " (Plan: {$schedule['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>"
       . "</ul>";
-    $subject    = "🚨 OVERDUE [Edit]: {$schedule['machine_name']} Terlewat {$late} Hari!";
+    $subject     = "🚨 OVERDUE [Edit]: {$schedule['machine_name']} Terlewat {$late} Hari!";
     $headerColor = '#7f1d1d';
     $badgeLabel  = 'OVERDUE';
     $intro       = "Jadwal berikut baru saja <b>diupdate</b> dan statusnya <b>sudah terlewat</b>. Tindakan segera diperlukan:";
   } elseif ($remainingDay <= 7) {
-    // Kategori ALERT 7 HARI
     $key = "edit-alert7-{$scheduleId}";
     if (alreadySentToday($pdo, $key)) return;
-
-    $listHtml   = "<ul style='color:#334155;'>"
+    $listHtml    = "<ul style='color:#334155;'>"
       . "<li><span style='color:#2563eb;font-weight:bold;'>[H-{$remainingDay}]</span> "
       . "<b>{$schedule['machine_name']}</b> [{$schedule['department']} | {$schedule['line']}]"
       . " — {$schedule['maintenance_point']}"
       . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$schedule['change_date_plan']})</span></li>"
       . "</ul>";
-    $subject    = "⚠️ ALERT [Edit]: {$schedule['machine_name']} — Maintenance {$remainingDay} Hari Lagi!";
+    $subject     = "⚠️ ALERT [Edit]: {$schedule['machine_name']} — Maintenance {$remainingDay} Hari Lagi!";
     $headerColor = '#dc2626';
     $badgeLabel  = "H-{$remainingDay}";
     $intro       = "Jadwal berikut baru saja <b>diupdate</b> dan akan jatuh tempo dalam <b>{$remainingDay} hari</b>:";
   } else {
-    // Kategori THRESHOLD REMINDER
     $remAct = (int)($schedule['reminder_activity'] ?? 0);
-    if ($remAct <= 0 || $remainingDay > $remAct) return; // tidak masuk threshold
+    if ($remAct <= 0 || $remainingDay > $remAct) return;
     $key = "edit-reminder-{$scheduleId}";
     if (alreadySentToday($pdo, $key)) return;
-
-    $listHtml   = "<ul style='color:#334155;line-height:1.8;'>"
+    $listHtml    = "<ul style='color:#334155;line-height:1.8;'>"
       . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department']} | {$schedule['line']}]"
       . " — {$schedule['maintenance_point']}"
       . " <span style='color:#64748b;'>(Plan: {$schedule['change_date_plan']} | Sisa: <b>{$remainingDay} hari</b> | Threshold: {$remAct} hari)</span></li>"
       . "</ul>";
-    $subject    = "📅 Reminder [Edit]: {$schedule['machine_name']} — {$remainingDay} Hari Lagi";
+    $subject     = "📅 Reminder [Edit]: {$schedule['machine_name']} — {$remainingDay} Hari Lagi";
     $headerColor = '#ea580c';
     $badgeLabel  = "{$remainingDay} Hari";
     $intro       = "Jadwal berikut baru saja <b>diupdate</b> dan telah mencapai batas reminder:";
   }
 
+  // [BUGFIX] Hitung email yang benar-benar berhasil terkirim
+  $sent = 0;
   foreach ($admins as $admin) {
-    sendMail($admin['email'], $subject, buildEmailBody(
+    $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
       $headerColor,
       $badgeLabel,
       $intro,
       $listHtml
     ));
+    if ($ok) $sent++;
   }
-  logSent($pdo, $key, $scheduleId);
-  error_log("[Reminder] {$key} terkirim ke " . count($admins) . " admin.");
+
+  // [BUGFIX] logSent() hanya dipanggil jika minimal 1 email berhasil
+  if ($sent > 0) {
+    logSent($pdo, $key, $scheduleId);
+    error_log("[Reminder] {$key} BERHASIL terkirim ke " . $sent . ' dari ' . count($admins) . " admin.");
+  } else {
+    error_log("[Reminder] {$key} GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.");
+  }
 }
 
-/**
- * Dipanggil setelah import Excel selesai.
- * Mengelompokkan semua jadwal yang diimport per kategori (overdue/alert7/threshold),
- * lalu mengirim 1 email per kategori — bukan 1 email per jadwal.
- * Key log: import-overdue-{tanggal}, import-alert7-{tanggal}, import-reminder-{tanggal}
- *
- * @param PDO   $pdo
- * @param array $queue  Array of ['id' => int, 'remaining_day' => int]
- */
 // ══════════════════════════════════════════════════════════════════════════════
 //  PREVENTIVE MAINTENANCE — Email Notification Functions
-//  Mirror dari fungsi predictive, query ke schedules_preventive
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Batch reminder harian preventive berdasarkan reminder_activity.
  * Key: 'prev-batch-reminder'
+ *
+ * [BUGFIX] Return value sendMail() sekarang dicek via $sent counter.
+ * logSent() hanya dipanggil jika $sent > 0.
+ * Sebelumnya: logSent() selalu dipanggil meski semua email gagal —
+ * inilah yang menyebabkan log Apache bilang "terkirim ke 2 admin"
+ * padahal email tidak masuk ke inbox maupun notification_log tidak valid.
  */
 function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
 {
@@ -419,7 +453,7 @@ function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
   }
 
   $whereId = $specificId ? "AND s.id = {$specificId}" : '';
-  $stmt = $pdo->prepare("
+  $stmt    = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
                s.department, s.line, s.reminder_activity, s.remaining_day
         FROM schedules_preventive s
@@ -448,22 +482,36 @@ function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
 
   $minDay  = min(array_column($tasks, 'remaining_day'));
   $subject = "📅 [Preventive] Reminder: {$minDay} Hari Lagi";
+
+  // [BUGFIX] Hitung email yang benar-benar berhasil terkirim
+  $sent = 0;
   foreach ($admins as $admin) {
-    sendMail($admin['email'], $subject, buildEmailBody(
+    $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
       '#0f766e',
       "{$minDay} Hari",
       'Berikut jadwal <b>Preventive</b> yang <b>mencapai batas reminder</b> hari ini:',
       $listHtml
     ));
+    if ($ok) $sent++;
   }
-  logSent($pdo, $key);
-  error_log('[PrevReminder] prev-batch-reminder terkirim ke ' . count($admins) . ' admin.');
+
+  // [BUGFIX] logSent() hanya dipanggil jika minimal 1 email berhasil
+  if ($sent > 0) {
+    logSent($pdo, $key);
+    error_log('[PrevReminder] prev-batch-reminder BERHASIL terkirim ke ' . $sent . ' dari ' . count($admins) . ' admin.');
+  } else {
+    error_log('[PrevReminder] prev-batch-reminder GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
+  }
 }
 
 /**
  * Alert 7 hari preventive.
  * Key: 'prev-batch-alert7'
+ *
+ * [BUGFIX] Return value sendMail() sekarang dicek via $sent counter.
+ * logSent() hanya dipanggil jika $sent > 0.
+ * Sebelumnya: logSent() selalu dipanggil meski semua email gagal.
  */
 function processPrevSevenDayReminders(PDO $pdo): void
 {
@@ -487,12 +535,12 @@ function processPrevSevenDayReminders(PDO $pdo): void
   }
 
   $nearestDay = (int)$tasks[0]['remaining_day'];
-  $admins = getAllRecipients($pdo);
+  $admins     = getAllRecipients($pdo);
   if (empty($admins)) return;
 
   $listHtml = '<ul style="color:#334155;">';
   foreach ($tasks as $t) {
-    $daysLeft = $t['remaining_day'];
+    $daysLeft  = $t['remaining_day'];
     $listHtml .= "<li>"
       . "<span style='color:#0d9488;font-weight:bold;'>[H-{$daysLeft}]</span> "
       . "<b>{$t['machine_name']}</b> [{$t['department']} | {$t['line']}]"
@@ -503,22 +551,33 @@ function processPrevSevenDayReminders(PDO $pdo): void
   $listHtml .= '</ul>';
 
   $subject = "⚠️ [Preventive] ALERT: Maintenance {$nearestDay} Hari Lagi!";
+
+  // [BUGFIX] Hitung email yang benar-benar berhasil terkirim
+  $sent = 0;
   foreach ($admins as $admin) {
-    sendMail($admin['email'], $subject, buildEmailBody(
+    $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
       '#0f766e',
       "H-{$nearestDay}",
       "Berikut mesin <b>Preventive</b> yang harus dimaintenance dalam <b>{$nearestDay} hari ke depan</b>:",
       $listHtml
     ));
+    if ($ok) $sent++;
   }
-  logSent($pdo, 'prev-batch-alert7');
-  error_log('[PrevReminder] prev-batch-alert7 terkirim.');
+
+  // [BUGFIX] logSent() hanya dipanggil jika minimal 1 email berhasil
+  if ($sent > 0) {
+    logSent($pdo, 'prev-batch-alert7');
+    error_log('[PrevReminder] prev-batch-alert7 BERHASIL terkirim ke ' . $sent . ' dari ' . count($admins) . ' penerima.');
+  } else {
+    error_log('[PrevReminder] prev-batch-alert7 GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
+  }
 }
 
 /**
  * Overdue preventive harian.
  * Key: 'prev-batch-overdue'
+ * Fungsi ini sudah benar sejak awal — tidak diubah.
  */
 function processPrevOverdueReminders(PDO $pdo): void
 {
@@ -547,7 +606,7 @@ function processPrevOverdueReminders(PDO $pdo): void
 
   $listHtml = '<ul style="color:#334155;">';
   foreach ($tasks as $t) {
-    $late = abs((int)$t['remaining_day']);
+    $late      = abs((int)$t['remaining_day']);
     $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department']} | {$t['line']}]"
       . " — {$t['maintenance_point']}"
       . " (Plan: {$t['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>";
@@ -555,7 +614,7 @@ function processPrevOverdueReminders(PDO $pdo): void
   $listHtml .= '</ul>';
 
   $subject = '🚨 [Preventive] OVERDUE: ' . count($tasks) . ' Jadwal Maintenance Terlewat!';
-  $sent = 0;
+  $sent    = 0;
   foreach ($admins as $admin) {
     $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
@@ -574,9 +633,7 @@ function processPrevOverdueReminders(PDO $pdo): void
   }
 }
 
-/**
- * Dipanggil saat schedule preventive baru ditambah.
- */
+/** Dipanggil saat schedule preventive baru ditambah. */
 function sendNewPrevScheduleAlert(PDO $pdo, int $scheduleId): void
 {
   processPrevReminderByThreshold($pdo, $scheduleId);
@@ -584,6 +641,10 @@ function sendNewPrevScheduleAlert(PDO $pdo, int $scheduleId): void
 
 /**
  * Dipanggil saat data preventive diedit dan kondisi berubah masuk kategori reminder.
+ *
+ * [BUGFIX] Return value sendMail() sekarang dicek via $sent counter.
+ * logSent() hanya dipanggil jika $sent > 0.
+ * Sebelumnya: logSent() selalu dipanggil meski semua email gagal.
  */
 function sendEditedPrevScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): void
 {
@@ -598,26 +659,26 @@ function sendEditedPrevScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDa
   if ($remainingDay <= 0) {
     $key = "prev-edit-overdue-{$scheduleId}";
     if (alreadySentToday($pdo, $key)) return;
-    $late       = abs($remainingDay);
-    $listHtml   = "<ul style='color:#334155;'>"
+    $late        = abs($remainingDay);
+    $listHtml    = "<ul style='color:#334155;'>"
       . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department']} | {$schedule['line']}]"
       . " — {$schedule['maintenance_point']}"
       . " (Plan: {$schedule['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>"
       . "</ul>";
-    $subject    = "🚨 [Preventive] OVERDUE [Edit]: {$schedule['machine_name']} Terlewat {$late} Hari!";
+    $subject     = "🚨 [Preventive] OVERDUE [Edit]: {$schedule['machine_name']} Terlewat {$late} Hari!";
     $headerColor = '#7f1d1d';
     $badgeLabel  = 'OVERDUE';
     $intro       = "Jadwal <b>Preventive</b> berikut baru saja <b>diupdate</b> dan statusnya <b>sudah terlewat</b>:";
   } elseif ($remainingDay <= 7) {
     $key = "prev-edit-alert7-{$scheduleId}";
     if (alreadySentToday($pdo, $key)) return;
-    $listHtml   = "<ul style='color:#334155;'>"
+    $listHtml    = "<ul style='color:#334155;'>"
       . "<li><span style='color:#0d9488;font-weight:bold;'>[H-{$remainingDay}]</span> "
       . "<b>{$schedule['machine_name']}</b> [{$schedule['department']} | {$schedule['line']}]"
       . " — {$schedule['maintenance_point']}"
       . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$schedule['change_date_plan']})</span></li>"
       . "</ul>";
-    $subject    = "⚠️ [Preventive] ALERT [Edit]: {$schedule['machine_name']} — Maintenance {$remainingDay} Hari Lagi!";
+    $subject     = "⚠️ [Preventive] ALERT [Edit]: {$schedule['machine_name']} — Maintenance {$remainingDay} Hari Lagi!";
     $headerColor = '#0f766e';
     $badgeLabel  = "H-{$remainingDay}";
     $intro       = "Jadwal <b>Preventive</b> berikut baru saja <b>diupdate</b> dan akan jatuh tempo dalam <b>{$remainingDay} hari</b>:";
@@ -626,35 +687,46 @@ function sendEditedPrevScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDa
     if ($remAct <= 0 || $remainingDay > $remAct) return;
     $key = "prev-edit-reminder-{$scheduleId}";
     if (alreadySentToday($pdo, $key)) return;
-    $listHtml   = "<ul style='color:#334155;line-height:1.8;'>"
+    $listHtml    = "<ul style='color:#334155;line-height:1.8;'>"
       . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department']} | {$schedule['line']}]"
       . " — {$schedule['maintenance_point']}"
       . " <span style='color:#64748b;'>(Plan: {$schedule['change_date_plan']} | Sisa: <b>{$remainingDay} hari</b> | Threshold: {$remAct} hari)</span></li>"
       . "</ul>";
-    $subject    = "📅 [Preventive] Reminder [Edit]: {$schedule['machine_name']} — {$remainingDay} Hari Lagi";
+    $subject     = "📅 [Preventive] Reminder [Edit]: {$schedule['machine_name']} — {$remainingDay} Hari Lagi";
     $headerColor = '#0f766e';
     $badgeLabel  = "{$remainingDay} Hari";
     $intro       = "Jadwal <b>Preventive</b> berikut baru saja <b>diupdate</b> dan telah mencapai batas reminder:";
   }
 
+  // [BUGFIX] Hitung email yang benar-benar berhasil terkirim
+  $sent = 0;
   foreach ($admins as $admin) {
-    sendMail($admin['email'], $subject, buildEmailBody(
+    $ok = sendMail($admin['email'], $subject, buildEmailBody(
       $admin['name'],
       $headerColor,
       $badgeLabel,
       $intro,
       $listHtml
     ));
+    if ($ok) $sent++;
   }
-  logSent($pdo, $key, $scheduleId);
-  error_log("[PrevReminder] {$key} terkirim ke " . count($admins) . " admin.");
+
+  // [BUGFIX] logSent() hanya dipanggil jika minimal 1 email berhasil
+  if ($sent > 0) {
+    logSent($pdo, $key, $scheduleId);
+    error_log("[PrevReminder] {$key} BERHASIL terkirim ke " . $sent . ' dari ' . count($admins) . " admin.");
+  } else {
+    error_log("[PrevReminder] {$key} GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.");
+  }
 }
 
 /**
- * Dipanggil setelah import Excel preventive selesai.
- * Query ke schedules_preventive dengan key log ber-prefix 'prev-import-'.
+ * Dipanggil setelah import Excel predictive selesai.
+ *
+ * [BUGFIX] Return value sendMail() sekarang dicek via $sent counter di setiap kategori.
+ * logSent() hanya dipanggil jika $sent > 0.
  */
-function sendPrevImportAlert(PDO $pdo, array $queue): void
+function sendImportAlert(PDO $pdo, array $queue): void
 {
   if (empty($queue)) return;
 
@@ -664,129 +736,9 @@ function sendPrevImportAlert(PDO $pdo, array $queue): void
   $ids      = array_column($queue, 'id');
   $idMap    = array_column($queue, 'remaining_day', 'id');
   $inClause = implode(',', array_map('intval', $ids));
-  $stmt     = $pdo->query("SELECT * FROM schedules_preventive WHERE id IN ({$inClause})");
+  $stmt     = $pdo->query("SELECT * FROM schedules WHERE id IN ({$inClause})");
   $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-  $groups = ['overdue' => [], 'alert7' => [], 'threshold' => []];
-  foreach ($schedules as $s) {
-    $rd = (int)$idMap[$s['id']];
-    if ($rd <= 0) {
-      $groups['overdue'][] = $s;
-    } elseif ($rd <= 7) {
-      $groups['alert7'][] = $s;
-    } else {
-      $remAct = (int)($s['reminder_activity'] ?? 0);
-      if ($remAct > 0 && $rd <= $remAct) {
-        $groups['threshold'][] = $s;
-      }
-    }
-  }
-
-  $today = date('Y-m-d');
-
-  if (!empty($groups['overdue'])) {
-    $key = "prev-import-overdue-{$today}";
-    if (!alreadySentToday($pdo, $key)) {
-      $listHtml = '<ul style="color:#334155;">';
-      foreach ($groups['overdue'] as $s) {
-        $late = abs((int)$idMap[$s['id']]);
-        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department']} | {$s['line']}]"
-          . " — {$s['maintenance_point']}"
-          . " (Plan: {$s['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>";
-      }
-      $listHtml .= '</ul>';
-      $total   = count($groups['overdue']);
-      $subject = "🚨 [Preventive] OVERDUE [Import]: {$total} Jadwal Terlewat dari Import Excel!";
-      foreach ($admins as $admin) {
-        sendMail($admin['email'], $subject, buildEmailBody(
-          $admin['name'],
-          '#7f1d1d',
-          'OVERDUE',
-          "Berikut <b>{$total} jadwal Preventive</b> yang baru diimport dan statusnya <b>sudah terlewat</b>:",
-          $listHtml
-        ));
-      }
-      logSent($pdo, $key);
-      error_log("[PrevReminder] {$key} terkirim: {$total} jadwal overdue.");
-    }
-  }
-
-  if (!empty($groups['alert7'])) {
-    $key = "prev-import-alert7-{$today}";
-    if (!alreadySentToday($pdo, $key)) {
-      usort($groups['alert7'], fn($a, $b) => $idMap[$a['id']] <=> $idMap[$b['id']]);
-      $nearestDay = (int)$idMap[$groups['alert7'][0]['id']];
-      $listHtml = '<ul style="color:#334155;">';
-      foreach ($groups['alert7'] as $s) {
-        $rd = (int)$idMap[$s['id']];
-        $listHtml .= "<li>"
-          . "<span style='color:#0d9488;font-weight:bold;'>[H-{$rd}]</span> "
-          . "<b>{$s['machine_name']}</b> [{$s['department']} | {$s['line']}]"
-          . " — {$s['maintenance_point']}"
-          . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$s['change_date_plan']})</span></li>";
-      }
-      $listHtml .= '</ul>';
-      $total   = count($groups['alert7']);
-      $subject = "⚠️ [Preventive] ALERT [Import]: {$total} Jadwal Dalam {$nearestDay} Hari dari Import Excel!";
-      foreach ($admins as $admin) {
-        sendMail($admin['email'], $subject, buildEmailBody(
-          $admin['name'],
-          '#0f766e',
-          "H-{$nearestDay}",
-          "Berikut <b>{$total} jadwal Preventive</b> yang baru diimport dan akan jatuh tempo dalam <b>{$nearestDay} hari ke depan</b>:",
-          $listHtml
-        ));
-      }
-      logSent($pdo, $key);
-      error_log("[PrevReminder] {$key} terkirim: {$total} jadwal alert7.");
-    }
-  }
-
-  if (!empty($groups['threshold'])) {
-    $key = "prev-import-reminder-{$today}";
-    if (!alreadySentToday($pdo, $key)) {
-      $minDay   = min(array_map(fn($s) => (int)$idMap[$s['id']], $groups['threshold']));
-      $listHtml = '<ul style="color:#334155;line-height:1.8;">';
-      foreach ($groups['threshold'] as $s) {
-        $rd     = (int)$idMap[$s['id']];
-        $remAct = (int)($s['reminder_activity'] ?? 0);
-        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department']} | {$s['line']}]"
-          . " — {$s['maintenance_point']}"
-          . " <span style='color:#64748b;'>(Plan: {$s['change_date_plan']} | Sisa: <b>{$rd} hari</b> | Threshold: {$remAct} hari)</span></li>";
-      }
-      $listHtml .= '</ul>';
-      $total   = count($groups['threshold']);
-      $subject = "📅 [Preventive] Reminder [Import]: {$total} Jadwal Mencapai Batas Reminder dari Import Excel!";
-      foreach ($admins as $admin) {
-        sendMail($admin['email'], $subject, buildEmailBody(
-          $admin['name'],
-          '#0f766e',
-          "{$minDay} Hari",
-          "Berikut <b>{$total} jadwal Preventive</b> yang baru diimport dan telah mencapai batas reminder:",
-          $listHtml
-        ));
-      }
-      logSent($pdo, $key);
-      error_log("[PrevReminder] {$key} terkirim: {$total} jadwal threshold.");
-    }
-  }
-}
-
-function sendImportAlert(PDO $pdo, array $queue): void
-{
-  if (empty($queue)) return;
-
-  $admins = getAllRecipients($pdo);
-  if (empty($admins)) return;
-
-  // Ambil semua data schedule dari DB berdasarkan id di queue
-  $ids       = array_column($queue, 'id');
-  $idMap     = array_column($queue, 'remaining_day', 'id'); // id => remaining_day
-  $inClause  = implode(',', array_map('intval', $ids));
-  $stmt      = $pdo->query("SELECT * FROM schedules WHERE id IN ({$inClause})");
-  $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-  // Kelompokkan per kategori
   $groups = ['overdue' => [], 'alert7' => [], 'threshold' => []];
   foreach ($schedules as $s) {
     $rd = (int)$idMap[$s['id']];
@@ -819,17 +771,25 @@ function sendImportAlert(PDO $pdo, array $queue): void
       $listHtml .= '</ul>';
       $total   = count($groups['overdue']);
       $subject = "🚨 OVERDUE [Import]: {$total} Jadwal Terlewat dari Import Excel!";
+
+      // [BUGFIX] Hitung email yang benar-benar berhasil
+      $sent = 0;
       foreach ($admins as $admin) {
-        sendMail($admin['email'], $subject, buildEmailBody(
+        $ok = sendMail($admin['email'], $subject, buildEmailBody(
           $admin['name'],
           '#7f1d1d',
           'OVERDUE',
           "Berikut <b>{$total} jadwal</b> yang baru diimport dan statusnya <b>sudah terlewat</b>:",
           $listHtml
         ));
+        if ($ok) $sent++;
       }
-      logSent($pdo, $key);
-      error_log("[Reminder] {$key} terkirim: {$total} jadwal overdue.");
+      if ($sent > 0) {
+        logSent($pdo, $key);
+        error_log("[Reminder] {$key} BERHASIL terkirim: {$total} jadwal overdue.");
+      } else {
+        error_log("[Reminder] {$key} GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.");
+      }
     }
   }
 
@@ -837,12 +797,11 @@ function sendImportAlert(PDO $pdo, array $queue): void
   if (!empty($groups['alert7'])) {
     $key = "import-alert7-{$today}";
     if (!alreadySentToday($pdo, $key)) {
-      // Urutkan dari yang paling dekat
       usort($groups['alert7'], fn($a, $b) => $idMap[$a['id']] <=> $idMap[$b['id']]);
       $nearestDay = (int)$idMap[$groups['alert7'][0]['id']];
-      $listHtml = '<ul style="color:#334155;">';
+      $listHtml   = '<ul style="color:#334155;">';
       foreach ($groups['alert7'] as $s) {
-        $rd = (int)$idMap[$s['id']];
+        $rd        = (int)$idMap[$s['id']];
         $listHtml .= "<li>"
           . "<span style='color:#2563eb;font-weight:bold;'>[H-{$rd}]</span> "
           . "<b>{$s['machine_name']}</b> [{$s['department']} | {$s['line']}]"
@@ -852,17 +811,25 @@ function sendImportAlert(PDO $pdo, array $queue): void
       $listHtml .= '</ul>';
       $total   = count($groups['alert7']);
       $subject = "⚠️ ALERT [Import]: {$total} Jadwal Dalam {$nearestDay} Hari dari Import Excel!";
+
+      // [BUGFIX] Hitung email yang benar-benar berhasil
+      $sent = 0;
       foreach ($admins as $admin) {
-        sendMail($admin['email'], $subject, buildEmailBody(
+        $ok = sendMail($admin['email'], $subject, buildEmailBody(
           $admin['name'],
           '#dc2626',
           "H-{$nearestDay}",
           "Berikut <b>{$total} jadwal</b> yang baru diimport dan akan jatuh tempo dalam <b>{$nearestDay} hari ke depan</b>:",
           $listHtml
         ));
+        if ($ok) $sent++;
       }
-      logSent($pdo, $key);
-      error_log("[Reminder] {$key} terkirim: {$total} jadwal alert7.");
+      if ($sent > 0) {
+        logSent($pdo, $key);
+        error_log("[Reminder] {$key} BERHASIL terkirim: {$total} jadwal alert7.");
+      } else {
+        error_log("[Reminder] {$key} GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.");
+      }
     }
   }
 
@@ -882,17 +849,173 @@ function sendImportAlert(PDO $pdo, array $queue): void
       $listHtml .= '</ul>';
       $total   = count($groups['threshold']);
       $subject = "📅 Reminder [Import]: {$total} Jadwal Mencapai Batas Reminder dari Import Excel!";
+
+      // [BUGFIX] Hitung email yang benar-benar berhasil
+      $sent = 0;
       foreach ($admins as $admin) {
-        sendMail($admin['email'], $subject, buildEmailBody(
+        $ok = sendMail($admin['email'], $subject, buildEmailBody(
           $admin['name'],
           '#ea580c',
           "{$minDay} Hari",
           "Berikut <b>{$total} jadwal</b> yang baru diimport dan telah mencapai batas reminder:",
           $listHtml
         ));
+        if ($ok) $sent++;
       }
-      logSent($pdo, $key);
-      error_log("[Reminder] {$key} terkirim: {$total} jadwal threshold.");
+      if ($sent > 0) {
+        logSent($pdo, $key);
+        error_log("[Reminder] {$key} BERHASIL terkirim: {$total} jadwal threshold.");
+      } else {
+        error_log("[Reminder] {$key} GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.");
+      }
+    }
+  }
+}
+
+/**
+ * Dipanggil setelah import Excel preventive selesai.
+ *
+ * [BUGFIX] Return value sendMail() sekarang dicek via $sent counter di setiap kategori.
+ * logSent() hanya dipanggil jika $sent > 0.
+ */
+function sendPrevImportAlert(PDO $pdo, array $queue): void
+{
+  if (empty($queue)) return;
+
+  $admins = getAllRecipients($pdo);
+  if (empty($admins)) return;
+
+  $ids       = array_column($queue, 'id');
+  $idMap     = array_column($queue, 'remaining_day', 'id');
+  $inClause  = implode(',', array_map('intval', $ids));
+  $stmt      = $pdo->query("SELECT * FROM schedules_preventive WHERE id IN ({$inClause})");
+  $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+  $groups = ['overdue' => [], 'alert7' => [], 'threshold' => []];
+  foreach ($schedules as $s) {
+    $rd = (int)$idMap[$s['id']];
+    if ($rd <= 0) {
+      $groups['overdue'][] = $s;
+    } elseif ($rd <= 7) {
+      $groups['alert7'][] = $s;
+    } else {
+      $remAct = (int)($s['reminder_activity'] ?? 0);
+      if ($remAct > 0 && $rd <= $remAct) {
+        $groups['threshold'][] = $s;
+      }
+    }
+  }
+
+  $today = date('Y-m-d');
+
+  if (!empty($groups['overdue'])) {
+    $key = "prev-import-overdue-{$today}";
+    if (!alreadySentToday($pdo, $key)) {
+      $listHtml = '<ul style="color:#334155;">';
+      foreach ($groups['overdue'] as $s) {
+        $late      = abs((int)$idMap[$s['id']]);
+        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department']} | {$s['line']}]"
+          . " — {$s['maintenance_point']}"
+          . " (Plan: {$s['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>";
+      }
+      $listHtml .= '</ul>';
+      $total   = count($groups['overdue']);
+      $subject = "🚨 [Preventive] OVERDUE [Import]: {$total} Jadwal Terlewat dari Import Excel!";
+
+      // [BUGFIX] Hitung email yang benar-benar berhasil
+      $sent = 0;
+      foreach ($admins as $admin) {
+        $ok = sendMail($admin['email'], $subject, buildEmailBody(
+          $admin['name'],
+          '#7f1d1d',
+          'OVERDUE',
+          "Berikut <b>{$total} jadwal Preventive</b> yang baru diimport dan statusnya <b>sudah terlewat</b>:",
+          $listHtml
+        ));
+        if ($ok) $sent++;
+      }
+      if ($sent > 0) {
+        logSent($pdo, $key);
+        error_log("[PrevReminder] {$key} BERHASIL terkirim: {$total} jadwal overdue.");
+      } else {
+        error_log("[PrevReminder] {$key} GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.");
+      }
+    }
+  }
+
+  if (!empty($groups['alert7'])) {
+    $key = "prev-import-alert7-{$today}";
+    if (!alreadySentToday($pdo, $key)) {
+      usort($groups['alert7'], fn($a, $b) => $idMap[$a['id']] <=> $idMap[$b['id']]);
+      $nearestDay = (int)$idMap[$groups['alert7'][0]['id']];
+      $listHtml   = '<ul style="color:#334155;">';
+      foreach ($groups['alert7'] as $s) {
+        $rd        = (int)$idMap[$s['id']];
+        $listHtml .= "<li>"
+          . "<span style='color:#0d9488;font-weight:bold;'>[H-{$rd}]</span> "
+          . "<b>{$s['machine_name']}</b> [{$s['department']} | {$s['line']}]"
+          . " — {$s['maintenance_point']}"
+          . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$s['change_date_plan']})</span></li>";
+      }
+      $listHtml .= '</ul>';
+      $total   = count($groups['alert7']);
+      $subject = "⚠️ [Preventive] ALERT [Import]: {$total} Jadwal Dalam {$nearestDay} Hari dari Import Excel!";
+
+      // [BUGFIX] Hitung email yang benar-benar berhasil
+      $sent = 0;
+      foreach ($admins as $admin) {
+        $ok = sendMail($admin['email'], $subject, buildEmailBody(
+          $admin['name'],
+          '#0f766e',
+          "H-{$nearestDay}",
+          "Berikut <b>{$total} jadwal Preventive</b> yang baru diimport dan akan jatuh tempo dalam <b>{$nearestDay} hari ke depan</b>:",
+          $listHtml
+        ));
+        if ($ok) $sent++;
+      }
+      if ($sent > 0) {
+        logSent($pdo, $key);
+        error_log("[PrevReminder] {$key} BERHASIL terkirim: {$total} jadwal alert7.");
+      } else {
+        error_log("[PrevReminder] {$key} GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.");
+      }
+    }
+  }
+
+  if (!empty($groups['threshold'])) {
+    $key = "prev-import-reminder-{$today}";
+    if (!alreadySentToday($pdo, $key)) {
+      $minDay   = min(array_map(fn($s) => (int)$idMap[$s['id']], $groups['threshold']));
+      $listHtml = '<ul style="color:#334155;line-height:1.8;">';
+      foreach ($groups['threshold'] as $s) {
+        $rd     = (int)$idMap[$s['id']];
+        $remAct = (int)($s['reminder_activity'] ?? 0);
+        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department']} | {$s['line']}]"
+          . " — {$s['maintenance_point']}"
+          . " <span style='color:#64748b;'>(Plan: {$s['change_date_plan']} | Sisa: <b>{$rd} hari</b> | Threshold: {$remAct} hari)</span></li>";
+      }
+      $listHtml .= '</ul>';
+      $total   = count($groups['threshold']);
+      $subject = "📅 [Preventive] Reminder [Import]: {$total} Jadwal Mencapai Batas Reminder dari Import Excel!";
+
+      // [BUGFIX] Hitung email yang benar-benar berhasil
+      $sent = 0;
+      foreach ($admins as $admin) {
+        $ok = sendMail($admin['email'], $subject, buildEmailBody(
+          $admin['name'],
+          '#0f766e',
+          "{$minDay} Hari",
+          "Berikut <b>{$total} jadwal Preventive</b> yang baru diimport dan telah mencapai batas reminder:",
+          $listHtml
+        ));
+        if ($ok) $sent++;
+      }
+      if ($sent > 0) {
+        logSent($pdo, $key);
+        error_log("[PrevReminder] {$key} BERHASIL terkirim: {$total} jadwal threshold.");
+      } else {
+        error_log("[PrevReminder] {$key} GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.");
+      }
     }
   }
 }
