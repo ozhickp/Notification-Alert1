@@ -720,39 +720,39 @@ function partOrderBadge(string $v): string
                             <button onclick="predCheckAll(false)" class="font-bold text-slate-400 hover:text-red-500 transition px-1 rounded hover:bg-red-50">None</button>
                             <span id="predFilterCount" class="ml-auto font-bold text-slate-300 whitespace-nowrap"></span>
                         </div>
-                        <!-- Today ticker banner — Predictive -->
+                        <!-- Today Schedule Card — Predictive -->
                         <?php if ($todayCount > 0): ?>
-                            <div class="today-banner mb-4" style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;">
-                                <div class="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                                    <i class="fas fa-calendar-day text-white text-sm"></i>
+                            <div class="mb-4 rounded-2xl overflow-hidden" style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;">
+                                <!-- Header -->
+                                <div class="flex items-center gap-3 px-4 py-3">
+                                    <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                                        <i class="fas fa-calendar-day text-white text-xs"></i>
+                                    </div>
+                                    <span class="text-blue-800 font-bold text-sm">Today's Schedule</span>
+                                    <span class="bg-blue-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= $todayCount ?></span>
+                                    <span class="ml-auto text-blue-400 text-[10px] font-semibold"><?= date('d M Y') ?></span>
                                 </div>
-                                <div class="flex-1 min-w-0 flex items-center gap-2">
-                                    <span class="text-blue-800 font-bold whitespace-nowrap">Today's Schedule</span>
-                                    <span class="bg-blue-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full flex-shrink-0"><?= $todayCount ?></span>
-                                </div>
-                                <!-- Ticker text area -->
-                                <div class="relative flex-1 min-w-0 overflow-hidden" style="height:36px;">
-                                    <?php foreach ($todaySchedArrVal as $i => $td): ?>
-                                        <div class="pred-ticker-item absolute inset-0 flex flex-col justify-center transition-all duration-500"
-                                            style="opacity:<?= $i === 0 ? '1' : '0' ?>;transform:translateY(<?= $i === 0 ? '0' : '6px' ?>);">
-                                            <p class="text-blue-800 text-xs font-black truncate leading-tight"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
-                                            <p class="text-blue-500 text-[10px] font-semibold truncate leading-tight"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
-                                <!-- Dots + index -->
-                                <div class="flex-shrink-0 flex flex-col items-end gap-1">
-                                    <span class="text-blue-600 text-[10px] font-black tabular-nums">
-                                        <span id="predTickerIdx">1</span>/<?= $todayCount ?>
-                                    </span>
-                                    <?php if ($todayCount > 1): ?>
-                                        <div class="flex gap-1">
-                                            <?php for ($di = 0; $di < min($todayCount, 8); $di++): ?>
-                                                <span class="pred-dot block rounded-full transition-all duration-300"
-                                                    style="height:5px;width:<?= $di === 0 ? '12' : '5' ?>px;background:<?= $di === 0 ? '#2563eb' : '#bfdbfe' ?>;"></span>
-                                            <?php endfor; ?>
-                                        </div>
-                                    <?php endif; ?>
+                                <!-- List body -->
+                                <div class="px-4 pb-3">
+                                    <div class="grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));">
+                                        <?php foreach ($todaySchedArrVal as $i => $td): ?>
+                                            <div class="bg-white/80 rounded-xl px-3 py-2.5 flex items-start gap-2.5 border border-blue-100 shadow-sm">
+                                                <div class="w-6 h-6 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                                    <span class="text-blue-600 font-black" style="font-size:.6rem;"><?= $i + 1 ?></span>
+                                                </div>
+                                                <div class="min-w-0 flex-1">
+                                                    <p class="font-black text-blue-900 truncate" style="font-size:.75rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
+                                                    <p class="text-blue-600 mt-0.5 truncate" style="font-size:.67rem;" title="<?= htmlspecialchars($td['maintenance_point'] ?? '-') ?>"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
+                                                    <?php if (!empty($td['department']) || !empty($td['line'])): ?>
+                                                        <p class="text-blue-400 mt-0.5 truncate" style="font-size:.62rem;">
+                                                            <?= htmlspecialchars($td['department'] ?? '') ?><?= !empty($td['line']) ? ' · ' . htmlspecialchars($td['line']) : '' ?>
+                                                        </p>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <span class="flex-shrink-0 bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.6rem;"><?= (int)($td['interval_month'] ?? 0) ?>mo</span>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
                                 </div>
                             </div>
                         <?php else: ?>
@@ -892,39 +892,39 @@ function partOrderBadge(string $v): string
                             <button onclick="prevCheckAll(false)" class="font-bold text-slate-400 hover:text-red-500 transition px-1 rounded hover:bg-red-50">None</button>
                             <span id="prevFilterCount" class="ml-auto font-bold text-slate-300 whitespace-nowrap"></span>
                         </div>
-                        <!-- Today ticker banner — Preventive -->
+                        <!-- Today Schedule Card — Preventive -->
                         <?php if ($prevTodayCount > 0): ?>
-                            <div class="today-banner mb-4" style="background:linear-gradient(135deg,#eef2ff,#e0e7ff);border:1px solid #a5b4fc;">
-                                <div class="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                                    <i class="fas fa-calendar-day text-white text-sm"></i>
+                            <div class="mb-4 rounded-2xl overflow-hidden" style="background:linear-gradient(135deg,#eef2ff,#e0e7ff);border:1px solid #a5b4fc;">
+                                <!-- Header -->
+                                <div class="flex items-center gap-3 px-4 py-3">
+                                    <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                                        <i class="fas fa-calendar-day text-white text-xs"></i>
+                                    </div>
+                                    <span class="text-indigo-800 font-bold text-sm">Today's Schedule</span>
+                                    <span class="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= $prevTodayCount ?></span>
+                                    <span class="ml-auto text-indigo-400 text-[10px] font-semibold"><?= date('d M Y') ?></span>
                                 </div>
-                                <div class="flex-1 min-w-0 flex items-center gap-2">
-                                    <span class="text-indigo-800 font-bold whitespace-nowrap">Today's Schedule</span>
-                                    <span class="bg-indigo-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full flex-shrink-0"><?= $prevTodayCount ?></span>
-                                </div>
-                                <!-- Ticker text area -->
-                                <div class="relative flex-1 min-w-0 overflow-hidden" style="height:36px;">
-                                    <?php foreach ($prevTodayArrVal as $i => $td): ?>
-                                        <div class="prev-ticker-item absolute inset-0 flex flex-col justify-center transition-all duration-500"
-                                            style="opacity:<?= $i === 0 ? '1' : '0' ?>;transform:translateY(<?= $i === 0 ? '0' : '6px' ?>);">
-                                            <p class="text-indigo-800 text-xs font-black truncate leading-tight"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
-                                            <p class="text-indigo-500 text-[10px] font-semibold truncate leading-tight"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
-                                <!-- Dots + index -->
-                                <div class="flex-shrink-0 flex flex-col items-end gap-1">
-                                    <span class="text-indigo-600 text-[10px] font-black tabular-nums">
-                                        <span id="prevTickerIdx">1</span>/<?= $prevTodayCount ?>
-                                    </span>
-                                    <?php if ($prevTodayCount > 1): ?>
-                                        <div class="flex gap-1">
-                                            <?php for ($di = 0; $di < min($prevTodayCount, 8); $di++): ?>
-                                                <span class="prev-dot block rounded-full transition-all duration-300"
-                                                    style="height:5px;width:<?= $di === 0 ? '12' : '5' ?>px;background:<?= $di === 0 ? '#4f46e5' : '#c7d2fe' ?>;"></span>
-                                            <?php endfor; ?>
-                                        </div>
-                                    <?php endif; ?>
+                                <!-- List body -->
+                                <div class="px-4 pb-3">
+                                    <div class="grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));">
+                                        <?php foreach ($prevTodayArrVal as $i => $td): ?>
+                                            <div class="bg-white/80 rounded-xl px-3 py-2.5 flex items-start gap-2.5 border border-indigo-100 shadow-sm">
+                                                <div class="w-6 h-6 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                                    <span class="text-indigo-600 font-black" style="font-size:.6rem;"><?= $i + 1 ?></span>
+                                                </div>
+                                                <div class="min-w-0 flex-1">
+                                                    <p class="font-black text-indigo-900 truncate" style="font-size:.75rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
+                                                    <p class="text-indigo-600 mt-0.5 truncate" style="font-size:.67rem;" title="<?= htmlspecialchars($td['maintenance_point'] ?? '-') ?>"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
+                                                    <?php if (!empty($td['department']) || !empty($td['line'])): ?>
+                                                        <p class="text-indigo-400 mt-0.5 truncate" style="font-size:.62rem;">
+                                                            <?= htmlspecialchars($td['department'] ?? '') ?><?= !empty($td['line']) ? ' · ' . htmlspecialchars($td['line']) : '' ?>
+                                                        </p>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <span class="flex-shrink-0 bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.6rem;"><?= (int)($td['interval_month'] ?? 0) ?>mo</span>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
                                 </div>
                             </div>
                         <?php else: ?>
@@ -1373,7 +1373,7 @@ function partOrderBadge(string $v): string
         //  - Section tanpa tab (parts): scroll down → up → ... (loop)
         //  - Berhenti saat kursor gerak, resume 2 detik setelah diam
         // ══════════════════════════════════════════════════════════════
-        const SCROLL_SPEED = 1.0; // px per frame
+        const SCROLL_SPEED = 0.8; // px per frame
         const SCROLL_PAUSE = 2000; // ms jeda di atas/bawah sebelum balik / ganti tab
         const RESUME_DELAY = 2000; // ms tunggu setelah kursor diam
 
@@ -1519,59 +1519,8 @@ function partOrderBadge(string $v): string
         });
 
         // ══════════════════════════════════════════════════════════════
-        //  TODAY TICKER — Predictive & Preventive
+        //  TODAY SCHEDULE — always visible, no toggle needed
         // ══════════════════════════════════════════════════════════════
-        const TICKER_DATA = {
-            pred: <?= $predTodayJson ?? '[]' ?>,
-            prev: <?= $prevTodayJson ?? '[]' ?>,
-        };
-
-        const tickerState = {
-            pred: 0,
-            prev: 0
-        };
-        const tickerTimers = {
-            pred: null,
-            prev: null
-        };
-
-        function updateTicker(type) {
-            const items = document.querySelectorAll(`.${type}-ticker-item`);
-            const dots = document.querySelectorAll(`.${type}-dot`);
-            const idxEl = document.getElementById(`${type}TickerIdx`);
-            const ivEl = document.getElementById(`${type}TickerInterval`);
-            const data = TICKER_DATA[type];
-            const i = tickerState[type];
-
-            items.forEach((el, n) => {
-                el.style.opacity = n === i ? '1' : '0';
-                el.style.transform = n === i ? 'translateY(0)' : 'translateY(8px)';
-            });
-            dots.forEach((el, n) => {
-                const isPred = type === 'pred';
-                el.style.width = n === i ? '14px' : '6px';
-                el.style.background = isPred ?
-                    (n === i ? '#2563eb' : '#bfdbfe') :
-                    (n === i ? '#4f46e5' : '#c7d2fe');
-            });
-            if (idxEl) idxEl.textContent = i + 1;
-            if (ivEl && data[i]) ivEl.textContent = data[i].interval || '-';
-        }
-
-        function startTicker(type) {
-            const data = TICKER_DATA[type];
-            if (!data || data.length <= 1) return;
-            if (tickerTimers[type]) clearInterval(tickerTimers[type]);
-            tickerTimers[type] = setInterval(() => {
-                tickerState[type] = (tickerState[type] + 1) % data.length;
-                updateTicker(type);
-            }, 2500);
-        }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            startTicker('pred');
-            startTicker('prev');
-        });
 
         // ══════════════════════════════════════════════════════════════
         //  Live Digital Clock

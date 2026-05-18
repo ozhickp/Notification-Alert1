@@ -349,6 +349,14 @@ $schedByStatus = [
     'reminder' => array_values(array_filter($schedules, fn($r) => (int)$r['remaining_day'] > 7 && (int)$r['remaining_day'] <= (int)($r['reminder_activity'] ?? 30))),
     'secure'   => array_values(array_filter($schedules, fn($r) => (int)$r['remaining_day'] > (int)($r['reminder_activity'] ?? 30))),
 ];
+
+// Preventive schedule stats by status
+$prevSchedByStatus = [
+    'overdue'  => array_values(array_filter($prevSchedules, fn($r) => (int)$r['remaining_day'] <= 0)),
+    'alert'    => array_values(array_filter($prevSchedules, fn($r) => (int)$r['remaining_day'] > 0 && (int)$r['remaining_day'] <= 7)),
+    'reminder' => array_values(array_filter($prevSchedules, fn($r) => (int)$r['remaining_day'] > 7 && (int)$r['remaining_day'] <= (int)($r['reminder_activity'] ?? 30))),
+    'secure'   => array_values(array_filter($prevSchedules, fn($r) => (int)$r['remaining_day'] > (int)($r['reminder_activity'] ?? 30))),
+];
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -550,22 +558,62 @@ $schedByStatus = [
                 <h1 class="text-2xl font-extrabold text-slate-800 mb-1">Overview</h1>
                 <p class="text-slate-500 text-sm mb-6">Ringkasan sistem maintenance secara keseluruhan.</p>
 
-                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                <?php
+                $predOverdue  = count($schedByStatus['overdue']);
+                $predAlert    = count($schedByStatus['alert']);
+                $predReminder = count($schedByStatus['reminder']);
+                $predSecure   = count($schedByStatus['secure']);
+                $prevOverdue  = count($prevSchedByStatus['overdue']);
+                $prevAlert    = count($prevSchedByStatus['alert']);
+                $prevReminder = count($prevSchedByStatus['reminder']);
+                $prevSecure   = count($prevSchedByStatus['secure']);
+                ?>
+                <!-- Overview baris 1: ringkasan total + critical -->
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-3">
                     <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                        <div class="text-3xl font-black text-blue-600"><?= $total_schedules ?></div>
+                        <div class="flex items-center gap-2 mb-2"><span class="w-2 h-2 rounded-full bg-blue-500 inline-block"></span><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Predictive</span></div>
+                        <div class="text-3xl font-black text-blue-600"><?= count($schedules) ?></div>
                         <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Total Schedule</div>
                     </div>
                     <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                        <div class="text-3xl font-black text-red-600"><?= $overdue ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Overdue</div>
+                        <div class="flex items-center gap-2 mb-2"><span class="w-2 h-2 rounded-full bg-teal-500 inline-block"></span><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Preventive</span></div>
+                        <div class="text-3xl font-black text-teal-600"><?= count($prevSchedules) ?></div>
+                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Total Schedule</div>
+                    </div>
+                    <div class="bg-red-50 rounded-2xl p-5 border border-red-200 shadow-sm">
+                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-exclamation-circle text-red-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Overdue</span></div>
+                        <div class="text-3xl font-black text-red-600"><?= $predOverdue + $prevOverdue ?></div>
+                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Pred + Prev</div>
+                        <div class="text-[10px] text-red-400 mt-1"><?= $predOverdue ?> pred &bull; <?= $prevOverdue ?> prev</div>
+                    </div>
+                    <div class="bg-amber-50 rounded-2xl p-5 border border-amber-200 shadow-sm">
+                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-triangle-exclamation text-amber-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Alert</span></div>
+                        <div class="text-3xl font-black text-amber-600"><?= $predAlert + $prevAlert ?></div>
+                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">≤ 7 Hari Tersisa</div>
+                        <div class="text-[10px] text-amber-400 mt-1"><?= $predAlert ?> pred &bull; <?= $prevAlert ?> prev</div>
+                    </div>
+                </div>
+                <!-- Overview baris 2: breakdown detail -->
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                    <div class="bg-blue-50 rounded-2xl p-5 border border-blue-100 shadow-sm">
+                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-bell text-blue-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Reminder Pred.</span></div>
+                        <div class="text-3xl font-black text-blue-600"><?= $predReminder ?></div>
+                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Predictive</div>
+                    </div>
+                    <div class="bg-emerald-50 rounded-2xl p-5 border border-emerald-100 shadow-sm">
+                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-check-circle text-emerald-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Aman Pred.</span></div>
+                        <div class="text-3xl font-black text-emerald-600"><?= $predSecure ?></div>
+                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Predictive</div>
+                    </div>
+                    <div class="bg-teal-50 rounded-2xl p-5 border border-teal-100 shadow-sm">
+                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-bell text-teal-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Reminder Prev.</span></div>
+                        <div class="text-3xl font-black text-teal-600"><?= $prevReminder ?></div>
+                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Preventive</div>
                     </div>
                     <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                        <div class="text-3xl font-black text-amber-500"><?= $near_due ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Due ≤ 7 Days</div>
-                    </div>
-                    <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                        <div class="text-3xl font-black text-emerald-600"><?= $total_users ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Total User</div>
+                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-users text-slate-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">User</span></div>
+                        <div class="text-3xl font-black text-slate-700"><?= $total_users ?></div>
+                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Total User Aktif</div>
                     </div>
                 </div>
 
@@ -619,14 +667,14 @@ $schedByStatus = [
                     </button>
                 </div>
 
-                <!-- Stat Cards - Predictive -->
+                <!-- Stat Cards - Predictive (tampil default) -->
                 <div id="predStatCards" class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
                     <?php
                     $statusConfig = [
-                        'overdue'  => ['label' => 'Overdue',  'bg' => 'bg-red-50',    'border' => 'border-red-200',    'text' => 'text-red-600',    'icon' => 'fa-exclamation-circle'],
-                        'alert'    => ['label' => '≤ 7 Hari', 'bg' => 'bg-amber-50',  'border' => 'border-amber-200',  'text' => 'text-amber-600',  'icon' => 'fa-clock'],
-                        'reminder' => ['label' => 'Reminder', 'bg' => 'bg-blue-50',   'border' => 'border-blue-200',   'text' => 'text-blue-600',   'icon' => 'fa-bell'],
-                        'secure'   => ['label' => 'Aman',     'bg' => 'bg-emerald-50', 'border' => 'border-emerald-200', 'text' => 'text-emerald-600', 'icon' => 'fa-check-circle'],
+                        'overdue'  => ['label' => 'Overdue',  'bg' => 'bg-red-50',     'border' => 'border-red-200',     'text' => 'text-red-600',     'icon' => 'fa-exclamation-circle', 'sub' => ''],
+                        'alert'    => ['label' => 'Alert',    'bg' => 'bg-amber-50',   'border' => 'border-amber-200',   'text' => 'text-amber-600',   'icon' => 'fa-triangle-exclamation', 'sub' => '≤ 7 hari tersisa'],
+                        'reminder' => ['label' => 'Reminder', 'bg' => 'bg-blue-50',    'border' => 'border-blue-200',    'text' => 'text-blue-600',    'icon' => 'fa-bell',               'sub' => ''],
+                        'secure'   => ['label' => 'Aman',     'bg' => 'bg-emerald-50', 'border' => 'border-emerald-200', 'text' => 'text-emerald-600', 'icon' => 'fa-check-circle',       'sub' => ''],
                     ];
                     foreach ($statusConfig as $key => $cfg): ?>
                         <div class="<?= $cfg['bg'] ?> rounded-2xl p-5 border <?= $cfg['border'] ?> shadow-sm">
@@ -635,6 +683,28 @@ $schedByStatus = [
                                 <div class="text-[10px] text-slate-500 font-bold uppercase tracking-wide"><?= $cfg['label'] ?></div>
                             </div>
                             <div class="text-3xl font-black <?= $cfg['text'] ?>"><?= count($schedByStatus[$key]) ?></div>
+                            <?php if ($cfg['sub']): ?><div class="text-[10px] <?= $cfg['text'] ?> opacity-70 mt-0.5"><?= $cfg['sub'] ?></div><?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+
+                <!-- Stat Cards - Preventive (tersembunyi default) -->
+                <div id="prevStatCards" class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5 hidden">
+                    <?php
+                    $prevStatusConfig = [
+                        'overdue'  => ['label' => 'Overdue',  'bg' => 'bg-red-50',     'border' => 'border-red-200',     'text' => 'text-red-600',     'icon' => 'fa-exclamation-circle', 'sub' => ''],
+                        'alert'    => ['label' => 'Alert',    'bg' => 'bg-amber-50',   'border' => 'border-amber-200',   'text' => 'text-amber-600',   'icon' => 'fa-triangle-exclamation', 'sub' => '≤ 7 hari tersisa'],
+                        'reminder' => ['label' => 'Reminder', 'bg' => 'bg-teal-50',    'border' => 'border-teal-200',    'text' => 'text-teal-600',    'icon' => 'fa-bell',               'sub' => ''],
+                        'secure'   => ['label' => 'Aman',     'bg' => 'bg-emerald-50', 'border' => 'border-emerald-200', 'text' => 'text-emerald-600', 'icon' => 'fa-check-circle',       'sub' => ''],
+                    ];
+                    foreach ($prevStatusConfig as $key => $cfg): ?>
+                        <div class="<?= $cfg['bg'] ?> rounded-2xl p-5 border <?= $cfg['border'] ?> shadow-sm">
+                            <div class="flex items-center gap-2 mb-1">
+                                <i class="fas <?= $cfg['icon'] ?> <?= $cfg['text'] ?> text-sm"></i>
+                                <div class="text-[10px] text-slate-500 font-bold uppercase tracking-wide"><?= $cfg['label'] ?></div>
+                            </div>
+                            <div class="text-3xl font-black <?= $cfg['text'] ?>"><?= count($prevSchedByStatus[$key]) ?></div>
+                            <?php if ($cfg['sub']): ?><div class="text-[10px] <?= $cfg['text'] ?> opacity-70 mt-0.5"><?= $cfg['sub'] ?></div><?php endif; ?>
                         </div>
                     <?php endforeach; ?>
                 </div>
@@ -1471,8 +1541,12 @@ $schedByStatus = [
             indicator.style.background = isPred ? 'linear-gradient(135deg,#2563eb,#1d4ed8)' : 'linear-gradient(135deg,#0f766e,#0d9488)';
             document.getElementById('schedTabPred').className = `relative z-10 flex-1 flex items-center justify-center gap-2 py-3 px-6 font-bold text-sm rounded-xl transition-all duration-300 ${isPred ? 'text-white' : 'text-slate-500'}`;
             document.getElementById('schedTabPrev').className = `relative z-10 flex-1 flex items-center justify-center gap-2 py-3 px-6 font-bold text-sm rounded-xl transition-all duration-300 ${!isPred ? 'text-white' : 'text-slate-500'}`;
+            // Tabel
             document.getElementById('schedPredContent').classList.toggle('hidden', !isPred);
             document.getElementById('schedPrevContent').classList.toggle('hidden', isPred);
+            // Stat cards ikut berganti sesuai tab
+            document.getElementById('predStatCards').classList.toggle('hidden', !isPred);
+            document.getElementById('prevStatCards').classList.toggle('hidden', isPred);
         }
 
         // ===== HISTORY TABS =====
