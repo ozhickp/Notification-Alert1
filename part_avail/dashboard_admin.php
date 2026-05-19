@@ -169,6 +169,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
         }
 
+        // --- DELETE ALL: SCHEDULE (predictive) ---
+        if ($_POST['action'] === 'delete_all_schedule') {
+            $pdo->exec("DELETE FROM schedules");
+            echo json_encode(['status' => 'success', 'message' => 'Semua schedule predictive berhasil dihapus']);
+            exit;
+        }
+
+        // --- DELETE ALL: SCHEDULE (preventive) ---
+        if ($_POST['action'] === 'delete_all_prev_schedule') {
+            $pdo->exec("DELETE FROM schedules_preventive");
+            echo json_encode(['status' => 'success', 'message' => 'Semua schedule preventive berhasil dihapus']);
+            exit;
+        }
+
+        // --- DELETE ALL: PARTS ---
+        if ($_POST['action'] === 'delete_all_parts') {
+            $pdo->exec("DELETE FROM expenses_part");
+            echo json_encode(['status' => 'success', 'message' => 'Semua data part berhasil dihapus']);
+            exit;
+        }
+
+        // --- DELETE ALL: HISTORY (predictive) ---
+        if ($_POST['action'] === 'delete_all_history') {
+            $pdo->exec("DELETE FROM history_maintenance");
+            echo json_encode(['status' => 'success', 'message' => 'Semua history predictive berhasil dihapus']);
+            exit;
+        }
+
+        // --- DELETE ALL: HISTORY (preventive) ---
+        if ($_POST['action'] === 'delete_all_history_prev') {
+            $pdo->exec("DELETE FROM history_preventive");
+            echo json_encode(['status' => 'success', 'message' => 'Semua history preventive berhasil dihapus']);
+            exit;
+        }
+
         // --- USER: ADD ---
         if ($_POST['action'] === 'add_user') {
             $hashedPass = password_hash($_POST['password'], PASSWORD_DEFAULT);
@@ -256,7 +291,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // ==================== FETCH DATA ====================
-$schedules = $pdo->query("SELECT s.*, DATEDIFF(change_date_plan, CURDATE()) AS remaining_day FROM schedules s ORDER BY change_date_plan ASC")->fetchAll(PDO::FETCH_ASSOC);
+$schedules = $pdo->query("
+    SELECT s.*, DATEDIFF(change_date_plan, CURDATE()) AS remaining_day,
+           COALESCE(pl.plant_name, s.department) AS department,
+           COALESCE(ln.line_name, s.line) AS line
+    FROM schedules s
+    LEFT JOIN plants pl ON pl.id = s.department
+    LEFT JOIN line ln ON ln.id = s.line
+    ORDER BY change_date_plan ASC
+")->fetchAll(PDO::FETCH_ASSOC);
 
 $prevSchedules = [];
 try {
@@ -662,9 +705,14 @@ $prevSchedByStatus = [
                         <h1 class="text-2xl font-extrabold text-slate-800 mb-1">Schedule</h1>
                         <p class="text-slate-500 text-sm">Kelola jadwal maintenance semua mesin.</p>
                     </div>
-                    <button onclick="openModal('addScheduleModal')" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow">
-                        <i class="fas fa-plus"></i> Tambah Schedule
-                    </button>
+                    <div class="flex items-center gap-2">
+                        <button onclick="openDeleteAllModal('schedule')" class="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition">
+                            <i class="fas fa-trash-can"></i> Hapus Semua
+                        </button>
+                        <button onclick="openModal('addScheduleModal')" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow">
+                            <i class="fas fa-plus"></i> Tambah Schedule
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Stat Cards - Predictive (tampil default) -->
@@ -858,9 +906,14 @@ $prevSchedByStatus = [
                         <h1 class="text-2xl font-extrabold text-slate-800 mb-1">Part Availability</h1>
                         <p class="text-slate-500 text-sm">Kelola stok sparepart dan ketersediaan gudang.</p>
                     </div>
-                    <button onclick="openModal('addPartModal')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow">
-                        <i class="fas fa-plus"></i> Tambah Part
-                    </button>
+                    <div class="flex items-center gap-2">
+                        <button onclick="openDeleteAllModal('parts')" class="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition">
+                            <i class="fas fa-trash-can"></i> Hapus Semua
+                        </button>
+                        <button onclick="openModal('addPartModal')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow">
+                            <i class="fas fa-plus"></i> Tambah Part
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Stat Cards -->
@@ -961,6 +1014,9 @@ $prevSchedByStatus = [
                         <h1 class="text-2xl font-extrabold text-slate-800 mb-1">History</h1>
                         <p class="text-slate-500 text-sm">Log aktivitas maintenance yang sudah dilakukan.</p>
                     </div>
+                    <button onclick="openDeleteAllModal('history')" class="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition">
+                        <i class="fas fa-trash-can"></i> Hapus Semua
+                    </button>
                 </div>
 
                 <!-- Tab switcher history -->
@@ -1222,6 +1278,51 @@ $prevSchedByStatus = [
     <!-- ===== MODALS ===== -->
 
     <!-- Modal: Add Recipient Notifikasi -->
+    <!-- ===== MODAL: KONFIRMASI HAPUS SEMUA ===== -->
+    <div id="deleteAllModal" class="modal-overlay fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-0 overflow-hidden">
+            <!-- Header merah -->
+            <div class="flex items-center gap-3 px-6 py-5" style="background:linear-gradient(135deg,#ef4444,#dc2626);">
+                <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <i class="fas fa-triangle-exclamation text-white text-lg"></i>
+                </div>
+                <div>
+                    <h3 class="text-white font-extrabold text-base" id="deleteAllModalTitle">Hapus Semua Data</h3>
+                    <p class="text-red-100 text-xs font-medium" id="deleteAllModalSub">Tindakan ini tidak dapat dibatalkan</p>
+                </div>
+            </div>
+            <!-- Body -->
+            <div class="px-6 py-5">
+                <p class="text-slate-600 text-sm mb-1" id="deleteAllModalDesc"></p>
+                <div class="mt-4 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+                    <i class="fas fa-circle-exclamation text-red-400 text-sm mt-0.5 flex-shrink-0"></i>
+                    <p class="text-red-700 text-xs font-semibold leading-relaxed">
+                        Seluruh data akan dihapus secara permanen dari database dan <span class="font-black">tidak dapat dipulihkan</span>. Pastikan Anda sudah melakukan backup sebelum melanjutkan.
+                    </p>
+                </div>
+                <!-- Konfirmasi ketik -->
+                <div class="mt-4">
+                    <label class="block text-slate-500 text-xs font-bold mb-1.5 uppercase tracking-wide">Ketik <span class="text-red-600 font-black">HAPUS</span> untuk konfirmasi</label>
+                    <input type="text" id="deleteAllConfirmInput" placeholder="Ketik HAPUS di sini..."
+                        oninput="checkDeleteAllInput()"
+                        class="w-full border-2 border-slate-200 focus:border-red-400 rounded-xl px-4 py-2.5 text-sm font-bold outline-none transition">
+                </div>
+            </div>
+            <!-- Footer -->
+            <div class="flex items-center gap-3 px-6 pb-5">
+                <button onclick="closeModal('deleteAllModal')" class="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-sm hover:bg-slate-50 transition">
+                    Batal
+                </button>
+                <button id="deleteAllConfirmBtn" onclick="confirmDeleteAll()" disabled
+                    class="flex-1 px-4 py-2.5 rounded-xl font-bold text-sm text-white transition flex items-center justify-center gap-2 opacity-40 cursor-not-allowed"
+                    style="background:linear-gradient(135deg,#ef4444,#dc2626);">
+                    <i class="fas fa-trash-can"></i>
+                    <span id="deleteAllBtnLabel">Hapus Semua</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div id="addRecipientModal" class="modal-overlay fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4">
         <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
             <div class="bg-slate-800 px-7 py-5 flex justify-between items-center text-white">
@@ -1604,6 +1705,89 @@ $prevSchedByStatus = [
         });
 
         // ===== DELETE =====
+        // ── Delete All ───────────────────────────────────────────────────────────
+        let _deleteAllTarget = null;
+
+        const _deleteAllConfig = {
+            schedule: {
+                title: 'Hapus Semua Schedule',
+                sub: 'Schedule Predictive & Preventive akan dihapus',
+                desc: 'Anda akan menghapus <strong>seluruh data schedule predictive dan preventive</strong>. Semua jadwal maintenance akan hilang dari sistem.',
+                actions: ['delete_all_schedule', 'delete_all_prev_schedule'],
+                btnLabel: 'Hapus Semua Schedule',
+            },
+            parts: {
+                title: 'Hapus Semua Part',
+                sub: 'Seluruh data Part Availability akan dihapus',
+                desc: 'Anda akan menghapus <strong>seluruh data part availability</strong>. Semua data stok sparepart akan hilang dari sistem.',
+                actions: ['delete_all_parts'],
+                btnLabel: 'Hapus Semua Part',
+            },
+            history: {
+                title: 'Hapus Semua History',
+                sub: 'History Predictive & Preventive akan dihapus',
+                desc: 'Anda akan menghapus <strong>seluruh history maintenance predictive dan preventive</strong>. Semua log aktivitas akan hilang dari sistem.',
+                actions: ['delete_all_history', 'delete_all_history_prev'],
+                btnLabel: 'Hapus Semua History',
+            },
+        };
+
+        function openDeleteAllModal(target) {
+            const cfg = _deleteAllConfig[target];
+            if (!cfg) return;
+            _deleteAllTarget = target;
+            document.getElementById('deleteAllModalTitle').textContent = cfg.title;
+            document.getElementById('deleteAllModalSub').textContent = cfg.sub;
+            document.getElementById('deleteAllModalDesc').innerHTML = cfg.desc;
+            document.getElementById('deleteAllBtnLabel').textContent = cfg.btnLabel;
+            document.getElementById('deleteAllConfirmInput').value = '';
+            const btn = document.getElementById('deleteAllConfirmBtn');
+            btn.disabled = true;
+            btn.classList.add('opacity-40', 'cursor-not-allowed');
+            openModal('deleteAllModal');
+        }
+
+        function checkDeleteAllInput() {
+            const val = document.getElementById('deleteAllConfirmInput').value.trim();
+            const btn = document.getElementById('deleteAllConfirmBtn');
+            if (val === 'HAPUS') {
+                btn.disabled = false;
+                btn.classList.remove('opacity-40', 'cursor-not-allowed');
+            } else {
+                btn.disabled = true;
+                btn.classList.add('opacity-40', 'cursor-not-allowed');
+            }
+        }
+
+        async function confirmDeleteAll() {
+            const cfg = _deleteAllConfig[_deleteAllTarget];
+            if (!cfg) return;
+            const btn = document.getElementById('deleteAllConfirmBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menghapus...';
+
+            try {
+                for (const action of cfg.actions) {
+                    const fd = new FormData();
+                    fd.append('action', action);
+                    const res = await fetch('', {
+                        method: 'POST',
+                        body: fd
+                    });
+                    const json = await res.json();
+                    if (json.status !== 'success') throw new Error(json.message);
+                }
+                closeModal('deleteAllModal');
+                showToast(cfg.btnLabel + ' berhasil!', 'success');
+                setTimeout(() => location.reload(), 900);
+            } catch (err) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-trash-can"></i> <span>' + cfg.btnLabel + '</span>';
+                showToast('Gagal: ' + err.message, 'error');
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         async function deleteRecord(action, id) {
             if (!confirm('Yakin ingin menghapus data ini?')) return;
             const fd = new FormData();
