@@ -121,6 +121,59 @@ function logSent(PDO $pdo, string $messageKey, ?int $scheduleId = null, string $
   }
 }
 
+/**
+ * Distributed lock via MySQL GET_LOCK() untuk mencegah race condition
+ * ketika 2+ user login hampir bersamaan di hari yang sama.
+ *
+ * Alur:
+ *  1. Cek alreadySentToday() — jika sudah terkirim, langsung return false.
+ *  2. Coba GET_LOCK(key, 0) — jika gagal (proses lain sedang pegang lock), return false.
+ *  3. Cek alreadySentToday() LAGI di dalam lock (double-check) — jika proses lain
+ *     sudah logSent() saat kita menunggu, lepas lock dan return false.
+ *  4. Jika semua lolos → return true; pemanggil wajib panggil releaseLock() setelah selesai.
+ *
+ * @param PDO    $pdo
+ * @param string $messageKey  Key unik kategori (mis. 'batch-reminder')
+ * @return bool  true jika lock berhasil dipegang DAN belum ada kiriman hari ini
+ */
+function tryLockAndSend(PDO $pdo, string $messageKey): bool
+{
+  // Tahap 1: cek cepat sebelum masuk lock
+  if (alreadySentToday($pdo, $messageKey)) {
+    error_log("[Reminder] {$messageKey} sudah terkirim hari ini (pre-lock check), skip.");
+    return false;
+  }
+
+  // Tahap 2: ambil distributed lock (timeout 0 = non-blocking, tidak tunggu)
+  $lockName = 'notif_' . $messageKey;
+  $row = $pdo->query("SELECT GET_LOCK(" . $pdo->quote($lockName) . ", 0) AS got")->fetch(PDO::FETCH_ASSOC);
+  if (!$row || (int)$row['got'] !== 1) {
+    error_log("[Reminder] {$messageKey} gagal ambil lock — proses lain sedang berjalan, skip.");
+    return false;
+  }
+
+  // Tahap 3: double-check setelah lock berhasil dipegang
+  if (alreadySentToday($pdo, $messageKey)) {
+    $pdo->exec("SELECT RELEASE_LOCK(" . $pdo->quote($lockName) . ")");
+    error_log("[Reminder] {$messageKey} sudah terkirim oleh proses lain (post-lock check), skip.");
+    return false;
+  }
+
+  return true; // lock dipegang — aman untuk kirim email
+}
+
+/**
+ * Lepas distributed lock MySQL setelah proses pengiriman selesai.
+ */
+function releaseLock(PDO $pdo, string $messageKey): void
+{
+  try {
+    $lockName = 'notif_' . $messageKey;
+    $pdo->exec("SELECT RELEASE_LOCK(" . $pdo->quote($lockName) . ")");
+  } catch (\Exception $e) { /* ignore */
+  }
+}
+
 function buildEmailBody(string $username, string $headerColor, string $badgeLabel, string $intro, string $taskListHtml): string
 {
   return "
@@ -152,9 +205,10 @@ function buildEmailBody(string $username, string $headerColor, string $badgeLabe
 function processReminderByThreshold(PDO $pdo, ?int $specificId = null): void
 {
   $key = $specificId ? "new-schedule-{$specificId}" : 'batch-reminder';
-  if (!$specificId && alreadySentToday($pdo, $key)) {
-    error_log('[Reminder] batch-reminder sudah terkirim hari ini, skip.');
-    return;
+
+  // Untuk batch harian: gunakan distributed lock agar tahan race condition multi-user
+  if (!$specificId) {
+    if (!tryLockAndSend($pdo, $key)) return;
   }
 
   $whereId = $specificId ? "AND s.id = {$specificId}" : '';
@@ -211,6 +265,11 @@ function processReminderByThreshold(PDO $pdo, ?int $specificId = null): void
   } else {
     error_log('[Reminder] batch-reminder GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
   }
+
+  // Lepas distributed lock setelah proses selesai (hanya untuk batch, bukan specificId)
+  if (!$specificId) {
+    releaseLock($pdo, $key);
+  }
 }
 
 /** Alias untuk update_remaining_days.php */
@@ -229,10 +288,7 @@ function processThirtyDayReminders(PDO $pdo): void
  */
 function processSevenDayReminders(PDO $pdo): void
 {
-  if (alreadySentToday($pdo, 'batch-alert7')) {
-    error_log('[Reminder] batch-alert7 sudah terkirim.');
-    return;
-  }
+  if (!tryLockAndSend($pdo, 'batch-alert7')) return;
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
@@ -289,19 +345,17 @@ function processSevenDayReminders(PDO $pdo): void
   } else {
     error_log('[Reminder] batch-alert7 GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
   }
+
+  releaseLock($pdo, 'batch-alert7');
 }
 
 /**
  * Overdue predictive harian.
  * Key: 'batch-overdue'
- * Fungsi ini sudah benar sejak awal — tidak diubah.
  */
 function processOverdueReminders(PDO $pdo): void
 {
-  if (alreadySentToday($pdo, 'batch-overdue')) {
-    error_log('[Reminder] batch-overdue sudah terkirim.');
-    return;
-  }
+  if (!tryLockAndSend($pdo, 'batch-overdue')) return;
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
@@ -349,9 +403,9 @@ function processOverdueReminders(PDO $pdo): void
   } else {
     error_log('[Reminder] batch-overdue GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
   }
-}
 
-/** Dipanggil saat schedule baru ditambah dan masuk kategori reminder/alert/overdue */
+  releaseLock($pdo, 'batch-overdue');
+}
 function sendNewScheduleAlert(PDO $pdo, int $scheduleId): void
 {
   processReminderByThreshold($pdo, $scheduleId);
@@ -462,9 +516,10 @@ function sendEditedScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): 
 function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
 {
   $key = $specificId ? "prev-new-schedule-{$specificId}" : 'prev-batch-reminder';
-  if (!$specificId && alreadySentToday($pdo, $key)) {
-    error_log('[PrevReminder] prev-batch-reminder sudah terkirim hari ini, skip.');
-    return;
+
+  // Untuk batch harian: gunakan distributed lock agar tahan race condition multi-user
+  if (!$specificId) {
+    if (!tryLockAndSend($pdo, $key)) return;
   }
 
   $whereId = $specificId ? "AND s.id = {$specificId}" : '';
@@ -521,6 +576,11 @@ function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
   } else {
     error_log('[PrevReminder] prev-batch-reminder GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
   }
+
+  // Lepas distributed lock (hanya untuk batch, bukan specificId)
+  if (!$specificId) {
+    releaseLock($pdo, $key);
+  }
 }
 
 /**
@@ -533,10 +593,7 @@ function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
  */
 function processPrevSevenDayReminders(PDO $pdo): void
 {
-  if (alreadySentToday($pdo, 'prev-batch-alert7')) {
-    error_log('[PrevReminder] prev-batch-alert7 sudah terkirim.');
-    return;
-  }
+  if (!tryLockAndSend($pdo, 'prev-batch-alert7')) return;
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
@@ -551,12 +608,16 @@ function processPrevSevenDayReminders(PDO $pdo): void
   $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
   if (empty($tasks)) {
     error_log('[PrevReminder] Tidak ada jadwal preventive alert 7 hari.');
+    releaseLock($pdo, 'prev-batch-alert7');
     return;
   }
 
   $nearestDay = (int)$tasks[0]['remaining_day'];
   $admins     = getAllRecipients($pdo);
-  if (empty($admins)) return;
+  if (empty($admins)) {
+    releaseLock($pdo, 'prev-batch-alert7');
+    return;
+  }
 
   $listHtml = '<ul style="color:#334155;">';
   foreach ($tasks as $t) {
@@ -592,19 +653,17 @@ function processPrevSevenDayReminders(PDO $pdo): void
   } else {
     error_log('[PrevReminder] prev-batch-alert7 GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
   }
+
+  releaseLock($pdo, 'prev-batch-alert7');
 }
 
 /**
  * Overdue preventive harian.
  * Key: 'prev-batch-overdue'
- * Fungsi ini sudah benar sejak awal — tidak diubah.
  */
 function processPrevOverdueReminders(PDO $pdo): void
 {
-  if (alreadySentToday($pdo, 'prev-batch-overdue')) {
-    error_log('[PrevReminder] prev-batch-overdue sudah terkirim.');
-    return;
-  }
+  if (!tryLockAndSend($pdo, 'prev-batch-overdue')) return;
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
@@ -620,11 +679,15 @@ function processPrevOverdueReminders(PDO $pdo): void
   $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
   if (empty($tasks)) {
     error_log('[PrevReminder] Tidak ada jadwal preventive overdue.');
+    releaseLock($pdo, 'prev-batch-overdue');
     return;
   }
 
   $admins = getAllRecipients($pdo);
-  if (empty($admins)) return;
+  if (empty($admins)) {
+    releaseLock($pdo, 'prev-batch-overdue');
+    return;
+  }
 
   $listHtml = '<ul style="color:#334155;">';
   foreach ($tasks as $t) {
@@ -653,6 +716,8 @@ function processPrevOverdueReminders(PDO $pdo): void
   } else {
     error_log('[PrevReminder] prev-batch-overdue GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
   }
+
+  releaseLock($pdo, 'prev-batch-overdue');
 }
 
 /** Dipanggil saat schedule preventive baru ditambah. */

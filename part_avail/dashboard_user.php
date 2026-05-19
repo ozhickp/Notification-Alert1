@@ -40,37 +40,33 @@ try {
 }
 
 // ── Step 2: Kirim email — 1x per hari, cek via notification_log di DB ────────
-// Deduplication via DB (bukan session) agar berlaku lintas login/logout
-// Tiap kategori (reminder/alert/overdue) dicatat terpisah di notification_log
-// PERBAIKAN: Pisahkan try-catch per kategori agar satu error tidak memblokir kategori lain
+// Deduplication via DB agar berlaku lintas login/logout dan lintas user.
+// PENTING: $sentToday TIDAK di-prefetch ke array PHP karena menyebabkan race condition —
+// jika 2 user login hampir bersamaan, keduanya akan membaca array kosong yang sama
+// sebelum salah satunya sempat logSent(), sehingga email terkirim dua kali.
+// Solusi: setiap fungsi process*() sudah memanggil alreadySentToday() secara langsung
+// ke DB saat dipanggil, ditambah GET_LOCK() MySQL di tryLockAndSend() sebagai
+// distributed lock — hanya 1 proses PHP yang bisa eksekusi per kategori per hari.
 $reminderFile = __DIR__ . '/send_reminder.php';
 if (file_exists($reminderFile)) {
     require_once $reminderFile;
-    $sentToday = [];
-    try {
-        $sentToday = $pdo->query("
-            SELECT DISTINCT message FROM notification_log
-            WHERE DATE(sent_at) = CURDATE()
-        ")->fetchAll(PDO::FETCH_COLUMN);
-    } catch (\Exception $e) {
-        error_log('[Dashboard] Gagal query notification_log: ' . $e->getMessage());
-    }
 
-    if (!in_array('batch-reminder', $sentToday) && function_exists('processReminderByThreshold')) {
+    // Predictive — setiap fungsi punya alreadySentToday() + GET_LOCK() sendiri
+    if (function_exists('processReminderByThreshold')) {
         try {
             processReminderByThreshold($pdo);
         } catch (\Exception $e) {
             error_log('[Dashboard] Error batch-reminder: ' . $e->getMessage());
         }
     }
-    if (!in_array('batch-alert7', $sentToday) && function_exists('processSevenDayReminders')) {
+    if (function_exists('processSevenDayReminders')) {
         try {
             processSevenDayReminders($pdo);
         } catch (\Exception $e) {
             error_log('[Dashboard] Error batch-alert7: ' . $e->getMessage());
         }
     }
-    if (!in_array('batch-overdue', $sentToday) && function_exists('processOverdueReminders')) {
+    if (function_exists('processOverdueReminders')) {
         try {
             processOverdueReminders($pdo);
         } catch (\Exception $e) {
@@ -78,22 +74,22 @@ if (file_exists($reminderFile)) {
         }
     }
 
-    // ── Preventive batch harian ───────────────────────────────────────────────
-    if (!in_array('prev-batch-reminder', $sentToday) && function_exists('processPrevReminderByThreshold')) {
+    // Preventive — sama, tiap fungsi handle deduplication sendiri
+    if (function_exists('processPrevReminderByThreshold')) {
         try {
             processPrevReminderByThreshold($pdo);
         } catch (\Exception $e) {
             error_log('[Dashboard] Error prev-batch-reminder: ' . $e->getMessage());
         }
     }
-    if (!in_array('prev-batch-alert7', $sentToday) && function_exists('processPrevSevenDayReminders')) {
+    if (function_exists('processPrevSevenDayReminders')) {
         try {
             processPrevSevenDayReminders($pdo);
         } catch (\Exception $e) {
             error_log('[Dashboard] Error prev-batch-alert7: ' . $e->getMessage());
         }
     }
-    if (!in_array('prev-batch-overdue', $sentToday) && function_exists('processPrevOverdueReminders')) {
+    if (function_exists('processPrevOverdueReminders')) {
         try {
             processPrevOverdueReminders($pdo);
         } catch (\Exception $e) {
