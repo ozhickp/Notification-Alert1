@@ -263,6 +263,8 @@ function partOrderBadge(string $v): string
 
         #sidebar.collapsed .sb-label {
             opacity: 0;
+            width: 0;
+            overflow: hidden;
         }
 
         .nav-pill {
@@ -304,6 +306,29 @@ function partOrderBadge(string $v): string
 
         #sidebar.collapsed .np-label {
             opacity: 0;
+            width: 0;
+            overflow: hidden;
+        }
+
+        /* ── Collapsed: center icons perfectly ── */
+        #sidebar.collapsed .nav-pill {
+            justify-content: center;
+            padding: .6rem 0;
+            gap: 0;
+        }
+
+        #sidebar.collapsed .sidebar-back {
+            justify-content: center;
+            padding: .55rem 0;
+            gap: 0;
+        }
+
+        #sidebar.collapsed .sidebar-nav {
+            align-items: center;
+        }
+
+        #sidebar.collapsed #sidebar-footer {
+            justify-content: center;
         }
 
         .nav-pill.active-schedule {
