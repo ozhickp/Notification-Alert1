@@ -145,8 +145,10 @@ function tryLockAndSend(PDO $pdo, string $messageKey): bool
   }
 
   // Tahap 2: ambil distributed lock (timeout 0 = non-blocking, tidak tunggu)
-  $lockName = 'notif_' . $messageKey;
-  $row = $pdo->query("SELECT GET_LOCK(" . $pdo->quote($lockName) . ", 0) AS got")->fetch(PDO::FETCH_ASSOC);
+  $lockName  = 'notif_' . $messageKey;
+  $lockStmt  = $pdo->query("SELECT GET_LOCK(" . $pdo->quote($lockName) . ", 0) AS got");
+  $row       = $lockStmt->fetch(PDO::FETCH_ASSOC);
+  $lockStmt->closeCursor();
   if (!$row || (int)$row['got'] !== 1) {
     error_log("[Reminder] {$messageKey} gagal ambil lock — proses lain sedang berjalan, skip.");
     return false;
@@ -154,7 +156,8 @@ function tryLockAndSend(PDO $pdo, string $messageKey): bool
 
   // Tahap 3: double-check setelah lock berhasil dipegang
   if (alreadySentToday($pdo, $messageKey)) {
-    $pdo->exec("SELECT RELEASE_LOCK(" . $pdo->quote($lockName) . ")");
+    $relStmt = $pdo->query("SELECT RELEASE_LOCK(" . $pdo->quote($lockName) . ")");
+    $relStmt->closeCursor();
     error_log("[Reminder] {$messageKey} sudah terkirim oleh proses lain (post-lock check), skip.");
     return false;
   }
@@ -169,7 +172,8 @@ function releaseLock(PDO $pdo, string $messageKey): void
 {
   try {
     $lockName = 'notif_' . $messageKey;
-    $pdo->exec("SELECT RELEASE_LOCK(" . $pdo->quote($lockName) . ")");
+    $relStmt  = $pdo->query("SELECT RELEASE_LOCK(" . $pdo->quote($lockName) . ")");
+    $relStmt->closeCursor();
   } catch (\Exception $e) { /* ignore */
   }
 }
@@ -829,8 +833,9 @@ function sendImportAlert(PDO $pdo, array $queue): void
   $ids      = array_column($queue, 'id');
   $idMap    = array_column($queue, 'remaining_day', 'id');
   $inClause = implode(',', array_map('intval', $ids));
-  $stmt     = $pdo->query("SELECT s.*, p.plant_name AS department_name, l.line_name AS line_name FROM schedules s LEFT JOIN plants p ON p.id = s.department LEFT JOIN line l ON l.id = s.line WHERE s.id IN ({$inClause})");
+  $stmt      = $pdo->query("SELECT s.*, p.plant_name AS department_name, l.line_name AS line_name FROM schedules s LEFT JOIN plants p ON p.id = s.department LEFT JOIN line l ON l.id = s.line WHERE s.id IN ({$inClause})");
   $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
+  $stmt->closeCursor();
 
   $groups = ['overdue' => [], 'alert7' => [], 'threshold' => []];
   foreach ($schedules as $s) {
@@ -983,6 +988,7 @@ function sendPrevImportAlert(PDO $pdo, array $queue): void
   $inClause  = implode(',', array_map('intval', $ids));
   $stmt      = $pdo->query("SELECT s.*, p.plant_name AS department_name, l.line_name AS line_name FROM schedules_preventive s LEFT JOIN plants p ON p.id = s.department LEFT JOIN line l ON l.id = s.line WHERE s.id IN ({$inClause})");
   $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
+  $stmt->closeCursor();
 
   $groups = ['overdue' => [], 'alert7' => [], 'threshold' => []];
   foreach ($schedules as $s) {

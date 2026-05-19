@@ -15,14 +15,16 @@ $todayStr = date('Y-m-d');
 
 // ── Step 1: Selalu update remaining_day setiap dashboard dibuka ──────────────
 try {
-    $pdo->exec("
+    $s1 = $pdo->prepare("
         UPDATE schedules
         SET remaining_day = DATEDIFF(change_date_plan, CURDATE())
         WHERE change_date_plan IS NOT NULL
     ");
+    $s1->execute();
+    $s1->closeCursor();
     // Auto-reset: jika status 'done' tapi remaining_day sudah masuk window reminder lagi
     // → ubah kembali ke 'soon' dan buka part_order/part_availability
-    $pdo->exec("
+    $s2 = $pdo->prepare("
         UPDATE schedules
         SET maintenance_status = 'soon',
             part_order         = 'open',
@@ -32,6 +34,8 @@ try {
           AND DATEDIFF(change_date_plan, CURDATE()) <= reminder_activity
           AND DATEDIFF(change_date_plan, CURDATE()) >= 0
     ");
+    $s2->execute();
+    $s2->closeCursor();
     // NOTE: Auto-open dihapus agar user bisa mengubah part_order/part_availability ke 'close'
     // secara manual meskipun status masih reminder atau alert (sebelum hari-H).
     // Part order/availability hanya di-open otomatis saat transisi 'done' → 'soon' (query di atas).
@@ -598,10 +602,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
 }
 
 // Fetch data
-$stmtPlants = $pdo->query("SELECT id, plant_name FROM plants ORDER BY plant_name ASC");
-$plants     = $stmtPlants->fetchAll(PDO::FETCH_ASSOC);
+// Gunakan prepare+execute+fetchAll+closeCursor agar tidak ada unbuffered cursor tersisa
+$stmtPlants = $pdo->prepare("SELECT id, plant_name FROM plants ORDER BY plant_name ASC");
+$stmtPlants->execute();
+$plants = $stmtPlants->fetchAll(PDO::FETCH_ASSOC);
+$stmtPlants->closeCursor();
 
-$stmt      = $pdo->query("
+$stmt = $pdo->prepare("
     SELECT s.*,
            DATEDIFF(s.change_date_plan, CURDATE()) AS remaining_day,
            COALESCE(pl.plant_name, s.department)   AS department,
@@ -611,25 +618,29 @@ $stmt      = $pdo->query("
     LEFT JOIN line   ln ON ln.id = s.line
     ORDER BY s.change_date_plan ASC
 ");
+$stmt->execute();
 $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$stmt->closeCursor();
 
 // ── Preventive Maintenance data ───────────────────────────────────────────────
 // Setiap UPDATE dipisah ke try-catch sendiri agar jika kolom tidak ada (misal
 // part_order/part_availability tidak ada di tabel preventive), SELECT data tetap
 // berjalan dan tabel tidak kosong.
 try {
-    $pdo->exec("
+    $stmtUpd1 = $pdo->prepare("
         UPDATE schedules_preventive
         SET remaining_day = DATEDIFF(change_date_plan, CURDATE())
         WHERE change_date_plan IS NOT NULL
     ");
+    $stmtUpd1->execute();
+    $stmtUpd1->closeCursor();
 } catch (\Exception $e) {
     error_log('[Dashboard] preventive UPDATE remaining_day gagal: ' . $e->getMessage());
 }
 // Auto-reset: jika sudah 'done' tapi window reminder baru sudah tiba
 // (hanya jika kolom part_order & part_availability ada di tabel)
 try {
-    $pdo->exec("
+    $stmtUpd2 = $pdo->prepare("
         UPDATE schedules_preventive
         SET maintenance_status = 'soon'
         WHERE maintenance_status = 'done'
@@ -637,12 +648,14 @@ try {
           AND DATEDIFF(change_date_plan, CURDATE()) <= reminder_activity
           AND DATEDIFF(change_date_plan, CURDATE()) >= 0
     ");
+    $stmtUpd2->execute();
+    $stmtUpd2->closeCursor();
 } catch (\Exception $e) {
     error_log('[Dashboard] preventive auto-reset gagal: ' . $e->getMessage());
 }
 // SELECT data — selalu dijalankan terlepas dari keberhasilan UPDATE di atas
 try {
-    $stmtPrev = $pdo->query("
+    $stmtPrev = $pdo->prepare("
         SELECT ps.*,
                DATEDIFF(ps.change_date_plan, CURDATE()) AS remaining_day,
                COALESCE(pl.plant_name, ps.department)   AS department,
@@ -652,7 +665,9 @@ try {
         LEFT JOIN line   ln ON ln.id = ps.line
         ORDER BY ps.change_date_plan ASC
     ");
+    $stmtPrev->execute();
     $prevSchedules = $stmtPrev->fetchAll(PDO::FETCH_ASSOC);
+    $stmtPrev->closeCursor();
 } catch (\Exception $e) {
     $prevSchedules = [];
     error_log('[Dashboard] schedules_preventive fetch gagal: ' . $e->getMessage());
