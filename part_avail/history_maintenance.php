@@ -686,7 +686,7 @@ if (isset($_GET['export'])) {
             const typeLabel = document.getElementById('detailModalType');
             if (type === 'preventive') {
                 header.className = 'px-7 py-5 flex justify-between items-center';
-                header.style.background = 'linear-gradient(135deg,#0f766e,#0d9488)';
+                header.style.background = 'linear-gradient(135deg,#ea580c,#f97316)';
                 typeLabel.textContent = 'Preventive Maintenance';
             } else {
                 header.className = 'bg-gradient-to-r from-amber-600 to-amber-700 px-7 py-5 flex justify-between items-center';
