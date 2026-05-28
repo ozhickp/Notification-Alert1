@@ -213,6 +213,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ));
             $autoEditMaintStatus = $editInWindow ? 'soon' : 'done';
 
+            // Auto-open part_order & part_availability HANYA saat transisi done → soon
+            // Jika sebelumnya 'done' dan sekarang masuk kondisi kritis → paksa open (1x)
+            // Selain itu → ikut input manual user
+            $wasSecure = ($currEditStatus === 'done');
+
+            if ($editInWindow && $wasSecure) {
+                // Transisi done → soon: auto-open sekali
+                $part_order = 'open';
+                $part_avail = 'open';
+            } else {
+                // Sudah 'soon' sebelumnya atau kondisi secure: ikut input manual user
+                $part_order = $_POST['part_order']        ?? 'close';
+                $part_avail = $_POST['part_availability'] ?? 'close';
+            }
+
             $stmt = $pdo->prepare("UPDATE schedules SET
                 department = ?, line = ?, operation_process = ?, machine_name = ?,
                 process_machine = ?, name_unit = ?, maintenance_point = ?,
@@ -222,8 +237,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 maintenance_status = ?
                 WHERE id = ?");
             $stmt->execute([
-                (int)($_POST['department']     ?? 0),   // FIX: ID integer
-                (int)($_POST['line']           ?? 0),   // FIX: ID integer
+                (int)($_POST['department']     ?? 0),
+                (int)($_POST['line']           ?? 0),
                 $_POST['operation_process']    ?? '',
                 $_POST['machine_name']         ?? '',
                 $_POST['process_machine']      ?? '',
@@ -234,8 +249,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $change_date_plan,
                 (int)($_POST['reminder_activity']    ?? 0),
                 $remaining_day,
-                $_POST['part_order']           ?? 'close',
-                $_POST['part_availability']    ?? 'close',
+                $part_order,
+                $part_avail,
                 $autoEditMaintStatus,
                 $editId,
             ]);
@@ -257,6 +272,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['status' => 'success', 'message' => 'Data berhasil diupdate']);
             exit;
         }
+        // --- ADD MACHINE & OP_PROCESS ---
+        if ($_POST['action'] === 'add_machine') {
+            $plant_id  = (int)($_POST['plant_id']  ?? 0);
+            $line_id   = (int)($_POST['line_id']   ?? 0);
+            $op_name   = trim($_POST['operation_process'] ?? '');
+            $mach_name = trim($_POST['machine_name']      ?? '');
+            $proc_mach = trim($_POST['process_machine']   ?? '');
+
+            if (!$plant_id || !$line_id || $op_name === '' || $mach_name === '') {
+                echo json_encode(['status' => 'error', 'message' => 'Field wajib belum lengkap']);
+                exit;
+            }
+
+            // Insert ke op_process jika belum ada
+            // op_process punya FK: plant (-> plants.id) DAN line (-> line.id)
+            $chkOp = $pdo->prepare("SELECT id FROM op_process WHERE operation_process = ? AND line = ? AND plant = ?");
+            $chkOp->execute([$op_name, $line_id, $plant_id]);
+            $opId = $chkOp->fetchColumn();
+
+            if (!$opId) {
+                $insOp = $pdo->prepare("INSERT INTO op_process (operation_process, plant, line) VALUES (?, ?, ?)");
+                $insOp->execute([$op_name, $plant_id, $line_id]);
+                $opId = $pdo->lastInsertId();
+            }
+
+            // Insert ke machines
+            $insMach = $pdo->prepare("INSERT INTO machines (machine_name, process_machine, process_id) VALUES (?, ?, ?)");
+            $insMach->execute([$mach_name, $proc_mach, $opId]);
+
+            echo json_encode(['status' => 'success', 'message' => 'Machine berhasil ditambahkan']);
+            exit;
+        }
+
         if ($_POST['action'] === 'submit_report') {
             $schedId      = (int)($_POST['schedule_id'] ?? 0);
             $note         = trim($_POST['note'] ?? '');
@@ -1161,6 +1209,10 @@ HTML;
                         class="flex-1 lg:flex-none bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
                         <i class="fas fa-file-excel"></i> Import
                     </button>
+                    <button onclick="showAddMachineModal()"
+                        class="flex-1 lg:flex-none bg-slate-600 hover:bg-slate-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+                        <i class="fas fa-cog"></i> Add Machine
+                    </button>
                 </div>
             </div>
 
@@ -1423,6 +1475,10 @@ HTML;
                         class="flex-1 lg:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
                         <i class="fas fa-file-excel"></i> Import
                     </button>
+                    <button onclick="showAddMachineModal()"
+                        class="flex-1 lg:flex-none bg-slate-600 hover:bg-slate-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+                        <i class="fas fa-cog"></i> Add Machine
+                    </button>
                 </div>
             </div>
             <!-- TABEL PREVENTIVE — tanpa Part Order & Part Availability -->
@@ -1549,9 +1605,9 @@ HTML;
     <!-- ========================= MODAL EDIT ========================= -->
     <div id="editModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
         <div class="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden">
-            <div class="bg-amber-600 px-8 py-6 flex justify-between items-center">
-                <h3 class="text-xl font-bold text-white"><i class="fas fa-edit mr-2"></i>Edit Jadwal</h3>
-                <button onclick="hideModal('editModal')" class="text-amber-200 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
+            <div class="bg-blue-600 px-8 py-6 flex justify-between items-center">
+                <h3 class="text-xl font-bold text-white"><i class="fas fa-edit mr-2"></i>Edit Jadwal Predictive</h3>
+                <button onclick="hideModal('editModal')" class="text-blue-200 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
             </div>
             <form id="editForm" class="p-8 max-h-[85vh] overflow-y-auto">
                 <input type="hidden" name="action" value="edit">
@@ -1561,8 +1617,19 @@ HTML;
                 <input type="hidden" name="dept_name" id="edit_dept_name_val">
                 <input type="hidden" name="line_name" id="edit_line_name_val">
                 <?php echo renderFormFields('edit', $plants); ?>
+                <!-- Schedule Status Indicator -->
+                <div class="mb-4 border-t pt-6">
+                    <div id="edit_schedule_indicator" class="flex items-center gap-3 p-3 rounded-xl border" style="background:#f1f5f9;border-color:#e2e8f0;">
+                        <span class="text-xs font-black text-slate-400 uppercase">Status Jadwal:</span>
+                        <span id="edit_status_badge" class="badge badge-secure">Secure</span>
+                        <span id="edit_status_desc" class="text-xs text-slate-400 ml-1"></span>
+                    </div>
+                    <div id="edit_auto_open_notice" class="mt-2 text-xs text-amber-700 font-semibold bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" style="display:none;">
+                        ⚠️ Part Order & Part Availability akan otomatis di-<b>open</b> karena jadwal masuk kondisi kritis.
+                    </div>
+                </div>
                 <!-- Part Status Fields -->
-                <div class="grid grid-cols-2 gap-6 mb-6 border-t pt-6">
+                <div class="grid grid-cols-2 gap-6 mb-6">
                     <div>
                         <label class="block text-xs font-black text-slate-500 uppercase mb-2">Part Order Status</label>
                         <select name="part_order" id="edit_part_order"
@@ -1582,7 +1649,7 @@ HTML;
                 </div>
                 <div class="flex justify-end gap-3">
                     <button type="button" onclick="hideModal('editModal')" class="px-8 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition">Batal</button>
-                    <button type="submit" class="bg-amber-500 hover:bg-amber-600 text-white px-10 py-3 rounded-xl font-black shadow-lg transition-all">Update Data</button>
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-10 py-3 rounded-xl font-black shadow-lg shadow-blue-200 transition-all">Update Data</button>
                 </div>
             </form>
         </div>
@@ -1966,7 +2033,86 @@ HTML;
             document.getElementById('edit_line_display').value = data.line ?? '';
             document.getElementById('edit_op_display').value = data.operation_process ?? '';
             showModal('editModal');
+            // Jalankan indikator saat modal dibuka
+            updateEditScheduleIndicator();
         }
+
+        // ── Indikator status jadwal real-time di modal edit ──
+        function updateEditScheduleIndicator() {
+            const useDate = document.getElementById('edit_use_date')?.value;
+            const intervalVal = parseInt(document.getElementById('edit_interval_month')?.value) || 0;
+            const changeDateEl = document.getElementById('edit_change_date_plan');
+            const reminderEl = document.getElementById('edit_reminder_activity');
+            const badge = document.getElementById('edit_status_badge');
+            const desc = document.getElementById('edit_status_desc');
+            const notice = document.getElementById('edit_auto_open_notice');
+            const poSel = document.getElementById('edit_part_order');
+            const paSel = document.getElementById('edit_part_availability');
+            if (!badge || !changeDateEl) return;
+
+            const changeDate = changeDateEl.value;
+            const reminder = parseInt(reminderEl?.value) || 0;
+
+            if (!changeDate) {
+                badge.className = 'badge badge-secure';
+                badge.textContent = 'Secure';
+                desc.textContent = '';
+                notice.style.display = 'none';
+                return;
+            }
+
+            // Hitung remaining_day di sisi client
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const planDate = new Date(changeDate);
+            planDate.setHours(0, 0, 0, 0);
+            const diffMs = planDate - today;
+            const remaining = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+            let status, badgeClass, descText, isCritical;
+
+            if (remaining <= 0) {
+                status = 'Overdue';
+                badgeClass = 'badge badge-overdue';
+                descText = `${Math.abs(remaining)} hari terlewat`;
+                isCritical = true;
+            } else if (remaining <= 7) {
+                status = 'H-' + remaining;
+                badgeClass = 'badge badge-alert';
+                descText = `${remaining} hari lagi`;
+                isCritical = true;
+            } else if (reminder > 0 && remaining <= reminder) {
+                status = 'Reminder';
+                badgeClass = 'badge badge-reminder';
+                descText = `${remaining} hari lagi (dalam window reminder)`;
+                isCritical = true;
+            } else {
+                status = 'Secure';
+                badgeClass = 'badge badge-secure';
+                descText = `${remaining} hari lagi`;
+                isCritical = false;
+            }
+
+            badge.className = badgeClass;
+            badge.textContent = status;
+            desc.textContent = descText;
+
+            if (isCritical) {
+                // Hanya tampilkan notice — select tetap bisa diubah manual oleh user
+                notice.style.display = 'block';
+            } else {
+                notice.style.display = 'none';
+            }
+        }
+
+        // Attach listener ke field yang mempengaruhi status
+        document.addEventListener('DOMContentLoaded', function() {
+            ['edit_change_date_plan', 'edit_reminder_activity', 'edit_interval_month', 'edit_use_date'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', updateEditScheduleIndicator);
+                if (el) el.addEventListener('input', updateEditScheduleIndicator);
+            });
+        });
 
         function setDropdownEnabled(el, enabled) {
             el.disabled = !enabled;
@@ -2391,9 +2537,9 @@ HTML;
     ========================================================== -->
     <div id="prevEditModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
         <div class="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden">
-            <div class="px-8 py-6 flex justify-between items-center bg-teal-700">
+            <div class="bg-indigo-600 px-8 py-6 flex justify-between items-center">
                 <h3 class="text-xl font-bold text-white"><i class="fas fa-edit mr-2"></i>Edit Jadwal Preventive</h3>
-                <button onclick="hideModal('prevEditModal')" class="text-teal-200 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
+                <button onclick="hideModal('prevEditModal')" class="text-indigo-200 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
             </div>
             <form id="prevEditForm" class="p-8 max-h-[85vh] overflow-y-auto">
                 <input type="hidden" name="prev_action" value="prev_edit">
@@ -2706,6 +2852,148 @@ HTML;
         document.addEventListener('DOMContentLoaded', function() {
             startTicker('pred');
             startTicker('prev');
+        });
+    </script>
+
+    <!-- Modal: Add Machine -->
+    <div id="addMachineModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
+        <div class="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden">
+            <div class="bg-slate-700 px-8 py-6 flex justify-between items-center">
+                <h3 class="text-xl font-bold text-white"><i class="fas fa-cog mr-2"></i>Add Machine</h3>
+                <button onclick="hideModal('addMachineModal')" class="text-slate-300 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <form id="addMachineForm" class="p-8 space-y-5">
+                <input type="hidden" name="action" value="add_machine">
+
+                <div>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Plant <span class="text-red-500">*</span></label>
+                    <select id="am_plant" name="plant_id"
+                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm"
+                        onchange="amLoadLines()">
+                        <option value="">-- Pilih Plant --</option>
+                        <?php
+                        $amPlants = $pdo->query("SELECT id, plant_name FROM plants ORDER BY plant_name ASC")->fetchAll(PDO::FETCH_ASSOC);
+                        foreach ($amPlants as $pl): ?>
+                            <option value="<?= $pl['id'] ?>" data-name="<?= htmlspecialchars($pl['plant_name']) ?>">
+                                <?= htmlspecialchars($pl['plant_name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Line <span class="text-red-500">*</span></label>
+                    <select id="am_line" name="line_id"
+                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm"
+                        onchange="amCheckConnectingRod()"
+                        disabled>
+                        <option value="">-- Pilih Line --</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Operation Process <span class="text-red-500">*</span></label>
+                    <input type="text" name="operation_process" id="am_op_process"
+                        placeholder="Ketik operation process..."
+                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Machine Name <span class="text-red-500">*</span></label>
+                    <input type="text" name="machine_name" id="am_machine_name"
+                        placeholder="Ketik nama mesin..."
+                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Process Machine</label>
+                    <input type="text" name="process_machine" id="am_process_machine"
+                        placeholder="Otomatis terisi jika plant Connecting Rod"
+                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm bg-slate-50">
+                    <p id="am_proc_mach_note" class="text-xs text-blue-500 mt-1" style="display:none;">
+                        <i class="fas fa-info-circle"></i> Otomatis diisi "machining" untuk plant Connecting Rod.
+                    </p>
+                </div>
+
+                <div class="flex justify-end gap-3 pt-2 border-t border-slate-100">
+                    <button type="button" onclick="hideModal('addMachineModal')"
+                        class="px-8 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition">Batal</button>
+                    <button type="submit" id="am_submit_btn"
+                        class="bg-slate-700 hover:bg-slate-800 text-white px-10 py-3 rounded-xl font-black shadow-lg transition-all">Simpan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // ── Add Machine Modal JS ──
+        function showAddMachineModal() {
+            document.getElementById('addMachineForm').reset();
+            document.getElementById('am_line').innerHTML = '<option value="">-- Pilih Line --</option>';
+            document.getElementById('am_line').disabled = true;
+            document.getElementById('am_proc_mach_note').style.display = 'none';
+            showModal('addMachineModal');
+        }
+
+        async function amLoadLines() {
+            const plantSel = document.getElementById('am_plant');
+            const lineSel = document.getElementById('am_line');
+            const plantId = plantSel.value;
+
+            lineSel.innerHTML = '<option value="">-- Pilih Line --</option>';
+            lineSel.disabled = true;
+            document.getElementById('am_process_machine').value = '';
+            document.getElementById('am_proc_mach_note').style.display = 'none';
+
+            if (!plantId) return;
+
+            const data = await (await fetch(`?get_lines=${plantId}`)).json();
+            data.forEach(l => {
+                lineSel.innerHTML += `<option value="${l.id}">${l.line_name}</option>`;
+            });
+            lineSel.disabled = false;
+            amCheckConnectingRod();
+        }
+
+        function amCheckConnectingRod() {
+            const plantSel = document.getElementById('am_plant');
+            const plantName = plantSel.options[plantSel.selectedIndex]?.getAttribute('data-name') || '';
+            const procMachEl = document.getElementById('am_process_machine');
+            const noteEl = document.getElementById('am_proc_mach_note');
+
+            if (plantName.toLowerCase().includes('connecting rod')) {
+                procMachEl.value = 'machining';
+                procMachEl.readOnly = true;
+                noteEl.style.display = 'block';
+            } else {
+                if (procMachEl.readOnly) procMachEl.value = '';
+                procMachEl.readOnly = false;
+                noteEl.style.display = 'none';
+            }
+        }
+
+        document.getElementById('addMachineForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('am_submit_btn');
+            btn.disabled = true;
+            btn.textContent = 'Menyimpan...';
+
+            const formData = new FormData(this);
+            const res = await fetch('', {
+                method: 'POST',
+                body: new URLSearchParams(formData)
+            });
+            const data = await res.json();
+
+            btn.disabled = false;
+            btn.textContent = 'Simpan';
+
+            if (data.status === 'success') {
+                hideModal('addMachineModal');
+                alert('Machine berhasil ditambahkan!');
+            } else {
+                alert('Error: ' + (data.message || 'Gagal menyimpan'));
+            }
         });
     </script>
 
