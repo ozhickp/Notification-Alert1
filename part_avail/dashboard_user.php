@@ -13,6 +13,12 @@ if (!function_exists('formatDate') || !function_exists('calculateRemainingDays')
 
 $todayStr = date('Y-m-d');
 
+// Ambil nama user yang sedang login
+$stmtUser = $pdo->prepare("SELECT username FROM users WHERE id = ?");
+$stmtUser->execute([$_SESSION['user_id']]);
+$currentUser = $stmtUser->fetch(PDO::FETCH_ASSOC);
+$displayName = $currentUser['username'] ?? 'User';
+
 // ── Step 1: Selalu update remaining_day setiap dashboard dibuka ──────────────
 try {
     $s1 = $pdo->prepare("
@@ -381,12 +387,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } catch (\Exception $e) {
             }
 
+            $teknisi = trim($_POST['teknisi'] ?? '');
+
             // ── Simpan ke history_maintenance ──
             $pdo->prepare("INSERT INTO history_maintenance
                 (schedule_id, department, line, operation_process, machine_name,
                  process_machine, name_unit, maintenance_point, change_date_plan,
-                 note, photo_path, reported_by, reported_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                 note, photo_path, teknisi, reported_by, reported_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                 ->execute([
                     $schedId,
                     $histDept,
@@ -396,9 +404,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $sched['process_machine'],
                     $sched['name_unit'],
                     $sched['maintenance_point'],
-                    $sched['change_date_plan'], // simpan change_date_plan LAMA ke history
+                    $sched['change_date_plan'],
                     $note,
                     $photoPath,
+                    $teknisi,
                     $_SESSION['user_id'] ?? null,
                 ]);
 
@@ -606,13 +615,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
             } catch (\Exception $e) {
             }
 
+            $teknisi = trim($_POST['teknisi'] ?? '');
+
             // ── Simpan ke history_preventive ──
             try {
                 $pdo->prepare("INSERT INTO history_preventive
                     (schedule_id, department, line, operation_process, machine_name,
                      process_machine, name_unit, maintenance_point, change_date_plan,
-                     note, photo_path, reported_by, reported_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                     note, photo_path, teknisi, reported_by, reported_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                     ->execute([
                         $schedId,
                         $prevHistDept,
@@ -622,9 +633,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                         $sched['process_machine'],
                         $sched['name_unit'],
                         $sched['maintenance_point'],
-                        $sched['change_date_plan'], // simpan CDP lama ke history
+                        $sched['change_date_plan'],
                         $note,
                         $photoPath,
+                        $teknisi,
                         $_SESSION['user_id'] ?? null,
                     ]);
             } catch (\Exception $e) { /* history table optional */
@@ -767,11 +779,11 @@ function renderFormFields(string $prefix, array $plants): string
                 <input type="text" id="{$editDeptId}" class="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 font-medium text-slate-600" readonly>
             </div>
             <div>
-                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Line</label>
+                <label class="block text-xs font-black text-slate-500 uppercase mb-1">Line</label>
                 <input type="text" id="{$editLineId}" class="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 font-medium text-slate-600" readonly>
             </div>
             <div>
-                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Operation Process</label>
+                <label class="block text-xs font-black text-slate-500 uppercase mb-1">Operation Process</label>
                 <input type="text" id="{$editOpId}" name="operation_process" class="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 font-medium text-slate-600" readonly>
             </div>
         </div>
@@ -789,14 +801,14 @@ HTML;
                 </select>
             </div>
             <div>
-                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Line</label>
+                <label class="block text-xs font-black text-slate-500 uppercase mb-1">Line</label>
                 <select name="line" id="{$prefix}_line_select" onchange="handleLineChange('{$prefix}')"
                     class="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 outline-none cursor-not-allowed" disabled>
                     <option value="">-- Choose Line --</option>
                 </select>
             </div>
             <div>
-                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Operation Process</label>
+                <label class="block text-xs font-black text-slate-500 uppercase mb-1">Operation Process</label>
                 <select name="operation_process" id="{$prefix}_op_select" onchange="handleOpChange('{$prefix}')"
                     class="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 outline-none cursor-not-allowed" disabled>
                     <option value="">-- Choose Process --</option>
@@ -811,12 +823,12 @@ HTML;
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 border-t pt-6">
             <div>
-                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Machine Name</label>
+                <label class="block text-xs font-black text-slate-500 uppercase mb-1">Machine Name</label>
                 <input type="text" name="machine_name" id="{$prefix}_machine_name"
                     class="w-full border border-slate-200 rounded-xl px-4 py-3 bg-slate-50 font-bold" readonly>
             </div>
             <div>
-                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Process Machine</label>
+                <label class="block text-xs font-black text-slate-500 uppercase mb-1">Process Machine</label>
                 <input type="text" name="process_machine" id="{$prefix}_process_machine"
                     class="w-full border border-slate-200 rounded-xl px-4 py-3 bg-slate-50 font-bold" readonly>
             </div>
@@ -1035,6 +1047,12 @@ HTML;
                 <p class="text-gray-500 mt-1">Preventive and Predictive Maintenance</p>
             </div>
             <div class="flex items-center gap-3 flex-wrap">
+                <div class="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-xl">
+                    <div class="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-user text-white text-xs"></i>
+                    </div>
+                    <span class="text-sm font-bold text-slate-700"><?= htmlspecialchars($displayName) ?></span>
+                </div>
                 <a href="logout_user.php" onclick="return confirm('Apakah Anda yakin ingin keluar?')"
                     class="bg-red-100 hover:bg-red-200 text-red-600 px-5 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 text-sm">
                     <i class="fas fa-sign-out-alt"></i> Logout
@@ -1790,13 +1808,19 @@ HTML;
                     <p class="text-xs text-slate-400 mt-1">Last Change akan diperbarui ke tanggal ini.</p>
                 </div>
                 <div class="mb-3">
+                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Teknisi <span class="text-red-500">*</span></label>
+                    <input type="text" name="teknisi" id="report_teknisi" required
+                        placeholder="Nama teknisi yang mengerjakan..."
+                        class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-4 focus:ring-emerald-100 outline-none transition text-sm">
+                </div>
+                <div class="mb-3">
                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Keterangan / Note <span class="text-red-500">*</span></label>
                     <textarea name="note" id="report_note" rows="2" required
                         placeholder="Tuliskan detail pekerjaan maintenance yang dilakukan..."
                         class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-4 focus:ring-emerald-100 outline-none transition text-sm resize-none"></textarea>
                 </div>
                 <div class="mb-3">
-                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Foto Dokumentasi (opsional)</label>
+                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Foto Dokumentasi <span class="text-red-500">*</span></label>
                     <div class="border-2 border-dashed border-slate-200 rounded-xl p-3 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50/30 transition"
                         onclick="document.getElementById('report_photo').click()">
                         <i class="fas fa-image text-3xl text-slate-200 mb-1 block"></i>
@@ -1942,6 +1966,29 @@ HTML;
             showModal('reportModal');
         }
         async function submitReport() {
+            // Validasi wajib isi
+            const teknisi = document.getElementById('report_teknisi')?.value?.trim();
+            const note = document.getElementById('report_note')?.value?.trim();
+            const photo = document.getElementById('report_photo')?.files[0];
+            const actualDate = document.getElementById('report_actual_date')?.value;
+
+            if (!actualDate) {
+                showAlert('reportAlert', 'error', '❌ Tanggal aktual pekerjaan wajib diisi.');
+                return;
+            }
+            if (!teknisi) {
+                showAlert('reportAlert', 'error', '❌ Nama teknisi wajib diisi.');
+                return;
+            }
+            if (!note) {
+                showAlert('reportAlert', 'error', '❌ Keterangan / Note wajib diisi.');
+                return;
+            }
+            if (!photo) {
+                showAlert('reportAlert', 'error', '❌ Foto dokumentasi wajib dilampirkan.');
+                return;
+            }
+
             const fd = new FormData(document.getElementById('reportForm'));
             const btn = document.getElementById('btnSubmitReport');
             if (btn.disabled) return;
@@ -2379,6 +2426,36 @@ HTML;
             showModal('prevReportModal');
         }
         async function submitPrevReport() {
+            // Validasi wajib isi
+            const teknisi = document.getElementById('prev_report_teknisi')?.value?.trim();
+            const note = document.querySelector('#prevReportForm textarea[name="note"]')?.value?.trim();
+            const photo = document.getElementById('prev_report_photo')?.files[0];
+            const actualDate = document.getElementById('prev_report_actual_date')?.value;
+            const al = document.getElementById('prevReportAlert');
+
+            const showErr = (msg) => {
+                al.className = 'rounded-xl p-3 mb-4 text-sm font-medium border bg-red-50 text-red-800 border-red-200';
+                al.textContent = msg;
+                al.classList.remove('hidden');
+            };
+
+            if (!actualDate) {
+                showErr('❌ Tanggal aktual pekerjaan wajib diisi.');
+                return;
+            }
+            if (!teknisi) {
+                showErr('❌ Nama teknisi wajib diisi.');
+                return;
+            }
+            if (!note) {
+                showErr('❌ Keterangan / Note wajib diisi.');
+                return;
+            }
+            if (!photo) {
+                showErr('❌ Foto dokumentasi wajib dilampirkan.');
+                return;
+            }
+
             const fd = new FormData(document.getElementById('prevReportForm'));
             const btn = document.getElementById('btnSubmitPrevReport');
             if (btn.disabled) return;
@@ -2620,12 +2697,18 @@ HTML;
                     <p class="text-xs text-slate-400 mt-1">Last Change akan diperbarui ke tanggal ini, dan Next Change = tanggal ini + interval.</p>
                 </div>
                 <div class="mb-3">
+                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Teknisi <span class="text-red-500">*</span></label>
+                    <input type="text" name="teknisi" id="prev_report_teknisi" required
+                        placeholder="Nama teknisi yang mengerjakan..."
+                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-teal-100 outline-none transition text-sm">
+                </div>
+                <div class="mb-3">
                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Keterangan / Note <span class="text-red-500">*</span></label>
                     <textarea name="note" rows="3" required placeholder="Tuliskan detail pekerjaan preventive maintenance..."
                         class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-teal-100 outline-none transition text-sm resize-none"></textarea>
                 </div>
                 <div class="mb-3">
-                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Foto Dokumentasi (opsional)</label>
+                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Foto Dokumentasi <span class="text-red-500">*</span></label>
                     <div class="border-2 border-dashed border-slate-200 rounded-xl p-3 text-center cursor-pointer hover:border-teal-400 hover:bg-teal-50/30 transition"
                         onclick="document.getElementById('prev_report_photo').click()">
                         <i class="fas fa-image text-2xl text-slate-200 mb-1 block"></i>
@@ -2857,18 +2940,18 @@ HTML;
 
     <!-- Modal: Add Machine -->
     <div id="addMachineModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
-        <div class="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden">
-            <div class="bg-slate-700 px-8 py-6 flex justify-between items-center">
+        <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
+            <div class="bg-slate-700 px-5 py-4 flex justify-between items-center">
                 <h3 class="text-xl font-bold text-white"><i class="fas fa-cog mr-2"></i>Add Machine</h3>
                 <button onclick="hideModal('addMachineModal')" class="text-slate-300 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
             </div>
-            <form id="addMachineForm" class="p-8 space-y-5">
+            <form id="addMachineForm" class="p-5 space-y-3 max-h-[75vh] overflow-y-auto">
                 <input type="hidden" name="action" value="add_machine">
 
                 <div>
-                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Plant <span class="text-red-500">*</span></label>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-1">Plant <span class="text-red-500">*</span></label>
                     <select id="am_plant" name="plant_id"
-                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm"
+                        class="w-full border border-slate-200 rounded-xl px-3 py-2 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm"
                         onchange="amLoadLines()">
                         <option value="">-- Pilih Plant --</option>
                         <?php
@@ -2882,9 +2965,9 @@ HTML;
                 </div>
 
                 <div>
-                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Line <span class="text-red-500">*</span></label>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-1">Line <span class="text-red-500">*</span></label>
                     <select id="am_line" name="line_id"
-                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm"
+                        class="w-full border border-slate-200 rounded-xl px-3 py-2 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm"
                         onchange="amCheckConnectingRod()"
                         disabled>
                         <option value="">-- Pilih Line --</option>
@@ -2892,34 +2975,34 @@ HTML;
                 </div>
 
                 <div>
-                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Operation Process <span class="text-red-500">*</span></label>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-1">Operation Process <span class="text-red-500">*</span></label>
                     <input type="text" name="operation_process" id="am_op_process"
                         placeholder="Ketik operation process..."
-                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm">
+                        class="w-full border border-slate-200 rounded-xl px-3 py-2 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm">
                 </div>
 
                 <div>
-                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Machine Name <span class="text-red-500">*</span></label>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-1">Machine Name <span class="text-red-500">*</span></label>
                     <input type="text" name="machine_name" id="am_machine_name"
                         placeholder="Ketik nama mesin..."
-                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm">
+                        class="w-full border border-slate-200 rounded-xl px-3 py-2 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm">
                 </div>
 
                 <div>
-                    <label class="block text-xs font-black text-slate-500 uppercase mb-2">Process Machine</label>
+                    <label class="block text-xs font-black text-slate-500 uppercase mb-1">Process Machine</label>
                     <input type="text" name="process_machine" id="am_process_machine"
                         placeholder="Otomatis terisi jika plant Connecting Rod"
-                        class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm bg-slate-50">
+                        class="w-full border border-slate-200 rounded-xl px-3 py-2 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm bg-slate-50">
                     <p id="am_proc_mach_note" class="text-xs text-blue-500 mt-1" style="display:none;">
                         <i class="fas fa-info-circle"></i> Otomatis diisi "machining" untuk plant Connecting Rod.
                     </p>
                 </div>
 
-                <div class="flex justify-end gap-3 pt-2 border-t border-slate-100">
+                <div class="flex justify-end gap-2 pt-2 border-t border-slate-100">
                     <button type="button" onclick="hideModal('addMachineModal')"
-                        class="px-8 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition">Batal</button>
+                        class="px-6 py-2 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
                     <button type="submit" id="am_submit_btn"
-                        class="bg-slate-700 hover:bg-slate-800 text-white px-10 py-3 rounded-xl font-black shadow-lg transition-all">Simpan</button>
+                        class="bg-slate-700 hover:bg-slate-800 text-white px-8 py-2 rounded-xl font-black shadow-lg transition-all text-sm">Simpan</button>
                 </div>
             </form>
         </div>

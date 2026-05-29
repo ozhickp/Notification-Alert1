@@ -7,6 +7,12 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
     exit;
 }
 
+// Ambil nama user yang sedang login
+$stmtUser = $pdo->prepare("SELECT username FROM users WHERE id = ?");
+$stmtUser->execute([$_SESSION['user_id']]);
+$currentUser = $stmtUser->fetch(PDO::FETCH_ASSOC);
+$displayName = $currentUser['username'] ?? 'User';
+
 // ── Active tab ─────────────────────────────────────────────────────────────────
 $activeTab = ($_GET['tab'] ?? 'predictive') === 'preventive' ? 'preventive' : 'predictive';
 
@@ -49,7 +55,8 @@ $stmtPred = $pdo->prepare("
         h.id, h.schedule_id, h.department, h.line, h.operation_process,
         h.machine_name, h.process_machine, h.name_unit, h.maintenance_point,
         h.change_date_plan, h.note, h.photo_path, h.reported_by, h.reported_at,
-        u.username AS technician_name
+        h.teknisi,
+        u.username AS reported_by_name
     FROM history_maintenance h
     LEFT JOIN users u ON u.id = h.reported_by
     {$whereSqlPred}
@@ -67,7 +74,7 @@ try {
             h.id, h.schedule_id, h.department, h.line, h.operation_process,
             h.machine_name, h.process_machine, h.name_unit, h.maintenance_point,
             h.change_date_plan, h.note, h.photo_path, h.reported_by, h.reported_at,
-            u.username AS technician_name
+            h.teknisi, u.username AS reported_by_name
         FROM history_preventive h
         LEFT JOIN users u ON u.id = h.reported_by
         {$whereSqlPrev}
@@ -93,7 +100,7 @@ try {
 if (isset($_GET['get_detail'])) {
     $table = ($_GET['type'] ?? 'predictive') === 'preventive' ? 'history_preventive' : 'history_maintenance';
     $d = $pdo->prepare("
-        SELECT h.*, u.username AS technician_name
+        SELECT h.*, h.teknisi, u.username AS reported_by_name
         FROM {$table} h
         LEFT JOIN users u ON u.id = h.reported_by
         WHERE h.id = ?
@@ -125,7 +132,7 @@ if (isset($_GET['export'])) {
             $h['maintenance_point'],
             $h['change_date_plan'],
             $h['note'],
-            $h['technician_name'] ?? ('User #' . $h['reported_by']),
+            $h['teknisi'] ?? '-',
             $h['reported_at'],
         ]);
     }
@@ -188,6 +195,12 @@ if (isset($_GET['export'])) {
                 <p class="text-slate-500 text-sm mt-0.5">Log all completed maintenance reports.</p>
             </div>
             <div class="flex items-center gap-3 flex-wrap">
+                <div class="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-xl">
+                    <div class="w-7 h-7 rounded-full bg-amber-500 flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-user text-white text-xs"></i>
+                    </div>
+                    <span class="text-sm font-bold text-slate-700"><?= htmlspecialchars($displayName) ?></span>
+                </div>
                 <a href="logout_user.php" onclick="return confirm('Apakah Anda yakin ingin keluar?')"
                     class="bg-red-100 hover:bg-red-200 text-red-600 px-5 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 text-sm">
                     <i class="fas fa-sign-out-alt"></i> Logout
@@ -340,7 +353,8 @@ if (isset($_GET['export'])) {
                             <?php else: ?>
                                 <?php foreach ($historiesPred as $i => $h): ?>
                                     <?php
-                                    $techName   = $h['technician_name'] ?? ('User #' . $h['reported_by']);
+                                    $techName   = $h['teknisi'] ?? '-';
+                                    $reportedBy = $h['reported_by_name'] ?? ('User #' . $h['reported_by']);
                                     $reportedAt = $h['reported_at'] ? date('d M Y H:i', strtotime($h['reported_at'])) : '-';
                                     $planDate   = $h['change_date_plan'] ? date('d M Y', strtotime($h['change_date_plan'])) : '-';
                                     $noteShort  = mb_strlen($h['note'] ?? '') > 60 ? mb_substr($h['note'], 0, 60) . '…' : ($h['note'] ?? '-');
@@ -412,7 +426,8 @@ if (isset($_GET['export'])) {
                             <?php else: ?>
                                 <?php foreach ($historiesPrev as $i => $h): ?>
                                     <?php
-                                    $techName   = $h['technician_name'] ?? ('User #' . $h['reported_by']);
+                                    $techName   = $h['teknisi'] ?? '-';
+                                    $reportedBy = $h['reported_by_name'] ?? ('User #' . $h['reported_by']);
                                     $reportedAt = $h['reported_at'] ? date('d M Y H:i', strtotime($h['reported_at'])) : '-';
                                     $planDate   = $h['change_date_plan'] ? date('d M Y', strtotime($h['change_date_plan'])) : '-';
                                     $noteShort  = mb_strlen($h['note'] ?? '') > 60 ? mb_substr($h['note'], 0, 60) . '…' : ($h['note'] ?? '-');
@@ -741,7 +756,8 @@ if (isset($_GET['export'])) {
                 ${row('Change Date Plan', fmtDate(d.change_date_plan))}
                 <hr class="border-slate-100">
                 ${row('Note / Keterangan', `<span class="whitespace-pre-wrap">${fmt(d.note)}</span>`)}
-                ${row('Technician', fmt(d.technician_name || ('User #' + d.reported_by)))}
+                ${row('Technician', fmt(d.teknisi || '-'))}
+                ${row('Reported By', fmt(d.reported_by_name || ('User #' + d.reported_by)))}
                 ${row('Reported At', fmtDT(d.reported_at))}
                 ${row('Status', `<span class="${badgeColor} border px-3 py-0.5 rounded-full text-[10px] font-black uppercase">✓ Done</span>`)}
                 ${d.photo_path ? row('Foto', `<a href="${d.photo_path}" target="_blank" class="text-amber-600 font-bold text-xs hover:underline"><i class="fas fa-image mr-1"></i>Lihat Foto</a>` + photoHtml) : ''}

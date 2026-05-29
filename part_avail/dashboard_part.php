@@ -7,6 +7,12 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
     exit;
 }
 
+// Ambil nama user yang sedang login
+$stmtUser = $pdo->prepare("SELECT username FROM users WHERE id = ?");
+$stmtUser->execute([$_SESSION['user_id']]);
+$currentUser = $stmtUser->fetch(PDO::FETCH_ASSOC);
+$displayName = $currentUser['username'] ?? 'User';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
     try {
@@ -32,6 +38,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->execute([$itemCode, $itemDesc, $safety, $actual, $effective, $status]);
             $pid = (int)$pdo->lastInsertId();
             if ($actual > 0) $pdo->prepare("INSERT INTO stock_log (part_id,change_amount,note,changed_by) VALUES (?,?,?,?)")->execute([$pid, $actual, 'Initial stock', $_SESSION['user_id'] ?? null]);
+            // Catat history: stok awal 0 → actual
+            if ($actual > 0) logPartHistory($pdo, $pid, $itemCode, $itemDesc, 0, $actual, $actual);
             echo json_encode(['status' => 'success', 'message' => "Part '{$itemCode}' berhasil ditambahkan."]);
         } elseif ($_POST['action'] === 'update_stock') {
             $partId = (int)$_POST['part_id'];
@@ -53,6 +61,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $newStatus = getPartStatusStr($newActual, $safety);
             $pdo->prepare("UPDATE expenses_part SET actual_stock=?,effective_stock=?,status=? WHERE id=?")->execute([$newActual, $newEffective, $newStatus, $partId]);
             $pdo->prepare("INSERT INTO stock_log (part_id,change_amount,note,changed_by) VALUES (?,?,?,?)")->execute([$partId, $change, '', $_SESSION['user_id'] ?? null]);
+            // Catat history
+            $partInfo = $pdo->prepare("SELECT item_code, item_description FROM expenses_part WHERE id=?");
+            $partInfo->execute([$partId]);
+            $pi = $partInfo->fetch(PDO::FETCH_ASSOC);
+            logPartHistory($pdo, $partId, $pi['item_code'] ?? '', $pi['item_description'] ?? '', (int)$part['actual_stock'], $change, $newActual);
             echo json_encode(['status' => 'success', 'message' => 'Stok diperbarui', 'new_stock' => $newActual, 'new_effective' => $newEffective, 'new_status' => $newStatus]);
         } elseif ($_POST['action'] === 'import_parts') {
             if (!isset($_FILES['parts_file'])) {
@@ -129,11 +142,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $existingId = $stmtCheckPart->fetchColumn();
                     if ($existingId) {
                         // Sudah ada → UPDATE data lama
+                        // Ambil stok lama sebelum update
+                        $oldStockStmt = $pdo->prepare("SELECT actual_stock, item_description FROM expenses_part WHERE item_code=?");
+                        $oldStockStmt->execute([$code]);
+                        $oldRow = $oldStockStmt->fetch(PDO::FETCH_ASSOC);
+                        $oldActual = (int)($oldRow['actual_stock'] ?? 0);
                         $stmtUpdatePart->execute([$desc, $safety, $actual, $effective, $status, $code]);
+                        $diff = $actual - $oldActual;
+                        if ($diff !== 0) logPartHistory($pdo, (int)$existingId, $code, $desc ?? ($oldRow['item_description'] ?? ''), $oldActual, $diff, $actual);
                         $updated++;
                     } else {
                         // Belum ada → INSERT baru
                         $stmtInsertPart->execute([$code, $desc, $safety, $actual, $effective, $status]);
+                        $newId = (int)$pdo->lastInsertId();
+                        if ($actual > 0) logPartHistory($pdo, $newId, $code, $desc ?? '', 0, $actual, $actual);
                         $success++;
                     }
                 } catch (\Exception $e) {
@@ -158,6 +180,19 @@ if (isset($_GET['get_part'])) {
     $s->execute([(int)$_GET['get_part']]);
     echo json_encode($s->fetch(PDO::FETCH_ASSOC));
     exit;
+}
+
+/**
+ * Catat satu baris ke tabel history_part.
+ * $pdo, $_SESSION sudah tersedia di scope global.
+ */
+function logPartHistory(PDO $pdo, int $itemId, string $itemCode, string $itemDescription, int $lastStock, int $amountProcess, int $newStock): void
+{
+    $reportedBy = $_SESSION['user_id'] ?? null;
+    $pdo->prepare(
+        "INSERT INTO history_part (item_id, item_code, item_description, last_stock, amount_process, new_stock, reported_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())"
+    )->execute([$itemId, $itemCode, $itemDescription, $lastStock, $amountProcess, $newStock, $reportedBy]);
 }
 
 function getPartStatusStr(int $actual, int $safety): string
@@ -186,6 +221,17 @@ $zeroStock  = count(array_filter($parts, fn($p) => (int)$p['actual_stock'] === 0
 $lowStock   = count(array_filter($parts, fn($p) => (int)$p['actual_stock'] > 0 && (int)$p['actual_stock'] < (int)$p['safety_stock']));
 $inStock    = count(array_filter($parts, fn($p) => (int)$p['actual_stock'] === (int)$p['safety_stock']));
 $overstock  = count(array_filter($parts, fn($p) => (int)$p['actual_stock'] > (int)$p['safety_stock']));
+
+// Query history_part — 200 record terbaru
+$historyRows = $pdo->query(
+    "SELECT h.*, u.username AS reporter_name
+     FROM history_part h
+     LEFT JOIN users u ON u.id = h.reported_by
+     ORDER BY h.created_at DESC
+     LIMIT 200"
+)->fetchAll(PDO::FETCH_ASSOC);
+
+$activeTab = $_GET['tab'] ?? 'inventory';
 
 $partsByCategory = [
     'Zero Stock' => array_values(array_filter($parts, fn($p) => (int)$p['actual_stock'] === 0)),
@@ -305,6 +351,75 @@ $partsByCategory = [
         .stat-card:active {
             transform: translateY(0);
         }
+
+        /* ══ TABS ══ */
+        .tab-nav {
+            display: flex;
+            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 2rem;
+            gap: 0;
+        }
+
+        .tab-btn {
+            display: flex;
+            align-items: center;
+            gap: .45rem;
+            padding: .75rem 1.4rem;
+            font-size: .82rem;
+            font-weight: 700;
+            color: #94a3b8;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            cursor: pointer;
+            transition: color .15s, border-color .15s;
+            letter-spacing: .01em;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover:not(.active) {
+            color: #475569;
+            border-bottom-color: #cbd5e1;
+        }
+
+        .tab-btn.active {
+            color: #0f766e;
+            border-bottom-color: #0f766e;
+        }
+
+        .tab-btn .tab-count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 1.4rem;
+            height: 1.4rem;
+            padding: 0 .35rem;
+            border-radius: 9999px;
+            font-size: .65rem;
+            font-weight: 800;
+            background: #f1f5f9;
+            color: #64748b;
+            transition: background .15s, color .15s;
+        }
+
+        .tab-btn.active .tab-count {
+            background: #ccfbf1;
+            color: #0f766e;
+        }
+
+        /* ══ HISTORY BADGES ══ */
+        .hbadge-plus {
+            background: #d1fae5;
+            color: #065f46;
+            border-color: #6ee7b7;
+        }
+
+        .hbadge-minus {
+            background: #fee2e2;
+            color: #b91c1c;
+            border-color: #fca5a5;
+        }
     </style>
 </head>
 
@@ -335,6 +450,12 @@ $partsByCategory = [
                     class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-2xl font-bold shadow-lg shadow-emerald-100 transition-all flex items-center gap-2 text-sm">
                     <i class="fas fa-plus"></i> Tambah Part
                 </button>
+                <div class="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-xl">
+                    <div class="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-user text-white text-xs"></i>
+                    </div>
+                    <span class="text-sm font-bold text-slate-700"><?= htmlspecialchars($displayName) ?></span>
+                </div>
                 <a href="logout_user.php" onclick="return confirm('Apakah Anda yakin ingin keluar?')"
                     class="bg-red-100 hover:bg-red-200 text-red-600 px-5 py-3 rounded-2xl font-bold transition-all flex items-center gap-2 text-sm">
                     <i class="fas fa-sign-out-alt"></i> Logout
@@ -342,103 +463,216 @@ $partsByCategory = [
             </div>
         </div>
 
-        <!-- STAT CARDS -->
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-            <div class="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
-                <p class="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1">Total Parts</p>
-                <p class="text-3xl font-black text-slate-800"><?= $totalParts ?></p>
-            </div>
-            <div class="stat-card bg-red-50 p-5 rounded-3xl border border-red-100 shadow-sm" onclick="openCategoryModal('Zero Stock')">
-                <p class="text-red-400 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">Zero Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
-                <p class="text-3xl font-black text-red-600"><?= $zeroStock ?></p>
-            </div>
-            <div class="stat-card bg-orange-50 p-5 rounded-3xl border border-orange-100 shadow-sm" onclick="openCategoryModal('Low Stock')">
-                <p class="text-orange-400 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">Low Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
-                <p class="text-3xl font-black text-orange-600"><?= $lowStock ?></p>
-            </div>
-            <div class="stat-card bg-emerald-50 p-5 rounded-3xl border border-emerald-100 shadow-sm" onclick="openCategoryModal('In Stock')">
-                <p class="text-emerald-500 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">In Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
-                <p class="text-3xl font-black text-emerald-600"><?= $inStock ?></p>
-            </div>
-            <div class="stat-card bg-violet-50 p-5 rounded-3xl border border-violet-100 shadow-sm" onclick="openCategoryModal('Over Stock')">
-                <p class="text-violet-400 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">Over Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
-                <p class="text-3xl font-black text-violet-600"><?= $overstock ?></p>
-            </div>
+        <!-- TAB NAVIGATION -->
+        <div class="tab-nav">
+            <button class="tab-btn <?= $activeTab === 'inventory' ? 'active' : '' ?>" onclick="switchTab('inventory')">
+                <i class="fas fa-boxes" style="font-size:.8rem;"></i>
+                Inventory
+                <span class="tab-count"><?= $totalParts ?></span>
+            </button>
+            <button class="tab-btn <?= $activeTab === 'history' ? 'active' : '' ?>" onclick="switchTab('history')">
+                <i class="fas fa-clock-rotate-left" style="font-size:.8rem;"></i>
+                History Stok
+                <span class="tab-count"><?= count($historyRows) ?></span>
+            </button>
         </div>
 
-        <!-- TABEL -->
-        <div class="bg-white rounded-[2rem] shadow-xl border border-slate-200 overflow-hidden">
-            <div style="max-height:520px; overflow-y:auto; overflow-x:auto;">
-                <table class="w-full text-left border-collapse" id="partsTable">
-                    <thead class="bg-slate-800 text-white" style="background:linear-gradient(135deg,#0f766e,#0d9488);position:sticky;top:0;z-index:10;">
-                        <tr>
-                            <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest">No</th>
-                            <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest">Item Code</th>
-                            <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest">Item Description</th>
-                            <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Safety Stock</th>
-                            <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Actual Stock</th>
-                            <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Effective Stock</th>
-                            <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Status</th>
-                            <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody id="partsBody" class="divide-y divide-slate-100">
-                        <?php if (empty($parts)): ?>
+        <!-- ══════════════ TAB: INVENTORY ══════════════ -->
+        <div id="tab-inventory" class="<?= $activeTab !== 'inventory' ? 'hidden' : '' ?>">
+
+            <!-- STAT CARDS -->
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+                <div class="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                    <p class="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1">Total Parts</p>
+                    <p class="text-3xl font-black text-slate-800"><?= $totalParts ?></p>
+                </div>
+                <div class="stat-card bg-red-50 p-5 rounded-3xl border border-red-100 shadow-sm" onclick="openCategoryModal('Zero Stock')">
+                    <p class="text-red-400 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">Zero Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
+                    <p class="text-3xl font-black text-red-600"><?= $zeroStock ?></p>
+                </div>
+                <div class="stat-card bg-orange-50 p-5 rounded-3xl border border-orange-100 shadow-sm" onclick="openCategoryModal('Low Stock')">
+                    <p class="text-orange-400 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">Low Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
+                    <p class="text-3xl font-black text-orange-600"><?= $lowStock ?></p>
+                </div>
+                <div class="stat-card bg-emerald-50 p-5 rounded-3xl border border-emerald-100 shadow-sm" onclick="openCategoryModal('In Stock')">
+                    <p class="text-emerald-500 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">In Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
+                    <p class="text-3xl font-black text-emerald-600"><?= $inStock ?></p>
+                </div>
+                <div class="stat-card bg-violet-50 p-5 rounded-3xl border border-violet-100 shadow-sm" onclick="openCategoryModal('Over Stock')">
+                    <p class="text-violet-400 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">Over Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
+                    <p class="text-3xl font-black text-violet-600"><?= $overstock ?></p>
+                </div>
+            </div>
+
+            <!-- TABEL -->
+            <div class="bg-white rounded-[2rem] shadow-xl border border-slate-200 overflow-hidden">
+                <div style="max-height:520px; overflow-y:auto; overflow-x:auto;">
+                    <table class="w-full text-left border-collapse" id="partsTable">
+                        <thead class="bg-slate-800 text-white" style="background:linear-gradient(135deg,#0f766e,#0d9488);position:sticky;top:0;z-index:10;">
                             <tr>
-                                <td colspan="8" class="px-6 py-20 text-center text-slate-400">
-                                    <i class="fas fa-box-open text-5xl mb-4 block text-slate-200"></i>
-                                    <p class="font-semibold">Belum ada data part.</p>
-                                    <p class="text-sm mt-1">Tambah manual atau import dari Excel.</p>
-                                </td>
+                                <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest">No</th>
+                                <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest">Item Code</th>
+                                <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest">Item Description</th>
+                                <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Safety Stock</th>
+                                <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Actual Stock</th>
+                                <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Effective Stock</th>
+                                <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Status</th>
+                                <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest text-center">Action</th>
                             </tr>
-                        <?php else: ?>
-                            <?php foreach ($parts as $i => $part):
-                                $actual    = (int)$part['actual_stock'];
-                                $safety    = (int)$part['safety_stock'];
-                                $effective = (int)$part['effective_stock'];
-                                $status    = getPartStatusStr($actual, $safety);
-                                $badgeCls  = getPartStatusClass($status);
-                            ?>
-                                <tr class="part-row transition-colors"
-                                    data-search="<?= htmlspecialchars(strtolower($part['item_code'] . ' ' . ($part['item_description'] ?? ''))) ?>">
-                                    <td class="px-6 py-4 text-slate-400 text-sm font-medium"><?= $i + 1 ?></td>
-                                    <td class="px-6 py-4 font-mono font-bold text-slate-700 text-sm tracking-wide"><?= htmlspecialchars($part['item_code']) ?></td>
-                                    <td class="px-6 py-4 text-slate-700 text-sm font-medium max-w-xs"><?= htmlspecialchars($part['item_description'] ?? '-') ?></td>
-                                    <td class="px-6 py-4 text-center">
-                                        <span class="inline-block bg-slate-100 text-slate-600 font-bold px-3 py-1 rounded-lg text-sm"><?= $safety ?></span>
-                                    </td>
-                                    <td class="px-6 py-4 text-center font-black text-lg
-                            <?= $actual === 0 ? 'text-red-500' : ($actual < $safety ? 'text-orange-500' : ($actual === $safety ? 'text-emerald-600' : 'text-violet-600')) ?>">
-                                        <?= $actual ?>
-                                    </td>
-                                    <td class="px-6 py-4 text-center font-bold text-sm <?= $effective < 0 ? 'text-red-500' : 'text-slate-600' ?>">
-                                        <?= ($effective >= 0 ? '+' : '') . $effective ?>
-                                    </td>
-                                    <td class="px-6 py-4 text-center">
-                                        <span class="badge <?= $badgeCls ?>"><?= $status ?></span>
-                                    </td>
-                                    <td class="px-6 py-4 text-center">
-                                        <div class="flex items-center justify-center gap-2">
-                                            <button onclick="openEditModal(<?= $part['id'] ?>,'<?= htmlspecialchars($part['item_code'], ENT_QUOTES) ?>','<?= htmlspecialchars($part['item_description'] ?? '', ENT_QUOTES) ?>',<?= $actual ?>,<?= $safety ?>)"
-                                                class="bg-emerald-400 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl font-bold text-xs transition flex items-center gap-1.5">
-                                                <i class="fas fa-pencil"></i> Edit
-                                            </button>
-                                        </div>
+                        </thead>
+                        <tbody id="partsBody" class="divide-y divide-slate-100">
+                            <?php if (empty($parts)): ?>
+                                <tr>
+                                    <td colspan="8" class="px-6 py-20 text-center text-slate-400">
+                                        <i class="fas fa-box-open text-5xl mb-4 block text-slate-200"></i>
+                                        <p class="font-semibold">Belum ada data part.</p>
+                                        <p class="text-sm mt-1">Tambah manual atau import dari Excel.</p>
                                     </td>
                                 </tr>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-            <?php if (!empty($parts)): ?>
-                <div class="px-6 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
-                    <span id="countLabel">Menampilkan <?= count($parts) ?> part</span>
-                    <?php date_default_timezone_set('Asia/Jakarta'); ?>
-                    <span>Last updated: <?= date('d M Y H:i') ?></span>
+                            <?php else: ?>
+                                <?php foreach ($parts as $i => $part):
+                                    $actual    = (int)$part['actual_stock'];
+                                    $safety    = (int)$part['safety_stock'];
+                                    $effective = (int)$part['effective_stock'];
+                                    $status    = getPartStatusStr($actual, $safety);
+                                    $badgeCls  = getPartStatusClass($status);
+                                ?>
+                                    <tr class="part-row transition-colors"
+                                        data-search="<?= htmlspecialchars(strtolower($part['item_code'] . ' ' . ($part['item_description'] ?? ''))) ?>">
+                                        <td class="px-6 py-4 text-slate-400 text-sm font-medium"><?= $i + 1 ?></td>
+                                        <td class="px-6 py-4 font-mono font-bold text-slate-700 text-sm tracking-wide"><?= htmlspecialchars($part['item_code']) ?></td>
+                                        <td class="px-6 py-4 text-slate-700 text-sm font-medium max-w-xs"><?= htmlspecialchars($part['item_description'] ?? '-') ?></td>
+                                        <td class="px-6 py-4 text-center">
+                                            <span class="inline-block bg-slate-100 text-slate-600 font-bold px-3 py-1 rounded-lg text-sm"><?= $safety ?></span>
+                                        </td>
+                                        <td class="px-6 py-4 text-center font-black text-lg
+                            <?= $actual === 0 ? 'text-red-500' : ($actual < $safety ? 'text-orange-500' : ($actual === $safety ? 'text-emerald-600' : 'text-violet-600')) ?>">
+                                            <?= $actual ?>
+                                        </td>
+                                        <td class="px-6 py-4 text-center font-bold text-sm <?= $effective < 0 ? 'text-red-500' : 'text-slate-600' ?>">
+                                            <?= ($effective >= 0 ? '+' : '') . $effective ?>
+                                        </td>
+                                        <td class="px-6 py-4 text-center">
+                                            <span class="badge <?= $badgeCls ?>"><?= $status ?></span>
+                                        </td>
+                                        <td class="px-6 py-4 text-center">
+                                            <div class="flex items-center justify-center gap-2">
+                                                <button onclick="openEditModal(<?= $part['id'] ?>,'<?= htmlspecialchars($part['item_code'], ENT_QUOTES) ?>','<?= htmlspecialchars($part['item_description'] ?? '', ENT_QUOTES) ?>',<?= $actual ?>,<?= $safety ?>)"
+                                                    class="bg-emerald-400 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl font-bold text-xs transition flex items-center gap-1.5">
+                                                    <i class="fas fa-pencil"></i> Edit
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
                 </div>
-            <?php endif; ?>
-        </div>
+                <?php if (!empty($parts)): ?>
+                    <div class="px-6 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
+                        <span id="countLabel">Menampilkan <?= count($parts) ?> part</span>
+                        <?php date_default_timezone_set('Asia/Jakarta'); ?>
+                        <span>Last updated: <?= date('d M Y H:i') ?></span>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+        </div><!-- /tab-inventory -->
+
+        <!-- ══════════════ TAB: HISTORY ══════════════ -->
+        <div id="tab-history" class="<?= $activeTab !== 'history' ? 'hidden' : '' ?>">
+
+            <!-- Filter Bar -->
+            <div class="flex flex-col sm:flex-row gap-3 mb-5">
+                <div class="relative flex-1">
+                    <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                    <input type="text" id="histSearchInput" placeholder="Cari kode atau deskripsi part..."
+                        oninput="filterHistory()"
+                        class="pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-2xl w-full focus:ring-4 focus:ring-emerald-100 outline-none transition shadow-sm text-sm">
+                </div>
+                <select id="histFilterType" onchange="filterHistory()"
+                    class="bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm font-semibold text-slate-600 focus:ring-4 focus:ring-emerald-100 outline-none shadow-sm">
+                    <option value="">Semua Perubahan</option>
+                    <option value="plus">Penambahan (+)</option>
+                    <option value="minus">Pengurangan (−)</option>
+                </select>
+            </div>
+
+            <!-- History Table -->
+            <div class="bg-white rounded-[2rem] shadow-xl border border-slate-200 overflow-hidden">
+                <div style="max-height:560px; overflow-y:auto; overflow-x:auto;">
+                    <table class="w-full text-left border-collapse" id="historyTable">
+                        <thead style="background:linear-gradient(135deg,#1e293b,#334155);position:sticky;top:0;z-index:10;">
+                            <tr>
+                                <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white">No</th>
+                                <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white">Waktu</th>
+                                <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white">Item Code</th>
+                                <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white">Deskripsi</th>
+                                <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white text-center">Stok Lama</th>
+                                <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white text-center">Perubahan</th>
+                                <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white text-center">Stok Baru</th>
+                                <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white">Dilaporkan Oleh</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody" class="divide-y divide-slate-100">
+                            <?php if (empty($historyRows)): ?>
+                                <tr>
+                                    <td colspan="8" class="px-6 py-20 text-center text-slate-400">
+                                        <i class="fas fa-history text-5xl mb-4 block text-slate-200"></i>
+                                        <p class="font-semibold">Belum ada history perubahan stok.</p>
+                                        <p class="text-sm mt-1">History akan muncul setelah ada perubahan stok.</p>
+                                    </td>
+                                </tr>
+                            <?php else: ?>
+                                <?php foreach ($historyRows as $i => $h):
+                                    $amt      = (int)$h['amount_process'];
+                                    $isPlus   = $amt >= 0;
+                                    $amtLabel = ($isPlus ? '+' : '') . $amt;
+                                    $hbadge   = $isPlus ? 'hbadge-plus' : 'hbadge-minus';
+                                    $reporter = htmlspecialchars($h['reporter_name'] ?? ('User #' . $h['reported_by']));
+                                    $searchVal = strtolower($h['item_code'] . ' ' . ($h['item_description'] ?? ''));
+                                ?>
+                                    <tr class="history-row transition-colors hover:bg-slate-50"
+                                        data-search="<?= htmlspecialchars($searchVal) ?>"
+                                        data-type="<?= $isPlus ? 'plus' : 'minus' ?>">
+                                        <td class="px-5 py-3.5 text-slate-400 text-sm font-medium"><?= $i + 1 ?></td>
+                                        <td class="px-5 py-3.5 text-slate-500 text-xs font-medium whitespace-nowrap">
+                                            <?= date('d M Y', strtotime($h['created_at'])) ?>
+                                            <span class="block text-slate-400"><?= date('H:i:s', strtotime($h['created_at'])) ?></span>
+                                        </td>
+                                        <td class="px-5 py-3.5 font-mono font-bold text-slate-700 text-sm tracking-wide"><?= htmlspecialchars($h['item_code']) ?></td>
+                                        <td class="px-5 py-3.5 text-slate-600 text-sm max-w-[220px] truncate" title="<?= htmlspecialchars($h['item_description'] ?? '') ?>">
+                                            <?= htmlspecialchars($h['item_description'] ?? '-') ?>
+                                        </td>
+                                        <td class="px-5 py-3.5 text-center font-bold text-slate-600 text-sm"><?= (int)$h['last_stock'] ?></td>
+                                        <td class="px-5 py-3.5 text-center">
+                                            <span class="badge <?= $hbadge ?>"><?= $amtLabel ?></span>
+                                        </td>
+                                        <td class="px-5 py-3.5 text-center font-black text-slate-800 text-sm"><?= (int)$h['new_stock'] ?></td>
+                                        <td class="px-5 py-3.5 text-slate-600 text-sm">
+                                            <div class="flex items-center gap-2">
+                                                <span class="w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 text-[10px] font-black">
+                                                    <?= strtoupper(substr($h['reporter_name'] ?? 'U', 0, 1)) ?>
+                                                </span>
+                                                <?= $reporter ?>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php if (!empty($historyRows)): ?>
+                    <div class="px-6 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
+                        <span id="histCountLabel">Menampilkan <?= count($historyRows) ?> record</span>
+                        <span>Max 200 record terbaru</span>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+        </div><!-- /tab-history -->
 
     </div><!-- /container -->
 
@@ -905,6 +1139,37 @@ $partsByCategory = [
             el.className = 'rounded-xl p-3 mb-4 text-sm font-medium border whitespace-pre-line ' + (type === 'success' ? 'bg-green-50 text-green-800 border-green-200' : 'bg-red-50 text-red-800 border-red-200');
             el.textContent = msg;
             el.classList.remove('hidden');
+        }
+
+        // ── Tab Switching ──
+        function switchTab(tab) {
+            ['inventory', 'history'].forEach(t => {
+                document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab);
+            });
+            document.querySelectorAll('.tab-btn').forEach((btn, i) => {
+                const tabs = ['inventory', 'history'];
+                btn.classList.toggle('active', tabs[i] === tab);
+            });
+            // Update URL tanpa reload
+            const url = new URL(window.location);
+            url.searchParams.set('tab', tab);
+            history.replaceState(null, '', url);
+        }
+
+        // ── History Filter ──
+        function filterHistory() {
+            const q = document.getElementById('histSearchInput').value.toLowerCase().trim();
+            const typ = document.getElementById('histFilterType').value;
+            let shown = 0;
+            document.querySelectorAll('#historyBody tr[data-search]').forEach(row => {
+                const matchQ = !q || row.dataset.search.includes(q);
+                const matchTyp = !typ || row.dataset.type === typ;
+                const vis = matchQ && matchTyp;
+                row.style.display = vis ? '' : 'none';
+                if (vis) shown++;
+            });
+            const lbl = document.getElementById('histCountLabel');
+            if (lbl) lbl.textContent = 'Menampilkan ' + shown + ' record';
         }
     </script>
 </body>

@@ -611,52 +611,96 @@ $prevSchedByStatus = [
                 $prevReminder = count($prevSchedByStatus['reminder']);
                 $prevSecure   = count($prevSchedByStatus['secure']);
                 ?>
-                <!-- Overview baris 1: ringkasan total + critical -->
-                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-3">
-                    <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                        <div class="flex items-center gap-2 mb-2"><span class="w-2 h-2 rounded-full bg-blue-500 inline-block"></span><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Predictive</span></div>
-                        <div class="text-3xl font-black text-blue-600"><?= count($schedules) ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Total Schedule</div>
+
+                <!-- ── Baris 1: Predictive Maintenance ──────────────────── -->
+                <div class="mb-2">
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="w-3 h-3 rounded-full bg-blue-500 inline-block"></span>
+                        <span class="text-xs font-black text-slate-500 uppercase tracking-widest">Predictive Maintenance</span>
+                        <span class="bg-blue-100 text-blue-700 text-[10px] font-black px-2 py-0.5 rounded-full"><?= count($schedules) ?> total</span>
                     </div>
-                    <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                        <div class="flex items-center gap-2 mb-2"><span class="w-2 h-2 rounded-full bg-teal-500 inline-block"></span><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Preventive</span></div>
-                        <div class="text-3xl font-black text-teal-600"><?= count($prevSchedules) ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Total Schedule</div>
-                    </div>
-                    <div class="bg-red-50 rounded-2xl p-5 border border-red-200 shadow-sm">
-                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-exclamation-circle text-red-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Overdue</span></div>
-                        <div class="text-3xl font-black text-red-600"><?= $predOverdue + $prevOverdue ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Pred + Prev</div>
-                        <div class="text-[10px] text-red-400 mt-1"><?= $predOverdue ?> pred &bull; <?= $prevOverdue ?> prev</div>
-                    </div>
-                    <div class="bg-amber-50 rounded-2xl p-5 border border-amber-200 shadow-sm">
-                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-triangle-exclamation text-amber-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Alert</span></div>
-                        <div class="text-3xl font-black text-amber-600"><?= $predAlert + $prevAlert ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">≤ 7 Hari Tersisa</div>
-                        <div class="text-[10px] text-amber-400 mt-1"><?= $predAlert ?> pred &bull; <?= $prevAlert ?> prev</div>
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                        <div class="p-5 rounded-2xl border shadow-sm" style="background:#fee2e2;border-color:#fca5a5;">
+                            <p class="text-[10px] font-black uppercase tracking-widest mb-1" style="color:#b91c1c;">Overdue</p>
+                            <p class="text-3xl font-black" style="color:#b91c1c;"><?= $predOverdue ?></p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold">Lewat batas rencana</p>
+                        </div>
+                        <div class="p-5 rounded-2xl border shadow-sm" style="background:#fef9c3;border-color:#fde047;">
+                            <p class="text-[10px] font-black uppercase tracking-widest mb-1" style="color:#854d0e;">Alert</p>
+                            <p class="text-3xl font-black" style="color:#854d0e;"><?= $predAlert ?></p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold">≤ 7 hari tersisa</p>
+                        </div>
+                        <div class="p-5 rounded-2xl border shadow-sm" style="background:#ffedd5;border-color:#fdba74;">
+                            <p class="text-[10px] font-black uppercase tracking-widest mb-1" style="color:#c2410c;">Reminder</p>
+                            <p class="text-3xl font-black" style="color:#c2410c;"><?= $predReminder ?></p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold">Dalam window reminder</p>
+                        </div>
+                        <div class="p-5 rounded-2xl border shadow-sm" style="background:#d1fae5;border-color:#6ee7b7;">
+                            <p class="text-[10px] font-black uppercase tracking-widest mb-1" style="color:#065f46;">Secure</p>
+                            <p class="text-3xl font-black" style="color:#065f46;"><?= $predSecure ?></p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold">Aman / belum perlu aksi</p>
+                        </div>
                     </div>
                 </div>
-                <!-- Overview baris 2: breakdown detail -->
-                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-                    <div class="bg-blue-50 rounded-2xl p-5 border border-blue-100 shadow-sm">
-                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-bell text-blue-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Reminder Pred.</span></div>
-                        <div class="text-3xl font-black text-blue-600"><?= $predReminder ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Predictive</div>
+
+                <!-- ── Baris 2: Preventive Maintenance ──────────────────── -->
+                <div class="mb-2">
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="w-3 h-3 rounded-full bg-teal-500 inline-block"></span>
+                        <span class="text-xs font-black text-slate-500 uppercase tracking-widest">Preventive Maintenance</span>
+                        <span class="bg-teal-100 text-teal-700 text-[10px] font-black px-2 py-0.5 rounded-full"><?= count($prevSchedules) ?> total</span>
                     </div>
-                    <div class="bg-emerald-50 rounded-2xl p-5 border border-emerald-100 shadow-sm">
-                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-check-circle text-emerald-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Aman Pred.</span></div>
-                        <div class="text-3xl font-black text-emerald-600"><?= $predSecure ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Predictive</div>
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                        <div class="p-5 rounded-2xl border shadow-sm" style="background:#fee2e2;border-color:#fca5a5;">
+                            <p class="text-[10px] font-black uppercase tracking-widest mb-1" style="color:#b91c1c;">Overdue</p>
+                            <p class="text-3xl font-black" style="color:#b91c1c;"><?= $prevOverdue ?></p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold">Lewat batas rencana</p>
+                        </div>
+                        <div class="p-5 rounded-2xl border shadow-sm" style="background:#fef9c3;border-color:#fde047;">
+                            <p class="text-[10px] font-black uppercase tracking-widest mb-1" style="color:#854d0e;">Alert</p>
+                            <p class="text-3xl font-black" style="color:#854d0e;"><?= $prevAlert ?></p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold">≤ 7 hari tersisa</p>
+                        </div>
+                        <div class="p-5 rounded-2xl border shadow-sm" style="background:#ffedd5;border-color:#fdba74;">
+                            <p class="text-[10px] font-black uppercase tracking-widest mb-1" style="color:#c2410c;">Reminder</p>
+                            <p class="text-3xl font-black" style="color:#c2410c;"><?= $prevReminder ?></p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold">Dalam window reminder</p>
+                        </div>
+                        <div class="p-5 rounded-2xl border shadow-sm" style="background:#d1fae5;border-color:#6ee7b7;">
+                            <p class="text-[10px] font-black uppercase tracking-widest mb-1" style="color:#065f46;">Secure</p>
+                            <p class="text-3xl font-black" style="color:#065f46;"><?= $prevSecure ?></p>
+                            <p class="text-xs text-slate-500 mt-1 font-semibold">Aman / belum perlu aksi</p>
+                        </div>
                     </div>
-                    <div class="bg-teal-50 rounded-2xl p-5 border border-teal-100 shadow-sm">
-                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-bell text-teal-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Reminder Prev.</span></div>
-                        <div class="text-3xl font-black text-teal-600"><?= $prevReminder ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Preventive</div>
+                </div>
+
+                <!-- ── Baris 3: Part Availability + History + User ───────── -->
+                <div class="mb-2">
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span>
+                        <span class="text-xs font-black text-slate-500 uppercase tracking-widest">Part Availability &amp; Sistem</span>
                     </div>
-                    <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                        <div class="flex items-center gap-2 mb-2"><i class="fas fa-users text-slate-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">User</span></div>
-                        <div class="text-3xl font-black text-slate-700"><?= $total_users ?></div>
-                        <div class="text-xs text-slate-500 font-semibold mt-1 uppercase tracking-wide">Total User Aktif</div>
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                        <div class="bg-red-50 rounded-2xl p-5 border border-red-200 shadow-sm">
+                            <div class="flex items-center gap-2 mb-2"><i class="fas fa-box-open text-red-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Zero Stock</span></div>
+                            <div class="text-3xl font-black text-red-600"><?= $zeroStock ?></div>
+                            <div class="text-xs text-slate-500 font-semibold mt-1">Stok habis</div>
+                        </div>
+                        <div class="bg-amber-50 rounded-2xl p-5 border border-amber-200 shadow-sm">
+                            <div class="flex items-center gap-2 mb-2"><i class="fas fa-box text-amber-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Low Stock</span></div>
+                            <div class="text-3xl font-black text-amber-600"><?= $lowStock ?></div>
+                            <div class="text-xs text-slate-500 font-semibold mt-1">Di bawah safety stock</div>
+                        </div>
+                        <div class="bg-emerald-50 rounded-2xl p-5 border border-emerald-100 shadow-sm">
+                            <div class="flex items-center gap-2 mb-2"><i class="fas fa-history text-emerald-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">History</span></div>
+                            <div class="text-3xl font-black text-emerald-600"><?= count($histories) + count($historiesPrev) ?></div>
+                            <div class="text-xs text-slate-500 font-semibold mt-1"><?= count($histories) ?> pred &bull; <?= count($historiesPrev) ?> prev</div>
+                        </div>
+                        <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
+                            <div class="flex items-center gap-2 mb-2"><i class="fas fa-users text-slate-400 text-xs"></i><span class="text-[10px] text-slate-400 font-bold uppercase tracking-wide">User</span></div>
+                            <div class="text-3xl font-black text-slate-700"><?= $total_users ?></div>
+                            <div class="text-xs text-slate-500 font-semibold mt-1">Total user aktif</div>
+                        </div>
                     </div>
                 </div>
 
