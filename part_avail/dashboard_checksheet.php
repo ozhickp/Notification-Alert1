@@ -64,10 +64,18 @@ if (isset($_GET['ajax'])) {
     }
 
     if ($_GET['ajax'] === 'ops' && isset($_GET['department'], $_GET['line'])) {
-        $stmt = $pdo->prepare("SELECT DISTINCT op FROM machine_list WHERE department = ? AND `line` = ? AND op != '-' ORDER BY op");
+        $stmt = $pdo->prepare("SELECT DISTINCT op FROM machine_list WHERE department = ? AND `line` = ? ORDER BY op");
         $stmt->execute([$_GET['department'], $_GET['line']]);
         $ops = array_column($stmt->fetchAll(), 'op');
         echo json_encode(empty($ops) ? ['-'] : $ops);
+        exit;
+    }
+
+    // AJAX PERBAIKAN POINT 3: Mengambil list mesin jika dalam 1 OP ada banyak mesin
+    if ($_GET['ajax'] === 'machine_list' && isset($_GET['department'], $_GET['line'], $_GET['op'])) {
+        $stmt = $pdo->prepare("SELECT machine_name, machine_type FROM machine_list WHERE department = ? AND `line` = ? AND op = ? ORDER BY machine_name");
+        $stmt->execute([$_GET['department'], $_GET['line'], $_GET['op']]);
+        echo json_encode($stmt->fetchAll());
         exit;
     }
 
@@ -123,7 +131,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
     $checker     = trim($_POST['checker']       ?? '');
     $itemsJson   = $_POST['items']              ?? '[]';
 
-    if (!$dept || !$line || !$checker || !$checkDate) {
+    if (!$dept || !$line || !$checker || !$checkDate || !$machineName) {
         echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib.']);
         exit;
     }
@@ -165,7 +173,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         $pdo->commit();
-        echo json_encode(['success' => true, 'message' => 'Check sheet berhasil disimpan.', 'id' => $submissionId]);
+        // PERBAIKAN POINT 1: Response diganti tanpa ID
+        echo json_encode(['success' => true, 'message' => 'Check sheet berhasil disimpan.']);
     } catch (\Exception $e) {
         $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
@@ -760,7 +769,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
 
 <body>
 
-    <!-- ══════════════════════════════ SIDEBAR ══════════════════════════════ -->
     <aside id="sidebar" class="collapsed">
         <div class="brand">
             <div class="brand-icon-wrap">
@@ -793,7 +801,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             </a>
         </nav>
 
-        <!-- Toggle button inside sidebar footer -->
         <div id="sidebar-footer">
             <button id="sidebarToggle" onclick="toggleSidebar()" title="Toggle Sidebar">
                 <i class="fas fa-chevron-left" id="sidebarToggleIcon"></i>
@@ -801,10 +808,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         </div>
     </aside>
 
-    <!-- ══════════════════════════════ MAIN ══════════════════════════════════ -->
     <div id="main-content">
 
-        <!-- Topbar -->
         <div class="topbar">
             <div class="flex items-center gap-2">
                 <div class="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center">
@@ -820,16 +825,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             </div>
         </div>
 
-        <!-- Page Body -->
         <div class="p-4" style="height: calc(100vh - 58px); overflow: hidden;">
             <div class="flex gap-4 h-full">
 
-                <!-- ══ LEFT: Form Input ══ -->
                 <div class="left-panel w-68 flex-shrink-0" style="width: 272px;">
                     <div class="section-heading"><i class="fas fa-sliders-h text-rose-400"></i> Form Input</div>
 
                     <div class="space-y-3">
-                        <!-- 1. Department -->
                         <div>
                             <label class="form-label block mb-1.5">
                                 <i class="fas fa-building text-slate-300 mr-1"></i> Department <span class="text-red-400">*</span>
@@ -839,7 +841,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             </select>
                         </div>
 
-                        <!-- 2. Tanggal (auto, readonly) -->
                         <div>
                             <label class="form-label block mb-1.5">
                                 <i class="fas fa-calendar-day text-slate-300 mr-1"></i> Tanggal
@@ -848,7 +849,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             <input type="date" id="inp-tanggal" class="form-field" readonly>
                         </div>
 
-                        <!-- 3. Checker -->
                         <div>
                             <label class="form-label block mb-1.5">
                                 <i class="fas fa-user-check text-slate-300 mr-1"></i> Checker <span class="text-red-400">*</span>
@@ -860,7 +860,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
 
                         <div class="border-t border-slate-100 pt-1"></div>
 
-                        <!-- 4. Line -->
                         <div>
                             <label class="form-label block mb-1.5">
                                 <i class="fas fa-layer-group text-slate-300 mr-1"></i> Line <span class="text-red-400">*</span>
@@ -870,7 +869,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             </select>
                         </div>
 
-                        <!-- 5. OP -->
                         <div>
                             <label class="form-label block mb-1.5">
                                 <i class="fas fa-cog text-slate-300 mr-1"></i> OP
@@ -880,7 +878,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             </select>
                         </div>
 
-                        <!-- 6. Machine Type (auto) -->
                         <div>
                             <label class="form-label block mb-1.5">
                                 <i class="fas fa-tag text-slate-300 mr-1"></i> Machine Type
@@ -889,22 +886,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             <input type="text" id="inp-type" class="form-field" placeholder="Terisi otomatis" readonly>
                         </div>
 
-                        <!-- 7. Machine Name (auto) -->
                         <div>
                             <label class="form-label block mb-1.5">
                                 <i class="fas fa-industry text-slate-300 mr-1"></i> Nama Mesin
-                                <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
                             </label>
-                            <input type="text" id="inp-mesin" class="form-field" placeholder="— Otomatis terisi —" readonly>
+                            <div id="machine-field-container">
+                                <input type="text" id="inp-mesin" class="form-field" placeholder="— Otomatis terisi —" readonly>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- ══ RIGHT: Checklist Table ══ -->
                 <div class="flex-1 min-w-0">
                     <div class="right-panel">
 
-                        <!-- Panel Header -->
                         <div class="px-5 py-3 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
                             <div class="flex items-center gap-2.5">
                                 <div class="w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center">
@@ -920,7 +915,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             </div>
                         </div>
 
-                        <!-- Keterangan Hasil — above table -->
                         <div class="px-5 py-2.5 border-b border-slate-100 bg-slate-50/60 flex-shrink-0">
                             <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5">
                                 <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Keterangan:</span>
@@ -939,7 +933,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             </div>
                         </div>
 
-                        <!-- Table Wrapper (scrollable) -->
                         <div class="table-scroll-wrap">
                             <table class="check-table" id="check-table" style="display:none;">
                                 <thead>
@@ -956,14 +949,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                                 <tbody id="check-tbody"></tbody>
                             </table>
 
-                            <!-- Empty state -->
                             <div id="empty-state" class="empty-state">
                                 <i class="fas fa-clipboard-list"></i>
                                 <p class="font-bold text-sm">Pilih Department, Checker, Line, dan OP</p>
                                 <p class="text-xs mt-1">Checklist akan muncul otomatis setelah memilih mesin</p>
                             </div>
 
-                            <!-- Loading skeleton -->
                             <div id="loading-state" style="display:none;" class="p-5">
                                 <div class="space-y-3">
                                     <?php for ($i = 0; $i < 8; $i++): ?>
@@ -981,7 +972,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             </div>
                         </div>
 
-                        <!-- Footer: info + Reset + Submit -->
                         <div class="border-t border-slate-100 px-5 py-3 flex items-center justify-between gap-3 bg-slate-50/60 rounded-b-2xl flex-shrink-0">
                             <div class="text-xs text-slate-400 font-medium">
                                 <i class="fas fa-circle-info mr-1"></i>
@@ -1000,16 +990,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                         </div>
                     </div>
                 </div>
-            </div><!-- /flex -->
-        </div><!-- /page body -->
-    </div><!-- /main-content -->
-
-    <!-- Toast -->
+            </div>
+        </div>
+    </div>
     <div id="toast"></div>
 
     <script>
         const BASE = window.location.pathname;
         let currentItems = [];
+        let isMachineDropdownActive = false; // Flag kontrol internal
 
         // ── Sidebar ───────────────────────────────────────────────────────────────
         function toggleSidebar() {
@@ -1118,14 +1107,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             clearMachine();
             clearTable();
             if (!dept || !line || !op) return;
-            showLoading(true);
-            fetch(`${BASE}?ajax=machine&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}&op=${encodeURIComponent(op)}`)
+
+            // PERBAIKAN LOGIKA POINT 3: Cek daftar semua mesin terlebih dahulu
+            fetch(`${BASE}?ajax=machine_list&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}&op=${encodeURIComponent(op)}`)
                 .then(r => r.json())
-                .then(data => {
-                    document.getElementById('inp-mesin').value = data.machine_name || '';
-                    document.getElementById('inp-type').value = data.machine_type || '';
-                    return fetch(`${BASE}?ajax=checklist&machine_type=${encodeURIComponent(data.machine_type)}&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}`);
-                })
+                .then(machines => {
+                    const container = document.getElementById('machine-field-container');
+
+                    if (op === '-' && machines.length > 1) {
+                        // JIKA KONDISI KHUSUS (Banyak mesin di satu OP bernama '-'): Ubah jadi dropdown select bawaan CSS asli Anda
+                        isMachineDropdownActive = true;
+                        let selectHtml = `<select id="sel-mesin" class="form-field" onchange="onMachineSelectChange()">
+                                            <option value="">— Pilih Mesin —</option>`;
+                        machines.forEach(m => {
+                            selectHtml += `<option value="${esc(m.machine_name)}" data-type="${esc(m.machine_type)}">${esc(m.machine_name)}</option>`;
+                        });
+                        selectHtml += `</select>`;
+                        container.innerHTML = selectHtml;
+                        document.getElementById('inp-type').value = ''; // Kosongkan dulu type sampai dipilih
+                    } else {
+                        // KONDISI SEPERTI BIASA / NORMAL
+                        isMachineDropdownActive = false;
+                        container.innerHTML = `<input type="text" id="inp-mesin" class="form-field" placeholder="— Otomatis terisi —" readonly>`;
+
+                        if (machines.length > 0) {
+                            document.getElementById('inp-mesin').value = machines[0].machine_name || '';
+                            document.getElementById('inp-type').value = machines[0].machine_type || '';
+
+                            // Eksekusi pemanggilan checklist items
+                            executeFetchChecklist(machines[0].machine_type, dept, line);
+                        }
+                    }
+                });
+        }
+
+        // Dipanggil saat user memilih mesin dari select dropdown (khusus kondisi OP = '-')
+        function onMachineSelectChange() {
+            const selMachine = document.getElementById('sel-mesin');
+            const typeInput = document.getElementById('inp-type');
+            const dept = document.getElementById('sel-dept').value;
+            const line = document.getElementById('sel-line').value;
+            clearTable();
+
+            if (!selMachine || !selMachine.value) {
+                typeInput.value = '';
+                return;
+            }
+
+            const activeOption = selMachine.options[selMachine.selectedIndex];
+            const machineType = activeOption.getAttribute('data-type') || '';
+            typeInput.value = machineType;
+
+            executeFetchChecklist(machineType, dept, line);
+        }
+
+        // Fungsi split untuk murni menarik data checklist item dari database
+        function executeFetchChecklist(machineType, dept, line) {
+            showLoading(true);
+            fetch(`${BASE}?ajax=checklist&machine_type=${encodeURIComponent(machineType)}&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}`)
                 .then(r => r.json())
                 .then(items => {
                     showLoading(false);
@@ -1201,7 +1240,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 '-': 'val-dash'
             };
             sel.className = 'result-select ' + (map[sel.value] || 'val-dash');
-            // Re-check if all items are filled
             checkAllResultsFilled();
         }
 
@@ -1227,13 +1265,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             const dept = document.getElementById('sel-dept').value;
             const line = document.getElementById('sel-line').value;
             const op = document.getElementById('sel-op').value;
-            const mesin = document.getElementById('inp-mesin').value;
             const type = document.getElementById('inp-type').value;
             const checker = document.getElementById('sel-checker').value;
             const tanggal = document.getElementById('inp-tanggal').value;
 
-            if (!dept || !line || !checker || !tanggal) {
-                showToast('Lengkapi Department, Line, Checker, dan Tanggal.', 'error');
+            // Tarik value nama mesin secara adaptif mengikuti status dropdown
+            let mesin = '';
+            if (isMachineDropdownActive) {
+                mesin = document.getElementById('sel-mesin')?.value || '';
+            } else {
+                mesin = document.getElementById('inp-mesin')?.value || '';
+            }
+
+            if (!dept || !line || !checker || !tanggal || !mesin) {
+                showToast('Lengkapi Department, Line, Checker, Tanggal, dan Mesin.', 'error');
                 return;
             }
 
@@ -1268,8 +1313,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 })
                 .then(r => r.json())
                 .then(res => {
-                    if (res.success) showToast(`✓ ${res.message} (ID: ${res.id})`, 'success');
-                    else showToast('✗ ' + res.message, 'error');
+                    if (res.success) {
+                        // PERBAIKAN POINT 1: Menampilkan pesan sukses tanpa ID & auto reset form
+                        showToast(`✓ ${res.message}`, 'success');
+                        resetForm();
+                    } else {
+                        showToast('✗ ' + res.message, 'error');
+                    }
                 })
                 .catch(() => showToast('Koneksi gagal. Coba lagi.', 'error'))
                 .finally(() => {
@@ -1295,7 +1345,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
 
         // ── Helpers ───────────────────────────────────────────────────────────────
         function clearMachine() {
-            document.getElementById('inp-mesin').value = '';
+            isMachineDropdownActive = false;
+            document.getElementById('machine-field-container').innerHTML =
+                `<input type="text" id="inp-mesin" class="form-field" placeholder="— Otomatis terisi —" readonly>`;
             document.getElementById('inp-type').value = '';
         }
 

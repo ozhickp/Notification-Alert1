@@ -97,6 +97,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         body {
             font-family: 'Plus Jakarta Sans', sans-serif;
             background-color: #f1f5f9;
+            height: 100vh;
+            overflow: hidden;
         }
 
         /* ── Sidebar ── */
@@ -293,7 +295,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         /* ── Main area ── */
         #main-content {
             margin-left: 56px;
-            min-height: 100vh;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
             transition: margin-left .25s ease;
         }
 
@@ -312,6 +316,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             position: sticky;
             top: 0;
             z-index: 50;
+            flex-shrink: 0;
+        }
+
+        /* ── PERBAIKAN: Container Tabel dengan Batas Tinggi & Scroll Internal ── */
+        .table-scroll-container {
+            height: calc(100vh - 215px);
+            overflow-y: auto;
         }
 
         /* ── Table ── */
@@ -323,6 +334,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             letter-spacing: .05em;
             text-transform: uppercase;
             padding: 10px 14px;
+            position: sticky;
+            /* Sticky head agar judul kolom tidak ikut ter-scroll */
+            top: 0;
+            z-index: 10;
         }
 
         .hist-table thead th:first-child {
@@ -612,7 +627,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
 
 <body>
 
-    <!-- ══ SIDEBAR ══ -->
     <aside id="sidebar" class="collapsed">
         <div class="brand">
             <div class="brand-icon-wrap">
@@ -652,10 +666,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         </div>
     </aside>
 
-    <!-- ══ MAIN ══ -->
     <div id="main-content">
 
-        <!-- Topbar -->
         <div class="topbar">
             <div class="flex items-center gap-3">
                 <div class="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center">
@@ -668,13 +680,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             </div>
         </div>
 
-        <!-- Page Body -->
-        <div class="p-6 space-y-5">
+        <div class="p-6 space-y-4 flex-1 flex flex-col min-h-0">
 
-            <!-- Filter Card -->
-            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex-shrink-0">
                 <div class="flex flex-wrap gap-3 items-end">
-                    <!-- Mode Toggle -->
                     <div>
                         <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Mode</label>
                         <div class="flex rounded-xl border border-slate-200 overflow-hidden">
@@ -691,7 +700,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         </div>
                     </div>
 
-                    <!-- Date / Month picker -->
                     <div>
                         <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
                             <span id="picker-label">Tanggal</span>
@@ -699,16 +707,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         <input type="date" id="inp-date" class="form-field" style="min-width:170px;">
                     </div>
 
-                    <!-- Search Button -->
                     <button onclick="loadHistory(1)"
                         class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm">
                         <i class="fas fa-search text-xs"></i> Cari
                     </button>
 
-                    <!-- Spacer -->
                     <div class="flex-1"></div>
 
-                    <!-- Export Buttons -->
                     <div class="flex gap-2">
                         <button onclick="exportData()"
                             class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm">
@@ -718,42 +723,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                 </div>
             </div>
 
-            <!-- Stats Row -->
-            <div id="stats-row" class="grid grid-cols-4 gap-4 hidden">
-                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
-                    <div class="w-9 h-9 rounded-xl bg-rose-50 flex items-center justify-center"><i class="fas fa-file-alt text-rose-500 text-sm"></i></div>
-                    <div>
-                        <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total Submission</div>
-                        <div id="stat-total" class="text-xl font-black text-slate-800">0</div>
-                    </div>
-                </div>
-                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
-                    <div class="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center"><i class="fas fa-check-circle text-emerald-500 text-sm"></i></div>
-                    <div>
-                        <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total OK (V)</div>
-                        <div id="stat-ok" class="text-xl font-black text-emerald-600">0</div>
-                    </div>
-                </div>
-                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
-                    <div class="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center"><i class="fas fa-exclamation-circle text-red-500 text-sm"></i></div>
-                    <div>
-                        <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Problem (X)</div>
-                        <div id="stat-problem" class="text-xl font-black text-red-600">0</div>
-                    </div>
-                </div>
-                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
-                    <div class="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center"><i class="fas fa-tools text-amber-500 text-sm"></i></div>
-                    <div>
-                        <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Repair (R+RO)</div>
-                        <div id="stat-repair" class="text-xl font-black text-amber-600">0</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Table Card -->
-            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <!-- Table header -->
-                <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-0">
+                <div class="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
                     <div class="flex items-center gap-2">
                         <i class="fas fa-table text-slate-400 text-sm"></i>
                         <span class="text-sm font-bold text-slate-700">Riwayat Submission</span>
@@ -762,8 +733,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     <span id="showing-label" class="text-[11px] text-slate-400 font-medium"></span>
                 </div>
 
-                <!-- Table -->
-                <div class="overflow-x-auto">
+                <div class="table-scroll-container flex-1 min-h-0">
                     <table class="hist-table w-full" id="hist-table" style="display:none;">
                         <thead>
                             <tr>
@@ -783,14 +753,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         <tbody id="hist-tbody"></tbody>
                     </table>
 
-                    <!-- Empty state -->
                     <div id="hist-empty" class="flex flex-col items-center justify-center py-16 text-slate-400">
                         <i class="fas fa-folder-open text-5xl mb-3 opacity-30"></i>
                         <p class="font-bold text-sm">Pilih tanggal / bulan lalu klik Cari</p>
                         <p class="text-xs mt-1">Data history checksheet akan tampil di sini</p>
                     </div>
 
-                    <!-- Loading -->
                     <div id="hist-loading" style="display:none;" class="p-5 space-y-3">
                         <?php for ($i = 0; $i < 6; $i++): ?>
                             <div class="flex gap-3 items-center">
@@ -808,8 +776,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     </div>
                 </div>
 
-                <!-- Pagination -->
-                <div id="pagination" class="hidden border-t border-slate-100 px-5 py-3 flex items-center justify-between">
+                <div id="pagination" class="hidden border-t border-slate-100 px-5 py-3 flex items-center justify-between flex-shrink-0 bg-white">
                     <span id="page-info" class="text-xs text-slate-400 font-medium"></span>
                     <div id="page-btns" class="flex gap-1.5"></div>
                 </div>
@@ -817,7 +784,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         </div>
     </div>
 
-    <!-- ══ MODAL DETAIL ══ -->
     <div id="modal-overlay" onclick="closeModal(event)">
         <div id="modal-box">
             <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
@@ -941,7 +907,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             document.getElementById('hist-table').style.display = 'none';
             document.getElementById('hist-empty').style.display = 'none';
             document.getElementById('hist-loading').style.display = 'block';
-            document.getElementById('stats-row').classList.add('hidden');
             document.getElementById('pagination').classList.add('hidden');
 
             fetch(`history_checksheet.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}`)
@@ -961,7 +926,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     }
 
                     renderTable(data.rows, page);
-                    updateStats(data.rows, data.total);
                     renderPagination(data.total, page, data.limit);
                 })
                 .catch(() => {
@@ -1013,7 +977,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                 </td>
                 <td class="text-slate-400 text-xs text-center">${row.submitted_at?.slice(0,16) ?? '-'}</td>
                 <td class="text-center">
-                    <button onclick="openDetail(${row.id}, '${esc(row.department)}', '${esc(row.line)}', '${esc(row.checker)}', '${row.check_date}')"
+                    <button onclick="openDetail(${row.id}, '${esc(row.department)}', '${esc(row.line)}', '${esc(row.op)}', '${esc(row.machine_name)}', '${esc(row.checker)}', '${row.check_date}')"
                         class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-rose-100 hover:text-rose-600 text-slate-500 transition-all inline-flex items-center justify-center">
                         <i class="fas fa-eye text-xs"></i>
                     </button>
@@ -1023,23 +987,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
 
             document.getElementById('hist-table').style.display = 'table';
             document.getElementById('result-label').textContent = ` ${totalRecords} submission ditemukan`;
-        }
-
-        // ── Stats ─────────────────────────────────────────────────────────────────
-        function updateStats(rows, total) {
-            let totalOk = 0,
-                totalProblem = 0,
-                totalRepair = 0;
-            rows.forEach(r => {
-                totalOk += parseInt(r.ok_count) || 0;
-                totalProblem += parseInt(r.problem_count) || 0;
-                totalRepair += (parseInt(r.repair_count) || 0) + (parseInt(r.outsider_count) || 0);
-            });
-            document.getElementById('stat-total').textContent = total;
-            document.getElementById('stat-ok').textContent = totalOk;
-            document.getElementById('stat-problem').textContent = totalProblem;
-            document.getElementById('stat-repair').textContent = totalRepair;
-            document.getElementById('stats-row').classList.remove('hidden');
         }
 
         // ── Pagination ────────────────────────────────────────────────────────────
@@ -1084,10 +1031,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         }
 
         // ── Modal detail ──────────────────────────────────────────────────────────
-        function openDetail(id, dept, line, checker, date) {
+        // PERBAIKAN: Menambahkan parameter op & machine ke dalam fungsi openDetail
+        function openDetail(id, dept, line, op, machine, checker, date) {
             document.getElementById('modal-overlay').classList.add('open');
             document.getElementById('modal-title').textContent = `Detail Submission #${id}`;
-            document.getElementById('modal-subtitle').textContent = `${dept} — ${line} | Checker: ${checker} | ${date}`;
+
+            // PERBAIKAN: Menambahkan OP dan Nama Mesin di baris deskripsi subtitle modal
+            document.getElementById('modal-subtitle').textContent = `${dept} — ${line} (OP: ${op || '-'}) | Mesin: ${machine} | Checker: ${checker} | ${date}`;
+
             document.getElementById('modal-tbody').innerHTML = '';
             document.getElementById('modal-loading').style.display = 'block';
             document.getElementById('modal-summary').textContent = '';
