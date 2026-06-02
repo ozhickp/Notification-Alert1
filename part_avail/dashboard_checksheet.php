@@ -1,9 +1,9 @@
 <?php
 // dashboard_checksheet.php
-$host    = 'localhost';
+$host    = 'db.yadin.com';
 $db      = 'db_notif_alert';
-$user    = 'root';
-$pass    = '';
+$user    = 'ozick';
+$pass    = 'Yadin.5678';
 $charset = 'utf8mb4';
 
 $dsn     = "mysql:host=$host;dbname=$db;charset=$charset";
