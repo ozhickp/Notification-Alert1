@@ -53,6 +53,66 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     exit;
 }
 
+// ─── AJAX: fetch checker summary ──────────────────────────────────────────────
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'checker_summary') {
+    header('Content-Type: application/json');
+
+    $mode  = $_GET['mode']  ?? 'daily';
+    $value = $_GET['value'] ?? '';
+
+    if ($value === '') {
+        echo json_encode([]);
+        exit;
+    }
+
+    if ($mode === 'daily') {
+        $where = "WHERE DATE(s.check_date) = ?";
+    } else {
+        $where = "WHERE DATE_FORMAT(s.check_date, '%Y-%m') = ?";
+    }
+
+    $stmt = $pdo->prepare("
+        SELECT
+            s.checker,
+            COUNT(s.id)                      AS total_submissions,
+            COUNT(DISTINCT s.machine_name)   AS total_machines,
+            COUNT(DISTINCT s.department)     AS total_departments,
+            SUM(d.result = 'V')              AS ok_count,
+            SUM(d.result = 'X')              AS problem_count,
+            SUM(d.result = 'R')              AS repair_count,
+            SUM(d.result = 'RO')             AS outsider_count,
+            SUM(d.result = '-')              AS na_count,
+            COUNT(d.id)                      AS total_items,
+            GROUP_CONCAT(DISTINCT s.department ORDER BY s.department SEPARATOR ', ') AS departments,
+            GROUP_CONCAT(DISTINCT s.machine_name ORDER BY s.machine_name SEPARATOR ', ') AS machines
+        FROM checksheet_submissions s
+        LEFT JOIN checksheet_submission_details d ON d.submission_id = s.id
+        $where
+        GROUP BY s.checker
+        ORDER BY total_submissions DESC
+    ");
+    $stmt->execute([$value]);
+    $rows = $stmt->fetchAll();
+
+    // Untuk setiap checker, ambil daftar submission lengkap (mesin + waktu)
+    $result = [];
+    foreach ($rows as $row) {
+        $stmtSubs = $pdo->prepare("
+            SELECT machine_name, department, line, op, category_key, submitted_at
+            FROM checksheet_submissions
+            $where
+            AND checker = ?
+            ORDER BY submitted_at ASC
+        ");
+        $stmtSubs->execute([$value, $row['checker']]);
+        $row['submission_list'] = $stmtSubs->fetchAll();
+        $result[] = $row;
+    }
+
+    echo json_encode($result);
+    exit;
+}
+
 // ─── AJAX: fetch detail items for a submission ────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     header('Content-Type: application/json');
@@ -490,6 +550,34 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             }
         }
 
+        .modal-table-th {
+            background: #f8fafc;
+            font-size: .68rem;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            padding: 9px 12px;
+            border-bottom: 2px solid #e2e8f0;
+            position: sticky;
+            top: 0;
+            white-space: nowrap;
+        }
+
+        .progress-bar-wrap {
+            background: #f1f5f9;
+            border-radius: 99px;
+            height: 7px;
+            overflow: hidden;
+            min-width: 80px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            border-radius: 99px;
+            transition: width .4s ease;
+        }
+
         .modal-table thead th {
             background: #f8fafc;
             font-size: .68rem;
@@ -721,6 +809,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     </div>
 
                     <div class="flex gap-2">
+                        <button onclick="openCheckerSummary()"
+                            class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm">
+                            <i class="fas fa-user-check"></i> Ringkasan Checker
+                        </button>
                         <button onclick="exportData()"
                             class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm">
                             <i class="fas fa-file-excel"></i> Export Excel
@@ -787,6 +879,86 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     <span id="page-info" class="text-xs text-slate-400 font-medium"></span>
                     <div id="page-btns" class="flex gap-1.5"></div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Modal: Ringkasan Checker ───────────────────────────────────────── -->
+    <div id="checker-modal-overlay" onclick="closeCheckerModal(event)"
+        style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);z-index:200;align-items:center;justify-content:center;">
+        <div id="checker-modal-box"
+            style="background:#fff;border-radius:18px;width:92%;max-width:860px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.25);animation:popIn .25s cubic-bezier(.34,1.56,.64,1);">
+            <!-- Header -->
+            <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+                <div>
+                    <div class="text-sm font-bold text-slate-800 flex items-center gap-2">
+                        <i class="fas fa-user-check text-indigo-500"></i>
+                        Ringkasan Per Checker
+                    </div>
+                    <div class="text-[11px] text-slate-400 font-medium mt-0.5" id="checker-modal-subtitle"></div>
+                </div>
+                <button onclick="closeCheckerModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-all">
+                    <i class="fas fa-times text-slate-500 text-xs"></i>
+                </button>
+            </div>
+
+            <!-- Search inside modal -->
+            <div class="px-5 py-3 border-b border-slate-100 flex-shrink-0">
+                <div class="relative">
+                    <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
+                    <input type="text" id="checker-search" placeholder="Cari nama checker…"
+                        oninput="filterCheckerTable()"
+                        class="form-field pl-8 w-full" style="max-width:280px;">
+                </div>
+            </div>
+
+            <!-- Table -->
+            <div class="overflow-auto flex-1" style="min-height:0;">
+                <table class="w-full" id="checker-summary-table">
+                    <thead>
+                        <tr>
+                            <th class="modal-table-th text-center w-8">No</th>
+                            <th class="modal-table-th">Checker / Operator</th>
+                            <th class="modal-table-th text-center">Checksheet Diisi</th>
+                            <th class="modal-table-th text-center">Mesin Dicek</th>
+                            <th class="modal-table-th text-center">Dept</th>
+                            <th class="modal-table-th">Detail Mesin yang Dicek</th>
+                            <th class="modal-table-th text-center">Hasil (V/X/R/RO/-)</th>
+                            <th class="modal-table-th text-center">Completion</th>
+                        </tr>
+                    </thead>
+                    <tbody id="checker-summary-tbody"></tbody>
+                </table>
+
+                <!-- Loading skeleton -->
+                <div id="checker-modal-loading" class="p-6 space-y-3">
+                    <?php for ($i = 0; $i < 5; $i++): ?>
+                        <div class="flex gap-3 items-center">
+                            <div class="skeleton w-6 h-5"></div>
+                            <div class="skeleton w-32 h-5"></div>
+                            <div class="skeleton w-16 h-5"></div>
+                            <div class="skeleton w-16 h-5"></div>
+                            <div class="skeleton w-20 h-5"></div>
+                            <div class="skeleton flex-1 h-5"></div>
+                            <div class="skeleton w-20 h-5"></div>
+                        </div>
+                    <?php endfor; ?>
+                </div>
+
+                <!-- Empty state -->
+                <div id="checker-modal-empty" style="display:none;" class="flex flex-col items-center justify-center py-14 text-slate-400">
+                    <i class="fas fa-user-slash text-4xl mb-3 opacity-30"></i>
+                    <p class="font-bold text-sm">Tidak ada data checker</p>
+                    <p class="text-xs mt-1">Pilih periode yang memiliki data</p>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-between flex-shrink-0">
+                <span id="checker-modal-summary" class="text-[11px] text-slate-500 font-medium"></span>
+                <button onclick="closeCheckerModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
+                    Tutup
+                </button>
             </div>
         </div>
     </div>
@@ -1116,6 +1288,158 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             d.textContent = str || '';
             return d.innerHTML;
         }
+        // ── Checker Summary Modal ─────────────────────────────────────────────────
+        function openCheckerSummary() {
+            const value = document.getElementById('inp-date').value;
+            if (!value) {
+                showToast('Pilih tanggal / bulan terlebih dahulu, lalu klik Cari.', 'error');
+                return;
+            }
+
+            const overlay = document.getElementById('checker-modal-overlay');
+            overlay.style.display = 'flex';
+            document.getElementById('checker-summary-tbody').innerHTML = '';
+            document.getElementById('checker-summary-table').style.display = 'none';
+            document.getElementById('checker-modal-loading').style.display = 'block';
+            document.getElementById('checker-modal-empty').style.display = 'none';
+            document.getElementById('checker-modal-summary').textContent = '';
+            document.getElementById('checker-search').value = '';
+
+            const modeLabel = currentMode === 'daily' ? `Tanggal: ${value}` : `Bulan: ${value}`;
+            document.getElementById('checker-modal-subtitle').textContent = modeLabel;
+
+            fetch(`history_checksheet.php?ajax=checker_summary&mode=${currentMode}&value=${encodeURIComponent(value)}`)
+                .then(r => r.json())
+                .then(rows => {
+                    document.getElementById('checker-modal-loading').style.display = 'none';
+
+                    if (!rows || rows.length === 0) {
+                        document.getElementById('checker-modal-empty').style.display = 'flex';
+                        return;
+                    }
+
+                    renderCheckerTable(rows);
+                })
+                .catch(() => {
+                    document.getElementById('checker-modal-loading').style.display = 'none';
+                    document.getElementById('checker-modal-empty').style.display = 'flex';
+                    showToast('Gagal memuat ringkasan checker.', 'error');
+                });
+        }
+
+        function renderCheckerTable(rows) {
+            const tbody = document.getElementById('checker-summary-tbody');
+            tbody.innerHTML = '';
+
+            rows.forEach((row, idx) => {
+                const total = parseInt(row.total_items) || 1;
+                const ok = parseInt(row.ok_count) || 0;
+                const pct = Math.round((ok / total) * 100);
+
+                let barColor = '#22c55e';
+                if (pct < 60) barColor = '#ef4444';
+                else if (pct < 85) barColor = '#f59e0b';
+
+                // Buat daftar mesin dengan waktu submit
+                const subs = row.submission_list || [];
+                const machineListHtml = subs.length > 0 ?
+                    subs.map((s, i) => {
+                        const jam = s.submitted_at ? s.submitted_at.slice(11, 16) : '--:--';
+                        const catColors = {
+                            'MC': '#dbeafe|#1d4ed8',
+                            'SPM': '#ede9fe|#7c3aed',
+                            'ASSEMBLING': '#ccfbf1|#0f766e',
+                            'PAINTING': '#fce7f3|#be185d',
+                            'TEST_RUNNING': '#ffedd5|#c2410c',
+                            'PACKING': '#dcfce7|#15803d',
+                            'BOILER': '#fee2e2|#dc2626',
+                            'KOMPRESSOR': '#cffafe|#0e7490',
+                        };
+                        const [bg, fc] = (catColors[s.category_key] || '#f1f5f9|#64748b').split('|');
+                        return `<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;">
+                            <span style="font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:4px;background:${bg};color:${fc};flex-shrink:0;">${s.category_key || '-'}</span>
+                            <span style="font-size:.72rem;font-weight:600;color:#1e293b;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;" title="${s.machine_name}">${s.machine_name}</span>
+                            <span style="font-size:.62rem;color:#94a3b8;flex-shrink:0;">${jam}</span>
+                        </div>`;
+                    }).join('') :
+                    '<span style="font-size:.7rem;color:#94a3b8;">—</span>';
+
+                const tr = document.createElement('tr');
+                tr.className = 'fade-in checker-row';
+                tr.style.animationDelay = `${idx * 20}ms`;
+                tr.innerHTML = `
+                    <td style="padding:10px 12px;text-align:center;font-size:.72rem;color:#94a3b8;font-weight:700;">${idx + 1}</td>
+                    <td style="padding:10px 12px;">
+                        <div style="display:flex;align-items:center;gap:9px;">
+                            <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                <span style="color:#fff;font-size:.65rem;font-weight:800;">${row.checker.charAt(0).toUpperCase()}</span>
+                            </div>
+                            <div>
+                                <div style="font-size:.82rem;font-weight:700;color:#1e293b;">${row.checker}</div>
+                                <div style="font-size:.65rem;color:#94a3b8;margin-top:1px;">${row.departments}</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td style="padding:10px 12px;text-align:center;">
+                        <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+                            <span style="display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;border-radius:10px;background:#eff6ff;color:#2563eb;font-size:.9rem;font-weight:800;">${row.total_submissions}</span>
+                            <span style="font-size:.6rem;color:#94a3b8;font-weight:600;">checksheet</span>
+                        </div>
+                    </td>
+                    <td style="padding:10px 12px;text-align:center;">
+                        <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+                            <span style="display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;border-radius:10px;background:#f0fdf4;color:#16a34a;font-size:.9rem;font-weight:800;">${row.total_machines}</span>
+                            <span style="font-size:.6rem;color:#94a3b8;font-weight:600;">mesin</span>
+                        </div>
+                    </td>
+                    <td style="padding:10px 12px;text-align:center;">
+                        <span style="display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:28px;border-radius:8px;background:#faf5ff;color:#7c3aed;font-size:.8rem;font-weight:700;">${row.total_departments}</span>
+                    </td>
+                    <td style="padding:10px 14px;min-width:220px;max-width:280px;">
+                        ${machineListHtml}
+                    </td>
+                    <td style="padding:10px 12px;text-align:center;">
+                        <div style="display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap;">
+                            <span class="pill pill-v" title="OK (V)">${row.ok_count}</span>
+                            <span class="pill pill-x" title="Problem (X)">${row.problem_count}</span>
+                            <span class="pill pill-r" title="Repair (R)">${row.repair_count}</span>
+                            <span class="pill pill-ro" title="Outsider (RO)">${row.outsider_count}</span>
+                            <span class="pill pill-na" title="N/A">${row.na_count}</span>
+                        </div>
+                    </td>
+                    <td style="padding:10px 16px;">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <div class="progress-bar-wrap" style="flex:1;">
+                                <div class="progress-bar-fill" style="width:${pct}%;background:${barColor};"></div>
+                            </div>
+                            <span style="font-size:.72rem;font-weight:800;color:${barColor};min-width:34px;text-align:right;">${pct}%</span>
+                        </div>
+                    </td>`;
+                tbody.appendChild(tr);
+            });
+
+            document.getElementById('checker-summary-table').style.display = 'table';
+
+            const totalCheckers = rows.length;
+            const totalSheets = rows.reduce((s, r) => s + parseInt(r.total_submissions), 0);
+            const totalMachines = rows.reduce((s, r) => s + parseInt(r.total_machines), 0);
+            document.getElementById('checker-modal-summary').textContent =
+                `${totalCheckers} checker — ${totalSheets} total submission — ${totalMachines} total mesin dicek`;
+        }
+
+        function filterCheckerTable() {
+            const q = document.getElementById('checker-search').value.trim().toLowerCase();
+            document.querySelectorAll('.checker-row').forEach(tr => {
+                tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+            });
+        }
+
+        function closeCheckerModal(e) {
+            if (!e || e.target === document.getElementById('checker-modal-overlay')) {
+                document.getElementById('checker-modal-overlay').style.display = 'none';
+            }
+        }
+
         // ── Search / Filter ───────────────────────────────────────────────────────
         function filterTable() {
             const query = document.getElementById('inp-search').value.trim().toLowerCase();

@@ -165,6 +165,21 @@ if (isset($_GET['ajax'])) {
         exit;
     }
 
+    // ─── CEK DUPLIKASI: apakah mesin sudah diisi checksheet hari ini ───────────
+    if ($_GET['ajax'] === 'check_duplicate' && isset($_GET['machine_name'], $_GET['date'])) {
+        $stmt = $pdo->prepare(
+            "SELECT COUNT(*) FROM checksheet_submissions
+             WHERE machine_name = ? AND DATE(check_date) = ?"
+        );
+        $stmt->execute([$_GET['machine_name'], $_GET['date']]);
+        $count = (int)$stmt->fetchColumn();
+        echo json_encode([
+            'already_filled' => $count > 0,
+            'count'          => $count,
+        ]);
+        exit;
+    }
+
     echo json_encode(['error' => 'Unknown request']);
     exit;
 }
@@ -190,6 +205,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
     $items = json_decode($itemsJson, true);
     if (!is_array($items) || empty($items)) {
         echo json_encode(['success' => false, 'message' => 'Tidak ada item checklist.']);
+        exit;
+    }
+
+    // ─── Cek duplikasi server-side: mesin ini sudah diisi hari ini? ──────────
+    $stmtDup = $pdo->prepare(
+        "SELECT COUNT(*) FROM checksheet_submissions
+         WHERE machine_name = ? AND DATE(check_date) = ?"
+    );
+    $stmtDup->execute([$machineName, $checkDate]);
+    if ((int)$stmtDup->fetchColumn() > 0) {
+        echo json_encode([
+            'success' => false,
+            'message' => "Mesin \"{$machineName}\" sudah diisi checksheet pada tanggal ini.",
+            'duplicate' => true,
+        ]);
         exit;
     }
 
@@ -1047,6 +1077,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                                 <p class="text-xs mt-1">Checklist akan muncul otomatis setelah memilih mesin</p>
                             </div>
 
+                            <!-- Banner: mesin sudah diisi hari ini -->
+                            <div id="duplicate-warning" style="display:none;" class="empty-state">
+                                <div style="background:#fff7ed;border:2px solid #fb923c;border-radius:16px;padding:32px 40px;text-align:center;max-width:420px;">
+                                    <i class="fas fa-ban" style="font-size:2.4rem;color:#f97316;margin-bottom:12px;display:block;"></i>
+                                    <p class="font-bold text-sm" style="color:#c2410c;" id="dup-warning-title">Checksheet Sudah Diisi</p>
+                                    <p class="text-xs mt-2" style="color:#7c3aed;" id="dup-warning-desc"></p>
+                                </div>
+                            </div>
+
                             <div id="loading-state" style="display:none;" class="p-5">
                                 <div class="space-y-3">
                                     <?php for ($i = 0; $i < 8; $i++): ?>
@@ -1264,22 +1303,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             } else {
                 machineName = document.getElementById('inp-mesin')?.value || '';
             }
-            const url = `${BASE}?ajax=checklist` +
-                `&machine_type=${encodeURIComponent(machineType)}` +
-                `&department=${encodeURIComponent(dept)}` +
-                `&line=${encodeURIComponent(line)}` +
-                `&op=${encodeURIComponent(op)}` +
-                `&machine_name=${encodeURIComponent(machineName)}`;
-            fetch(url)
+            const date = document.getElementById('inp-tanggal').value;
+
+            // Cek duplikasi terlebih dahulu sebelum render checklist
+            fetch(`${BASE}?ajax=check_duplicate&machine_name=${encodeURIComponent(machineName)}&date=${encodeURIComponent(date)}`)
                 .then(r => r.json())
-                .then(items => {
-                    showLoading(false);
-                    renderChecklist(items);
+                .then(dupData => {
+                    if (dupData.already_filled) {
+                        showLoading(false);
+                        showDuplicateWarning(machineName, date);
+                        return;
+                    }
+                    // Tidak duplikat — lanjut ambil checklist
+                    const url = `${BASE}?ajax=checklist` +
+                        `&machine_type=${encodeURIComponent(machineType)}` +
+                        `&department=${encodeURIComponent(dept)}` +
+                        `&line=${encodeURIComponent(line)}` +
+                        `&op=${encodeURIComponent(op)}` +
+                        `&machine_name=${encodeURIComponent(machineName)}`;
+                    return fetch(url)
+                        .then(r => r.json())
+                        .then(items => {
+                            showLoading(false);
+                            renderChecklist(items);
+                        });
                 })
                 .catch(() => {
                     showLoading(false);
                     showToast('Gagal memuat checklist.', 'error');
                 });
+        }
+
+        // Tampilkan warning mesin sudah diisi hari ini
+        function showDuplicateWarning(machineName, date) {
+            document.getElementById('check-table').style.display = 'none';
+            document.getElementById('empty-state').style.display = 'none';
+            document.getElementById('loading-state').style.display = 'none';
+            const warn = document.getElementById('duplicate-warning');
+            warn.style.display = 'flex';
+            document.getElementById('dup-warning-title').textContent =
+                `Checksheet Sudah Diisi Hari Ini`;
+            document.getElementById('dup-warning-desc').textContent =
+                `Mesin "${machineName}" sudah diisi checksheet pada ${date}. Satu mesin hanya boleh diisi satu kali per hari.`;
+            document.getElementById('row-count').textContent = '';
+            document.getElementById('category-badge').classList.add('hidden');
+            currentItems = [];
+            setSubmitEnabled(false);
         }
 
         // ── Render checklist ──────────────────────────────────────────────────────
@@ -1585,6 +1654,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         function clearTable() {
             document.getElementById('check-table').style.display = 'none';
             document.getElementById('empty-state').style.display = 'flex';
+            document.getElementById('duplicate-warning').style.display = 'none';
             document.getElementById('check-tbody').innerHTML = '';
             document.getElementById('row-count').textContent = '';
             document.getElementById('category-badge').classList.add('hidden');
@@ -1596,6 +1666,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             document.getElementById('loading-state').style.display = show ? 'block' : 'none';
             document.getElementById('empty-state').style.display = show ? 'none' : 'flex';
             document.getElementById('check-table').style.display = 'none';
+            document.getElementById('duplicate-warning').style.display = 'none';
         }
 
         function showToast(msg, type = 'success') {
