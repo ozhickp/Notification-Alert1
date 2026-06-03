@@ -77,8 +77,10 @@ if (isset($_GET['ajax'])) {
     }
 
     if ($_GET['ajax'] === 'checklist' && isset($_GET['machine_type'])) {
-        $dept = $_GET['department'] ?? '';
-        $line = $_GET['line'] ?? '';
+        $dept        = $_GET['department']   ?? '';
+        $line        = $_GET['line']         ?? '';
+        $op          = $_GET['op']           ?? '';
+        $machineName = $_GET['machine_name'] ?? '';
         $key  = resolveCategoryKey($_GET['machine_type'], $dept, $line);
 
         if (!$key) {
@@ -86,6 +88,7 @@ if (isset($_GET['ajax'])) {
             exit;
         }
 
+        // Ambil semua items checklist
         $stmt = $pdo->prepare(
             "SELECT id, no, part, standard, method, action, `interval`
              FROM checksheet_items
@@ -93,13 +96,72 @@ if (isset($_GET['ajax'])) {
              ORDER BY no"
         );
         $stmt->execute([$key]);
-        echo json_encode($stmt->fetchAll());
+        $items = $stmt->fetchAll();
+
+        // Untuk interval Weekly / Monthly: cari tanggal check_date terakhir
+        // per item_id di mesin / dept / line yang sama
+        if (!empty($items)) {
+            // Kumpulkan id semua item Weekly / Monthly
+            $periodicIds = [];
+            foreach ($items as $it) {
+                $iv = strtolower(trim($it['interval'] ?? ''));
+                if ($iv === 'weekly' || $iv === 'monthly' || $iv === 'montly') {
+                    $periodicIds[] = (int)$it['id'];
+                }
+            }
+
+            $lastDateMap = []; // item_id => 'YYYY-MM-DD' | null
+            if (!empty($periodicIds)) {
+                // Cari submission terakhir untuk mesin ini yang berisi item periodic
+                // JOIN ke submission_details agar per-item_id
+                $inList = implode(',', $periodicIds);
+
+                // Pakai machine_name jika tersedia, fallback ke dept+line+op
+                if ($machineName !== '') {
+                    $stmtLast = $pdo->prepare("
+                        SELECT d.item_id, MAX(DATE(s.check_date)) AS last_date
+                        FROM checksheet_submission_details d
+                        JOIN checksheet_submissions s ON s.id = d.submission_id
+                        WHERE d.item_id IN ({$inList})
+                          AND s.machine_name = ?
+                        GROUP BY d.item_id
+                    ");
+                    $stmtLast->execute([$machineName]);
+                } else {
+                    $stmtLast = $pdo->prepare("
+                        SELECT d.item_id, MAX(DATE(s.check_date)) AS last_date
+                        FROM checksheet_submission_details d
+                        JOIN checksheet_submissions s ON s.id = d.submission_id
+                        WHERE d.item_id IN ({$inList})
+                          AND s.department = ? AND s.line = ? AND s.op = ?
+                        GROUP BY d.item_id
+                    ");
+                    $stmtLast->execute([$dept, $line, $op]);
+                }
+                foreach ($stmtLast->fetchAll() as $r) {
+                    $lastDateMap[(int)$r['item_id']] = $r['last_date'];
+                }
+            }
+
+            // Tambahkan last_check_date ke setiap item
+            foreach ($items as &$it) {
+                $iv = strtolower(trim($it['interval'] ?? ''));
+                if ($iv === 'weekly' || $iv === 'monthly' || $iv === 'montly') {
+                    $it['last_check_date'] = $lastDateMap[(int)$it['id']] ?? null;
+                } else {
+                    $it['last_check_date'] = null; // Daily / lainnya tidak perlu
+                }
+            }
+            unset($it);
+        }
+
+        echo json_encode($items);
         exit;
     }
 
     if ($_GET['ajax'] === 'checkers') {
-        $checkers = ['Ridwan', 'Piyan', 'Arief', 'Joko', 'Yudi', 'Subki', 'Nurul', 'Renaldi', 'Hakim', 'Aji', 'Alamsyah', 'Rizki', 'Hendra'];
-        echo json_encode($checkers);
+        $rows = $pdo->query("SELECT name FROM checkers WHERE is_active = 1 ORDER BY name")->fetchAll();
+        echo json_encode(array_column($rows, 'name'));
         exit;
     }
 
@@ -1153,7 +1215,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         // Fungsi split untuk murni menarik data checklist item dari database
         function executeFetchChecklist(machineType, dept, line) {
             showLoading(true);
-            fetch(`${BASE}?ajax=checklist&machine_type=${encodeURIComponent(machineType)}&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}`)
+            const op = document.getElementById('sel-op')?.value || '';
+            // Ambil machine_name tergantung mode (dropdown atau text input)
+            let machineName = '';
+            if (isMachineDropdownActive) {
+                machineName = document.getElementById('sel-mesin')?.value || '';
+            } else {
+                machineName = document.getElementById('inp-mesin')?.value || '';
+            }
+            const url = `${BASE}?ajax=checklist` +
+                `&machine_type=${encodeURIComponent(machineType)}` +
+                `&department=${encodeURIComponent(dept)}` +
+                `&line=${encodeURIComponent(line)}` +
+                `&op=${encodeURIComponent(op)}` +
+                `&machine_name=${encodeURIComponent(machineName)}`;
+            fetch(url)
                 .then(r => r.json())
                 .then(items => {
                     showLoading(false);
@@ -1183,6 +1259,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 return;
             }
 
+            // Tanggal input form (hari ini)
+            const checkDateVal = document.getElementById('inp-tanggal').value; // 'YYYY-MM-DD'
+            const todayDate = checkDateVal ? new Date(checkDateVal + 'T00:00:00') : new Date();
+            todayDate.setHours(0, 0, 0, 0);
+
+            const fmt = d => d.toLocaleDateString('id-ID', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+            });
+
             items.forEach((item, idx) => {
                 const badgeMap = {
                     'Daily': '<span class="badge badge-daily">Daily</span>',
@@ -1190,26 +1277,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                     'Monthly': '<span class="badge badge-monthly">Monthly</span>',
                     'Montly': '<span class="badge badge-monthly">Monthly</span>',
                 };
-                const intervalBadge = badgeMap[item.interval] || `<span class="badge" style="background:#f1f5f9;color:#94a3b8;">${item.interval}</span>`;
+                const intervalNorm = (item.interval || '').trim();
+                const intervalBadge = badgeMap[intervalNorm] || `<span class="badge" style="background:#f1f5f9;color:#94a3b8;">${esc(item.interval)}</span>`;
+
                 const tr = document.createElement('tr');
                 tr.className = 'fade-in';
                 tr.style.animationDelay = `${idx * 15}ms`;
+
+                const isWeekly = intervalNorm === 'Weekly';
+                const isMonthly = intervalNorm === 'Monthly' || intervalNorm === 'Montly';
+
+                let resultCell = '';
+
+                if (isWeekly || isMonthly) {
+                    // last_check_date dari server (null = belum pernah dicek)
+                    const lastDateStr = item.last_check_date || null; // 'YYYY-MM-DD' or null
+
+                    if (!lastDateStr) {
+                        // Belum pernah dicek → tampilkan dropdown agar bisa diisi pertama kali
+                        resultCell = `
+                            <select class="result-select val-dash" onchange="onResultChange(this)" data-idx="${idx}">
+                                <option value="-" selected>—</option>
+                                <option value="V">V — OK</option>
+                                <option value="X">X — Problem</option>
+                                <option value="R">R — Repair</option>
+                                <option value="RO">RO — Outsider</option>
+                            </select>`;
+                    } else {
+                        // Hitung next_due berdasarkan last_check_date
+                        const lastDate = new Date(lastDateStr + 'T00:00:00');
+                        const nextDue = new Date(lastDate);
+                        if (isWeekly) {
+                            nextDue.setDate(nextDue.getDate() + 7);
+                        } else {
+                            nextDue.setMonth(nextDue.getMonth() + 1);
+                        }
+                        nextDue.setHours(0, 0, 0, 0);
+
+                        if (todayDate >= nextDue) {
+                            // Sudah waktunya → dropdown untuk diisi ulang
+                            resultCell = `
+                                <select class="result-select val-dash" onchange="onResultChange(this)" data-idx="${idx}">
+                                    <option value="-" selected>—</option>
+                                    <option value="V">V — OK</option>
+                                    <option value="X">X — Problem</option>
+                                    <option value="R">R — Repair</option>
+                                    <option value="RO">RO — Outsider</option>
+                                </select>`;
+                        } else {
+                            // Belum waktunya → tampilkan Last / Next, auto V
+                            resultCell = `
+                                <div style="min-width:160px;">
+                                    <div style="font-size:.68rem;line-height:1.7;">
+                                        <div><span class="font-bold text-slate-500">Last:</span> <span class="text-emerald-700 font-semibold">${fmt(lastDate)}</span></div>
+                                        <div><span class="font-bold text-slate-500">Next:</span> <span class="text-blue-700 font-semibold">${fmt(nextDue)}</span></div>
+                                    </div>
+                                </div>`;
+                            item._autoResult = 'V'; // otomatis disimpan sebagai OK
+                        }
+                    }
+                } else {
+                    resultCell = `
+                        <select class="result-select val-dash" onchange="onResultChange(this)" data-idx="${idx}">
+                            <option value="-" selected>—</option>
+                            <option value="V">V — OK</option>
+                            <option value="X">X — Problem</option>
+                            <option value="R">R — Repair</option>
+                            <option value="RO">RO — Outsider</option>
+                        </select>`;
+                }
+
                 tr.innerHTML = `
                 <td class="text-center text-slate-400 font-bold text-xs">${item.no}</td>
-                <td class="font-semibold text-slate-700">${item.part}</td>
-                <td class="text-slate-500">${item.standard}</td>
-                <td class="text-slate-500">${item.method}</td>
-                <td class="text-slate-500">${item.action}</td>
+                <td class="font-semibold text-slate-700">${esc(item.part)}</td>
+                <td class="text-slate-500">${esc(item.standard)}</td>
+                <td class="text-slate-500">${esc(item.method)}</td>
+                <td class="text-slate-500">${esc(item.action)}</td>
                 <td class="text-center">${intervalBadge}</td>
-                <td class="text-center">
-                    <select class="result-select val-dash" onchange="onResultChange(this)" data-idx="${idx}">
-                        <option value="-" selected>—</option>
-                        <option value="V">V — OK</option>
-                        <option value="X">X — Problem</option>
-                        <option value="R">R — Repair</option>
-                        <option value="RO">RO — Outsider</option>
-                    </select>
-                </td>`;
+                <td class="text-center">${resultCell}</td>`;
                 tbody.appendChild(tr);
             });
 
@@ -1238,8 +1383,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 return;
             }
             const selects = document.querySelectorAll('#check-tbody .result-select');
-            const allFilled = Array.from(selects).every(s => s.value !== '-');
-            setSubmitEnabled(allFilled);
+            const allDropdownFilled = Array.from(selects).every(s => s.value !== '-');
+            // Weekly/Monthly items have _autoResult so no dropdown — treat as already filled
+            setSubmitEnabled(allDropdownFilled);
         }
 
         function setSubmitEnabled(enabled) {
@@ -1272,14 +1418,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             }
 
             const selects = document.querySelectorAll('#check-tbody .result-select');
-            const itemsPayload = currentItems.map((item, idx) => ({
-                id: item.id,
-                no: item.no,
-                part: item.part,
-                standard: item.standard,
-                result: selects[idx]?.value ?? '-',
-                note: null,
-            }));
+            // Map dropdown index only for items WITHOUT _autoResult (weekly/monthly)
+            let dropdownIdx = 0;
+            const itemsPayload = currentItems.map((item) => {
+                let result;
+                if (item._autoResult) {
+                    result = item._autoResult; // 'V' for weekly/monthly
+                } else {
+                    result = selects[dropdownIdx]?.value ?? '-';
+                    dropdownIdx++;
+                }
+                return {
+                    id: item.id,
+                    no: item.no,
+                    part: item.part,
+                    standard: item.standard,
+                    result: result,
+                    note: null,
+                };
+            });
 
             const btn = document.getElementById('btn-submit');
             btn.innerHTML = '<i class="fas fa-spinner fa-spin text-xs"></i> Menyimpan...';

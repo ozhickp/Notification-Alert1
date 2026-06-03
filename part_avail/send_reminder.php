@@ -219,6 +219,7 @@ function processReminderByThreshold(PDO $pdo, ?int $specificId = null): void
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
                p.plant_name AS department_name, l.line_name AS line_name,
+               s.operation_process AS op_name,
                s.reminder_activity, s.remaining_day
         FROM schedules s
         LEFT JOIN plants p ON p.id = s.department
@@ -240,7 +241,7 @@ function processReminderByThreshold(PDO $pdo, ?int $specificId = null): void
 
   $listHtml = '<ul style="color:#334155;line-height:1.8;">';
   foreach ($tasks as $t) {
-    $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']}]"
+    $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
       . " — {$t['maintenance_point']}"
       . " <span style='color:#64748b;'>(Plan: {$t['change_date_plan']} | Sisa: <b>{$t['remaining_day']} hari</b> | Threshold: {$t['reminder_activity']} hari)</span></li>";
   }
@@ -296,7 +297,8 @@ function processSevenDayReminders(PDO $pdo): void
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               p.plant_name AS department_name, l.line_name AS line_name, s.remaining_day
+               p.plant_name AS department_name, l.line_name AS line_name,
+               s.operation_process AS op_name, s.remaining_day
         FROM schedules s
         LEFT JOIN plants p ON p.id = s.department
         LEFT JOIN line l ON l.id = s.line
@@ -318,7 +320,7 @@ function processSevenDayReminders(PDO $pdo): void
     $daysLeft  = $t['remaining_day'];
     $listHtml .= "<li>"
       . "<span style='color:#2563eb; font-weight:bold;'>[H-{$daysLeft}]</span> "
-      . "<b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']}]"
+      . "<b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
       . " — {$t['maintenance_point']}"
       . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$t['change_date_plan']})</span>"
       . "</li>";
@@ -363,7 +365,8 @@ function processOverdueReminders(PDO $pdo): void
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               s.remaining_day, p.plant_name AS department_name, l.line_name AS line_name
+               s.remaining_day, p.plant_name AS department_name, l.line_name AS line_name,
+               s.operation_process AS op_name
         FROM schedules s
         LEFT JOIN plants p ON p.id = s.department
         LEFT JOIN line l ON l.id = s.line
@@ -383,7 +386,7 @@ function processOverdueReminders(PDO $pdo): void
   $listHtml = '<ul style="color:#334155;">';
   foreach ($tasks as $t) {
     $late      = abs((int)$t['remaining_day']);
-    $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']}]"
+    $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
       . " — {$t['maintenance_point']}"
       . " (Plan: {$t['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>";
   }
@@ -444,7 +447,7 @@ function sendEditedScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): 
     if (alreadySentToday($pdo, $key)) return;
     $late        = abs($remainingDay);
     $listHtml    = "<ul style='color:#334155;'>"
-      . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']}]"
+      . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']} | OP {$schedule['op_name']}]"
       . " — {$schedule['maintenance_point']}"
       . " (Plan: {$schedule['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>"
       . "</ul>";
@@ -457,7 +460,7 @@ function sendEditedScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): 
     if (alreadySentToday($pdo, $key)) return;
     $listHtml    = "<ul style='color:#334155;'>"
       . "<li><span style='color:#2563eb;font-weight:bold;'>[H-{$remainingDay}]</span> "
-      . "<b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']}]"
+      . "<b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']} | OP {$schedule['op_name']}]"
       . " — {$schedule['maintenance_point']}"
       . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$schedule['change_date_plan']})</span></li>"
       . "</ul>";
@@ -471,7 +474,7 @@ function sendEditedScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): 
     $key = "edit-reminder-{$scheduleId}";
     if (alreadySentToday($pdo, $key)) return;
     $listHtml    = "<ul style='color:#334155;line-height:1.8;'>"
-      . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']}]"
+      . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']} | OP {$schedule['op_name']}]"
       . " — {$schedule['maintenance_point']}"
       . " <span style='color:#64748b;'>(Plan: {$schedule['change_date_plan']} | Sisa: <b>{$remainingDay} hari</b> | Threshold: {$remAct} hari)</span></li>"
       . "</ul>";
@@ -530,6 +533,7 @@ function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
   $stmt    = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
                p.plant_name AS department_name, l.line_name AS line_name,
+               s.operation_process AS op_name,
                s.reminder_activity, s.remaining_day
         FROM schedules_preventive s
         LEFT JOIN plants p ON p.id = s.department
@@ -551,7 +555,7 @@ function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
 
   $listHtml = '<ul style="color:#334155;line-height:1.8;">';
   foreach ($tasks as $t) {
-    $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']}]"
+    $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
       . " — {$t['maintenance_point']}"
       . " <span style='color:#64748b;'>(Plan: {$t['change_date_plan']} | Sisa: <b>{$t['remaining_day']} hari</b> | Threshold: {$t['reminder_activity']} hari)</span></li>";
   }
@@ -601,7 +605,8 @@ function processPrevSevenDayReminders(PDO $pdo): void
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               p.plant_name AS department_name, l.line_name AS line_name, s.remaining_day
+               p.plant_name AS department_name, l.line_name AS line_name,
+               s.operation_process AS op_name, s.remaining_day
         FROM schedules_preventive s
         LEFT JOIN plants p ON p.id = s.department
         LEFT JOIN line l ON l.id = s.line
@@ -628,7 +633,7 @@ function processPrevSevenDayReminders(PDO $pdo): void
     $daysLeft  = $t['remaining_day'];
     $listHtml .= "<li>"
       . "<span style='color:#0d9488;font-weight:bold;'>[H-{$daysLeft}]</span> "
-      . "<b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']}]"
+      . "<b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
       . " — {$t['maintenance_point']}"
       . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$t['change_date_plan']})</span>"
       . "</li>";
@@ -671,7 +676,8 @@ function processPrevOverdueReminders(PDO $pdo): void
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               s.remaining_day, p.plant_name AS department_name, l.line_name AS line_name
+               s.remaining_day, p.plant_name AS department_name, l.line_name AS line_name,
+               s.operation_process AS op_name
         FROM schedules_preventive s
         LEFT JOIN plants p ON p.id = s.department
         LEFT JOIN line l ON l.id = s.line
@@ -696,7 +702,7 @@ function processPrevOverdueReminders(PDO $pdo): void
   $listHtml = '<ul style="color:#334155;">';
   foreach ($tasks as $t) {
     $late      = abs((int)$t['remaining_day']);
-    $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']}]"
+    $listHtml .= "<li><b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
       . " — {$t['maintenance_point']}"
       . " (Plan: {$t['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>";
   }
@@ -758,7 +764,7 @@ function sendEditedPrevScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDa
     if (alreadySentToday($pdo, $key)) return;
     $late        = abs($remainingDay);
     $listHtml    = "<ul style='color:#334155;'>"
-      . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']}]"
+      . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']} | OP {$schedule['op_name']}]"
       . " — {$schedule['maintenance_point']}"
       . " (Plan: {$schedule['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>"
       . "</ul>";
@@ -771,7 +777,7 @@ function sendEditedPrevScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDa
     if (alreadySentToday($pdo, $key)) return;
     $listHtml    = "<ul style='color:#334155;'>"
       . "<li><span style='color:#0d9488;font-weight:bold;'>[H-{$remainingDay}]</span> "
-      . "<b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']}]"
+      . "<b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']} | OP {$schedule['op_name']}]"
       . " — {$schedule['maintenance_point']}"
       . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$schedule['change_date_plan']})</span></li>"
       . "</ul>";
@@ -785,7 +791,7 @@ function sendEditedPrevScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDa
     $key = "prev-edit-reminder-{$scheduleId}";
     if (alreadySentToday($pdo, $key)) return;
     $listHtml    = "<ul style='color:#334155;line-height:1.8;'>"
-      . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']}]"
+      . "<li><b>{$schedule['machine_name']}</b> [{$schedule['department_name']} | {$schedule['line_name']} | OP {$schedule['op_name']}]"
       . " — {$schedule['maintenance_point']}"
       . " <span style='color:#64748b;'>(Plan: {$schedule['change_date_plan']} | Sisa: <b>{$remainingDay} hari</b> | Threshold: {$remAct} hari)</span></li>"
       . "</ul>";
@@ -862,7 +868,7 @@ function sendImportAlert(PDO $pdo, array $queue): void
       foreach ($groups['overdue'] as $s) {
         $rd   = (int)$idMap[$s['id']];
         $late = abs($rd);
-        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']}]"
+        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']} | OP {$s['op_name']}]"
           . " — {$s['maintenance_point']}"
           . " (Plan: {$s['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>";
       }
@@ -902,7 +908,7 @@ function sendImportAlert(PDO $pdo, array $queue): void
         $rd        = (int)$idMap[$s['id']];
         $listHtml .= "<li>"
           . "<span style='color:#2563eb;font-weight:bold;'>[H-{$rd}]</span> "
-          . "<b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']}]"
+          . "<b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']} | OP {$s['op_name']}]"
           . " — {$s['maintenance_point']}"
           . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$s['change_date_plan']})</span></li>";
       }
@@ -940,7 +946,7 @@ function sendImportAlert(PDO $pdo, array $queue): void
       foreach ($groups['threshold'] as $s) {
         $rd     = (int)$idMap[$s['id']];
         $remAct = (int)($s['reminder_activity'] ?? 0);
-        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']}]"
+        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']} | OP {$s['op_name']}]"
           . " — {$s['maintenance_point']}"
           . " <span style='color:#64748b;'>(Plan: {$s['change_date_plan']} | Sisa: <b>{$rd} hari</b> | Threshold: {$remAct} hari)</span></li>";
       }
@@ -1013,7 +1019,7 @@ function sendPrevImportAlert(PDO $pdo, array $queue): void
       $listHtml = '<ul style="color:#334155;">';
       foreach ($groups['overdue'] as $s) {
         $late      = abs((int)$idMap[$s['id']]);
-        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']}]"
+        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']} | OP {$s['op_name']}]"
           . " — {$s['maintenance_point']}"
           . " (Plan: {$s['change_date_plan']}, <span style='color:#991b1b;font-weight:bold;'>Terlambat {$late} hari</span>)</li>";
       }
@@ -1052,7 +1058,7 @@ function sendPrevImportAlert(PDO $pdo, array $queue): void
         $rd        = (int)$idMap[$s['id']];
         $listHtml .= "<li>"
           . "<span style='color:#0d9488;font-weight:bold;'>[H-{$rd}]</span> "
-          . "<b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']}]"
+          . "<b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']} | OP {$s['op_name']}]"
           . " — {$s['maintenance_point']}"
           . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$s['change_date_plan']})</span></li>";
       }
@@ -1089,7 +1095,7 @@ function sendPrevImportAlert(PDO $pdo, array $queue): void
       foreach ($groups['threshold'] as $s) {
         $rd     = (int)$idMap[$s['id']];
         $remAct = (int)($s['reminder_activity'] ?? 0);
-        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']}]"
+        $listHtml .= "<li><b>{$s['machine_name']}</b> [{$s['department_name']} | {$s['line_name']} | OP {$s['op_name']}]"
           . " — {$s['maintenance_point']}"
           . " <span style='color:#64748b;'>(Plan: {$s['change_date_plan']} | Sisa: <b>{$rd} hari</b> | Threshold: {$remAct} hari)</span></li>";
       }

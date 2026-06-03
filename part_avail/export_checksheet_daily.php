@@ -73,10 +73,12 @@ $startRow = 4;
 foreach ($submissions as $sub) {
     // Ambil detail items untuk submission ini
     $stmtDet = $pdo->prepare("
-        SELECT no, part, standard, result, note
-        FROM checksheet_submission_details
-        WHERE submission_id = ?
-        ORDER BY no
+        SELECT d.no, d.part, d.standard, d.result, d.note,
+               i.method, i.action, i.`interval`
+        FROM checksheet_submission_details d
+        LEFT JOIN checksheet_items i ON i.id = d.item_id
+        WHERE d.submission_id = ?
+        ORDER BY d.no
     ");
     $stmtDet->execute([$sub['id']]);
     $details = $stmtDet->fetchAll();
@@ -119,10 +121,11 @@ foreach ($submissions as $sub) {
         'Category',
         'Submission ID',
         'Check Date',
-        'Checker'
+        'Checker',
+        'Submitted At',
     ];
     $sheet->fromArray($headers, NULL, "A{$hdrRow}");
-    $sheet->getStyle("A{$hdrRow}:L{$hdrRow}")->applyFromArray([
+    $sheet->getStyle("A{$hdrRow}:M{$hdrRow}")->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -144,15 +147,16 @@ foreach ($submissions as $sub) {
             $det['no'],
             $det['part'],
             $det['standard'],
-            '',    // method — tidak disimpan di detail, bisa ditambahkan jika diperlukan
-            '',    // action
-            '',    // interval
+            $det['method']   ?? '',
+            $det['action']   ?? '',
+            $det['interval'] ?? '',
             $det['result'],
             $resultLabel[$det['result']] ?? $det['result'],
             $sub['category_key'],
             $sub['id'],
             $sub['check_date'],
             $sub['checker'],
+            $sub['submitted_at'],
         ];
         $sheet->fromArray($dataRow, NULL, "A{$startRow}");
 
@@ -171,7 +175,7 @@ foreach ($submissions as $sub) {
             'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
         ]);
 
-        $sheet->getStyle("A{$startRow}:L{$startRow}")->getAlignment()
+        $sheet->getStyle("A{$startRow}:M{$startRow}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
         $sheet->getRowDimension($startRow)->setRowHeight(14);
         $startRow++;
@@ -195,7 +199,7 @@ foreach ($submissions as $sub) {
     // Border untuk blok ini
     $blockEnd = $startRow;
     $blockStart = $infoRow;
-    $sheet->getStyle("A{$blockStart}:L{$blockEnd}")->applyFromArray([
+    $sheet->getStyle("A{$blockStart}:M{$blockEnd}")->applyFromArray([
         'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
     ]);
 
@@ -203,7 +207,7 @@ foreach ($submissions as $sub) {
 }
 
 /* ── AUTO SIZE ── */
-foreach (range('A', 'L') as $col) {
+foreach (range('A', 'M') as $col) {
     $sheet->getColumnDimension($col)->setAutoSize(true);
 }
 

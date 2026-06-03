@@ -59,13 +59,13 @@ if (file_exists('assets/company_logo.jpg')) {
 }
 
 /* TITLE */
-$sheet1->mergeCells('A1:N1');
+$sheet1->mergeCells('A1:O1');
 $sheet1->setCellValue('A1', 'MONTHLY CHECK SHEET REPORT — SUMMARY');
 $sheet1->getStyle('A1')->getFont()->setBold(true)->setSize(15);
 $sheet1->getStyle('A1')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
 $sheet1->getRowDimension(1)->setRowHeight(45);
 
-$sheet1->mergeCells('A2:N2');
+$sheet1->mergeCells('A2:O2');
 $sheet1->setCellValue('A2', 'Bulan : ' . $bulan);
 $sheet1->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
 $sheet1->getStyle('A2')->getFont()->setSize(11);
@@ -81,6 +81,7 @@ $headers = [
     'Machine Type',
     'Category',
     'Checker',
+    'Submitted At',
     'Total Items',
     'OK (V)',
     'Problem (X)',
@@ -88,7 +89,7 @@ $headers = [
     'Repair Outsider (RO)'
 ];
 $sheet1->fromArray($headers, NULL, 'A4');
-$sheet1->getStyle('A4:N4')->applyFromArray([
+$sheet1->getStyle('A4:O4')->applyFromArray([
     'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
     'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
     'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -136,6 +137,7 @@ foreach ($submissions as $sub) {
         $sub['machine_type'],
         $sub['category_key'],
         $sub['checker'],
+        $sub['submitted_at'],
         $total,
         $ok,
         $xc,
@@ -145,14 +147,14 @@ foreach ($submissions as $sub) {
 
     // Color problem & repair columns
     if ($xc > 0) {
-        $sheet1->getStyle("L{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEE2E2']], 'font' => ['bold' => true, 'color' => ['rgb' => 'DC2626']]]);
+        $sheet1->getStyle("M{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEE2E2']], 'font' => ['bold' => true, 'color' => ['rgb' => 'DC2626']]]);
     }
     if ($rc > 0 || $ro > 0) {
-        $sheet1->getStyle("M{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEF9C3']], 'font' => ['bold' => true, 'color' => ['rgb' => 'CA8A04']]]);
-        $sheet1->getStyle("N{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'EDE9FE']], 'font' => ['bold' => true, 'color' => ['rgb' => '7C3AED']]]);
+        $sheet1->getStyle("N{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEF9C3']], 'font' => ['bold' => true, 'color' => ['rgb' => 'CA8A04']]]);
+        $sheet1->getStyle("O{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'EDE9FE']], 'font' => ['bold' => true, 'color' => ['rgb' => '7C3AED']]]);
     }
 
-    $sheet1->getStyle("A{$row1}:N{$row1}")->getAlignment()
+    $sheet1->getStyle("A{$row1}:O{$row1}")->getAlignment()
         ->setVertical(Alignment::VERTICAL_CENTER)->setHorizontal(Alignment::HORIZONTAL_CENTER)->setWrapText(true);
     $sheet1->getStyle("C{$row1}:F{$row1}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_LEFT);
     $sheet1->getRowDimension($row1)->setRowHeight(15);
@@ -160,10 +162,10 @@ foreach ($submissions as $sub) {
 }
 
 /* Grand Total Row */
-$sheet1->mergeCells("A{$row1}:I{$row1}");
+$sheet1->mergeCells("A{$row1}:J{$row1}");
 $sheet1->setCellValue("A{$row1}", "TOTAL");
-$sheet1->fromArray([$grandTotal['items'], $grandTotal['ok'], $grandTotal['x'], $grandTotal['r'], $grandTotal['ro']], NULL, "J{$row1}");
-$sheet1->getStyle("A{$row1}:N{$row1}")->applyFromArray([
+$sheet1->fromArray([$grandTotal['items'], $grandTotal['ok'], $grandTotal['x'], $grandTotal['r'], $grandTotal['ro']], NULL, "K{$row1}");
+$sheet1->getStyle("A{$row1}:O{$row1}")->applyFromArray([
     'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
     'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
     'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -171,10 +173,10 @@ $sheet1->getStyle("A{$row1}:N{$row1}")->applyFromArray([
 $sheet1->getRowDimension($row1)->setRowHeight(18);
 
 /* Border & autosize sheet1 */
-$sheet1->getStyle("A4:N" . $row1)->applyFromArray([
+$sheet1->getStyle("A4:O" . $row1)->applyFromArray([
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
 ]);
-foreach (range('A', 'N') as $col) {
+foreach (range('A', 'O') as $col) {
     $sheet1->getColumnDimension($col)->setAutoSize(true);
 }
 $sheet1->freezePane('A5');
@@ -209,10 +211,11 @@ $hdrs2 = [
     'Part to be Checked',
     'Standard',
     'Result',
-    'Keterangan'
+    'Keterangan',
+    'Submitted At',
 ];
 $sheet2->fromArray($hdrs2, NULL, 'A4');
-$sheet2->getStyle('A4:L4')->applyFromArray([
+$sheet2->getStyle('A4:M4')->applyFromArray([
     'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
     'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4F46E5']],
     'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -253,6 +256,7 @@ foreach ($submissions as $sub) {
             $item['standard'],
             $item['result'],
             $resultLabel[$item['result']] ?? $item['result'],
+            $sub['submitted_at'],
         ], NULL, "A{$row2}");
 
         $rc = $resultColors[$item['result']] ?? ['bg' => 'FFFFFF', 'fg' => '000000'];
@@ -262,17 +266,17 @@ foreach ($submissions as $sub) {
             'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
         ]);
 
-        $sheet2->getStyle("A{$row2}:L{$row2}")->getAlignment()
+        $sheet2->getStyle("A{$row2}:M{$row2}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
         $sheet2->getRowDimension($row2)->setRowHeight(14);
         $row2++;
     }
 }
 
-$sheet2->getStyle("A4:L" . ($row2 - 1))->applyFromArray([
+$sheet2->getStyle("A4:M" . ($row2 - 1))->applyFromArray([
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
 ]);
-foreach (range('A', 'L') as $col) {
+foreach (range('A', 'M') as $col) {
     $sheet2->getColumnDimension($col)->setAutoSize(true);
 }
 $sheet2->freezePane('A5');

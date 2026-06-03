@@ -717,6 +717,7 @@ function partOrderBadge(string $v): string
                         'point'    => $r['maintenance_point'] ?? '-',
                         'dept'     => $r['department'] ?? '',
                         'line'     => $r['line'] ?? '',
+                        'op'       => $r['operation_process'] ?? '',
                         'interval' => ($r['interval_month'] ?? 0) . ' mo',
                     ], $todaySchedArrVal), JSON_UNESCAPED_UNICODE);
                     ?>
@@ -767,10 +768,10 @@ function partOrderBadge(string $v): string
                                                 </div>
                                                 <div class="min-w-0 flex-1">
                                                     <p class="font-black text-blue-900 truncate" style="font-size:.75rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
-                                                    <p class="text-blue-600 mt-0.5 truncate" style="font-size:.67rem;" title="<?= htmlspecialchars($td['maintenance_point'] ?? '-') ?>"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
-                                                    <?php if (!empty($td['department']) || !empty($td['line'])): ?>
+                                                    <p class="text-blue-600 mt-0.5" style="font-size:.67rem;word-break:break-word;white-space:normal;line-height:1.4;"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
+                                                    <?php if (!empty($td['department']) || !empty($td['line']) || !empty($td['operation_process'])): ?>
                                                         <p class="text-blue-400 mt-0.5 truncate" style="font-size:.62rem;">
-                                                            <?= htmlspecialchars($td['department'] ?? '') ?><?= !empty($td['line']) ? ' · ' . htmlspecialchars($td['line']) : '' ?>
+                                                            <?= htmlspecialchars($td['department'] ?? '') ?><?= !empty($td['line']) ? ' · ' . htmlspecialchars($td['line']) : '' ?><?= !empty($td['operation_process']) ? ' · OP ' . htmlspecialchars($td['operation_process']) : '' ?>
                                                         </p>
                                                     <?php endif; ?>
                                                 </div>
@@ -847,7 +848,7 @@ function partOrderBadge(string $v): string
                                                             <div class="text-slate-500 mt-0.5" style="font-size:.65rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><?= htmlspecialchars($row['process_machine']) ?></div>
                                                         <?php endif; ?>
                                                         <div class="text-slate-400 mt-0.5" style="font-size:.62rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                                                            <?= htmlspecialchars($row['department'] ?? '') ?><?= !empty($row['line']) ? ' · ' . htmlspecialchars($row['line']) : '' ?>
+                                                            <?= htmlspecialchars($row['department'] ?? '') ?><?= !empty($row['line']) ? ' · ' . htmlspecialchars($row['line']) : '' ?><?= !empty($row['operation_process']) ? ' · OP ' . htmlspecialchars($row['operation_process']) : '' ?>
                                                         </div>
                                                     </td>
                                                     <td class="tbl-td px-2 py-2">
@@ -889,6 +890,7 @@ function partOrderBadge(string $v): string
                         'point'    => $r['maintenance_point'] ?? '-',
                         'dept'     => $r['department'] ?? '',
                         'line'     => $r['line'] ?? '',
+                        'op'       => $r['operation_process'] ?? '',
                         'interval' => ($r['interval_month'] ?? 0) . ' mo',
                     ], $prevTodayArrVal), JSON_UNESCAPED_UNICODE);
                     ?>
@@ -939,10 +941,10 @@ function partOrderBadge(string $v): string
                                                 </div>
                                                 <div class="min-w-0 flex-1">
                                                     <p class="font-black text-indigo-900 truncate" style="font-size:.75rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
-                                                    <p class="text-indigo-600 mt-0.5 truncate" style="font-size:.67rem;" title="<?= htmlspecialchars($td['maintenance_point'] ?? '-') ?>"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
-                                                    <?php if (!empty($td['department']) || !empty($td['line'])): ?>
+                                                    <p class="text-indigo-600 mt-0.5" style="font-size:.67rem;word-break:break-word;white-space:normal;line-height:1.4;"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
+                                                    <?php if (!empty($td['department']) || !empty($td['line']) || !empty($td['operation_process'])): ?>
                                                         <p class="text-indigo-400 mt-0.5 truncate" style="font-size:.62rem;">
-                                                            <?= htmlspecialchars($td['department'] ?? '') ?><?= !empty($td['line']) ? ' · ' . htmlspecialchars($td['line']) : '' ?>
+                                                            <?= htmlspecialchars($td['department'] ?? '') ?><?= !empty($td['line']) ? ' · ' . htmlspecialchars($td['line']) : '' ?><?= !empty($td['operation_process']) ? ' · OP ' . htmlspecialchars($td['operation_process']) : '' ?>
                                                         </p>
                                                     <?php endif; ?>
                                                 </div>
@@ -1005,11 +1007,11 @@ function partOrderBadge(string $v): string
                                                             <div class="text-xs text-slate-500 mt-0.5"><?= htmlspecialchars($row['process_machine']) ?></div>
                                                         <?php endif; ?>
                                                         <div class="text-[11px] text-slate-400 mt-0.5">
-                                                            <?= htmlspecialchars($row['department'] ?? '') ?><?= !empty($row['line']) ? ' · ' . htmlspecialchars($row['line']) : '' ?>
+                                                            <?= htmlspecialchars($row['department'] ?? '') ?><?= !empty($row['line']) ? ' · ' . htmlspecialchars($row['line']) : '' ?><?= !empty($row['operation_process']) ? ' · OP ' . htmlspecialchars($row['operation_process']) : '' ?>
                                                         </div>
                                                     </td>
-                                                    <td class="tbl-td" style="max-width:160px;">
-                                                        <span class="text-sm text-slate-700"><?= htmlspecialchars($row['maintenance_point'] ?? '-') ?></span>
+                                                    <td class="tbl-td" style="min-width:160px;">
+                                                        <span style="font-size:.72rem;color:#334155;display:block;word-break:break-word;white-space:normal;line-height:1.4;"><?= htmlspecialchars($row['maintenance_point'] ?? '-') ?></span>
                                                         <?php if (!empty($row['name_unit'])): ?>
                                                             <div class="text-xs text-slate-400 italic mt-0.5"><?= htmlspecialchars($row['name_unit']) ?></div>
                                                         <?php endif; ?>
