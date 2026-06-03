@@ -6,6 +6,8 @@ $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 // ─── AJAX: fetch history data ─────────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
+    error_reporting(0);
+    @ini_set('display_errors', 0);
     header('Content-Type: application/json');
 
     $mode  = $_GET['mode']  ?? 'daily';     // daily | monthly
@@ -55,6 +57,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
 
 // ─── AJAX: fetch checker summary ──────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'checker_summary') {
+    error_reporting(0);
+    @ini_set('display_errors', 0);
     header('Content-Type: application/json');
 
     $mode  = $_GET['mode']  ?? 'daily';
@@ -71,10 +75,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'checker_summary') {
         $where = "WHERE DATE_FORMAT(s.check_date, '%Y-%m') = ?";
     }
 
-    $stmt = $pdo->prepare("
+    try {
+        $stmt = $pdo->prepare("
         SELECT
             s.checker,
-            COUNT(s.id)                      AS total_submissions,
+            COUNT(DISTINCT s.id)             AS total_submissions,
             COUNT(DISTINCT s.machine_name)   AS total_machines,
             COUNT(DISTINCT s.department)     AS total_departments,
             SUM(d.result = 'V')              AS ok_count,
@@ -91,44 +96,59 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'checker_summary') {
         GROUP BY s.checker
         ORDER BY total_submissions DESC
     ");
-    $stmt->execute([$value]);
-    $rows = $stmt->fetchAll();
+        $stmt->execute([$value]);
+        $rows = $stmt->fetchAll();
 
-    // Untuk setiap checker, ambil daftar submission lengkap (mesin + waktu)
-    $result = [];
-    foreach ($rows as $row) {
-        $stmtSubs = $pdo->prepare("
-            SELECT machine_name, department, line, op, category_key, submitted_at
-            FROM checksheet_submissions
+        // Untuk setiap checker, ambil daftar submission lengkap (mesin + waktu)
+        $result = [];
+        foreach ($rows as $row) {
+            $stmtSubs = $pdo->prepare("
+            SELECT s.machine_name, s.department, s.line, s.op, s.category_key, s.submitted_at
+            FROM checksheet_submissions s
             $where
-            AND checker = ?
-            ORDER BY submitted_at ASC
+            AND s.checker = ?
+            ORDER BY s.submitted_at ASC
         ");
-        $stmtSubs->execute([$value, $row['checker']]);
-        $row['submission_list'] = $stmtSubs->fetchAll();
-        $result[] = $row;
-    }
+            $stmtSubs->execute([$value, $row['checker']]);
+            $row['submission_list'] = $stmtSubs->fetchAll();
+            $result[] = $row;
+        }
 
-    echo json_encode($result);
+        echo json_encode($result);
+    } catch (\Exception $e) {
+        echo json_encode(['error' => $e->getMessage()]);
+    }
     exit;
 }
 
 // ─── AJAX: fetch detail items for a submission ────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
+    error_reporting(0);
+    @ini_set('display_errors', 0);
     header('Content-Type: application/json');
     $id = (int)($_GET['id'] ?? 0);
     if (!$id) {
         echo json_encode([]);
         exit;
     }
+    // Ambil interval dari checksheet_items via LEFT JOIN
     $stmt = $pdo->prepare("
-        SELECT no, part, standard, result, note
-        FROM checksheet_submission_details
-        WHERE submission_id = ?
-        ORDER BY no
+        SELECT d.no, d.part, d.standard, d.result, d.note,
+               COALESCE(ci.`interval`, 'Daily') AS `interval`
+        FROM checksheet_submission_details d
+        LEFT JOIN checksheet_items ci ON ci.id = d.item_id
+        WHERE d.submission_id = ?
+        ORDER BY d.no
     ");
     $stmt->execute([$id]);
-    echo json_encode($stmt->fetchAll());
+    $items = $stmt->fetchAll();
+
+    // Ambil check_date untuk hitung next_due weekly/monthly di JS
+    $subStmt = $pdo->prepare("SELECT DATE(check_date) AS check_date FROM checksheet_submissions WHERE id = ?");
+    $subStmt->execute([$id]);
+    $sub = $subStmt->fetch();
+
+    echo json_encode(['items' => $items, 'check_date' => $sub['check_date'] ?? null]);
     exit;
 }
 ?>
@@ -561,6 +581,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             border-bottom: 2px solid #e2e8f0;
             position: sticky;
             top: 0;
+            z-index: 10;
             white-space: nowrap;
         }
 
@@ -792,26 +813,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
 
                     <div class="flex-1"></div>
 
-                    <div>
-                        <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Cari Data</label>
-                        <div class="relative">
-                            <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
-                            <input type="text" id="inp-search"
-                                placeholder="Mesin, Dept, Line, Checker…"
-                                oninput="filterTable()"
-                                class="form-field pl-8"
-                                style="min-width:220px;">
-                            <button id="btn-clear-search" onclick="clearSearch()" style="display:none;"
-                                class="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-slate-200 hover:bg-slate-300 flex items-center justify-center transition-all">
-                                <i class="fas fa-times text-slate-500" style="font-size:9px;"></i>
-                            </button>
-                        </div>
-                    </div>
-
                     <div class="flex gap-2">
                         <button onclick="openCheckerSummary()"
                             class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm">
-                            <i class="fas fa-user-check"></i> Ringkasan Checker
+                            <i class="fas fa-user-check"></i> View Checker
                         </button>
                         <button onclick="exportData()"
                             class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm">
@@ -822,14 +827,30 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             </div>
 
             <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-0">
-                <div class="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
-                    <div class="flex items-center gap-2">
+                <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-3 flex-shrink-0">
+                    <!-- Judul -->
+                    <div class="flex items-center gap-2 flex-shrink-0">
                         <i class="fas fa-table text-slate-400 text-sm"></i>
                         <span class="text-sm font-bold text-slate-700">Riwayat Submission</span>
-                        <span id="result-label" class="text-[11px] text-slate-400 font-medium ml-1"></span>
-                        <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-600 ml-1"></span>
+                        <span id="result-label" class="text-[11px] text-slate-400 font-medium"></span>
+                        <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-600"></span>
                     </div>
-                    <span id="showing-label" class="text-[11px] text-slate-400 font-medium"></span>
+                    <!-- Search box -->
+                    <div class="relative flex-1" style="max-width:280px;">
+                        <i class="fas fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" style="font-size:10px;"></i>
+                        <input type="text" id="inp-search"
+                            placeholder="Cari mesin, dept, line, checker…"
+                            oninput="filterTable()"
+                            class="form-field pl-7 pr-7 text-xs"
+                            style="height:32px;padding-top:0;padding-bottom:0;">
+                        <button id="btn-clear-search" onclick="clearSearch()" style="display:none;"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-slate-200 hover:bg-slate-300 flex items-center justify-center transition-all">
+                            <i class="fas fa-times text-slate-500" style="font-size:8px;"></i>
+                        </button>
+                    </div>
+                    <!-- Spacer + showing label -->
+                    <div class="flex-1"></div>
+                    <span id="showing-label" class="text-[11px] text-slate-400 font-medium flex-shrink-0"></span>
                 </div>
 
                 <div class="table-scroll-container flex-1 min-h-0">
@@ -883,7 +904,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         </div>
     </div>
 
-    <!-- ── Modal: Ringkasan Checker ───────────────────────────────────────── -->
+    <!-- ── Modal: View Checker ──────────────────────────────────────────────── -->
     <div id="checker-modal-overlay" onclick="closeCheckerModal(event)"
         style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);z-index:200;align-items:center;justify-content:center;">
         <div id="checker-modal-box"
@@ -908,13 +929,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
                     <input type="text" id="checker-search" placeholder="Cari nama checker…"
                         oninput="filterCheckerTable()"
-                        class="form-field pl-8 w-full" style="max-width:280px;">
+                        class="form-field pl-8 w-full" style="max-width:100%;">
                 </div>
             </div>
 
             <!-- Table -->
             <div class="overflow-auto flex-1" style="min-height:0;">
-                <table class="w-full" id="checker-summary-table">
+                <table class="w-full" id="checker-summary-table" style="display:none;">
                     <thead>
                         <tr>
                             <th class="modal-table-th text-center w-8">No</th>
@@ -931,7 +952,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                 </table>
 
                 <!-- Loading skeleton -->
-                <div id="checker-modal-loading" class="p-6 space-y-3">
+                <div id="checker-modal-loading" style="display:none;" class="p-6 space-y-3">
                     <?php for ($i = 0; $i < 5; $i++): ?>
                         <div class="flex gap-3 items-center">
                             <div class="skeleton w-6 h-5"></div>
@@ -1086,7 +1107,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             // Reset search saat load data baru
             document.getElementById('inp-search').value = '';
             document.getElementById('btn-clear-search').style.display = 'none';
-            document.getElementById('search-label').style.display = 'none';
+            const sl = document.getElementById('search-label');
+            if (sl) sl.style.display = 'none';
 
             document.getElementById('hist-table').style.display = 'none';
             document.getElementById('hist-empty').style.display = 'none';
@@ -1229,9 +1251,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
 
             fetch(`history_checksheet.php?ajax=detail&id=${id}`)
                 .then(r => r.json())
-                .then(items => {
+                .then(data => {
                     document.getElementById('modal-loading').style.display = 'none';
                     const tbody = document.getElementById('modal-tbody');
+                    // Support both old (array) and new (object) response format
+                    const items = Array.isArray(data) ? data : (data.items || []);
+                    const checkDate = Array.isArray(data) ? null : (data.check_date || null);
+
                     const resultMap = {
                         'V': '<span class="badge badge-v">V — OK</span>',
                         'X': '<span class="badge badge-x">X — Problem</span>',
@@ -1239,17 +1265,55 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         'RO': '<span class="badge badge-ro">RO — Outsider</span>',
                         '-': '<span class="badge badge-na">— N/A</span>',
                     };
+                    const fmtDate = d => d.toLocaleDateString('id-ID', {
+                        day: '2-digit',
+                        month: 'short',
+                        year: 'numeric'
+                    });
+
                     items.forEach(item => {
+                        const iv = (item.interval || 'Daily').trim();
+                        const isWeekly = iv === 'Weekly';
+                        const isMonthly = iv === 'Monthly' || iv === 'Montly';
+                        const isPeriodic = isWeekly || isMonthly;
+
+                        // Badge kecil interval di samping nama part
+                        const ivBadge = isWeekly ?
+                            '<span style="background:#fef9c3;color:#92400e;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:4px;">Weekly</span>' :
+                            isMonthly ?
+                            '<span style="background:#ede9fe;color:#5b21b6;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:4px;">Monthly</span>' :
+                            '';
+
+                        let resultCell;
+                        if (isPeriodic && item.result !== '-' && checkDate) {
+                            // Item periodic yg sudah diisi → tampilkan Last / Next
+                            const lastDate = new Date(checkDate + 'T00:00:00');
+                            const nextDue = new Date(lastDate);
+                            if (isWeekly) nextDue.setDate(nextDue.getDate() + 7);
+                            else nextDue.setMonth(nextDue.getMonth() + 1);
+                            resultCell = `<div style="font-size:.68rem;line-height:1.9;">
+                                <div><span style="color:#64748b;font-weight:600;">Last:</span> <span style="color:#047857;font-weight:700;">${fmtDate(lastDate)}</span></div>
+                                <div><span style="color:#64748b;font-weight:600;">Next:</span> <span style="color:#1d4ed8;font-weight:700;">${fmtDate(nextDue)}</span></div>
+                            </div>`;
+                        } else {
+                            // Daily atau periodic belum diisi → badge result biasa
+                            resultCell = resultMap[item.result] || item.result;
+                        }
+
                         const tr = document.createElement('tr');
                         tr.innerHTML = `
                         <td class="text-center text-slate-400 font-bold text-xs">${item.no}</td>
-                        <td class="font-medium text-slate-700">${item.part}</td>
+                        <td class="font-medium text-slate-700">${item.part}${ivBadge}</td>
                         <td class="text-slate-500 text-xs">${item.standard}</td>
-                        <td class="text-center">${resultMap[item.result] || item.result}</td>
+                        <td class="text-center">${resultCell}</td>
                         <td class="text-xs">${item.note ? `<span style="color:#b45309;font-style:italic;">${item.note}</span>` : '<span class="text-slate-300">—</span>'}</td>`;
                         tbody.appendChild(tr);
                     });
-                    const ok = items.filter(i => i.result === 'V').length;
+                    // Hitung ok hanya dari item non-periodic
+                    const ok = items.filter(i => {
+                        const iv = (i.interval || '').trim();
+                        return iv !== 'Weekly' && iv !== 'Monthly' && iv !== 'Montly' && i.result === 'V';
+                    }).length;
                     const pr = items.filter(i => i.result === 'X').length;
                     document.getElementById('modal-summary').textContent =
                         `${items.length} item total — ${ok} OK, ${pr} Problem`;
@@ -1313,7 +1377,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                 .then(rows => {
                     document.getElementById('checker-modal-loading').style.display = 'none';
 
-                    if (!rows || rows.length === 0) {
+                    if (!Array.isArray(rows) || rows.length === 0) {
                         document.getElementById('checker-modal-empty').style.display = 'flex';
                         return;
                     }
@@ -1332,51 +1396,52 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             tbody.innerHTML = '';
 
             rows.forEach((row, idx) => {
-                const total = parseInt(row.total_items) || 1;
-                const ok = parseInt(row.ok_count) || 0;
-                const pct = Math.round((ok / total) * 100);
+                try {
+                    const total = parseInt(row.total_items) || 1;
+                    const ok = parseInt(row.ok_count) || 0;
+                    const pct = Math.round((ok / total) * 100);
 
-                let barColor = '#22c55e';
-                if (pct < 60) barColor = '#ef4444';
-                else if (pct < 85) barColor = '#f59e0b';
+                    let barColor = '#22c55e';
+                    if (pct < 60) barColor = '#ef4444';
+                    else if (pct < 85) barColor = '#f59e0b';
 
-                // Buat daftar mesin dengan waktu submit
-                const subs = row.submission_list || [];
-                const machineListHtml = subs.length > 0 ?
-                    subs.map((s, i) => {
-                        const jam = s.submitted_at ? s.submitted_at.slice(11, 16) : '--:--';
-                        const catColors = {
-                            'MC': '#dbeafe|#1d4ed8',
-                            'SPM': '#ede9fe|#7c3aed',
-                            'ASSEMBLING': '#ccfbf1|#0f766e',
-                            'PAINTING': '#fce7f3|#be185d',
-                            'TEST_RUNNING': '#ffedd5|#c2410c',
-                            'PACKING': '#dcfce7|#15803d',
-                            'BOILER': '#fee2e2|#dc2626',
-                            'KOMPRESSOR': '#cffafe|#0e7490',
-                        };
-                        const [bg, fc] = (catColors[s.category_key] || '#f1f5f9|#64748b').split('|');
-                        return `<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;">
+                    // Buat daftar mesin dengan waktu submit
+                    const subs = row.submission_list || [];
+                    const machineListHtml = subs.length > 0 ?
+                        subs.map((s, i) => {
+                            const jam = s.submitted_at ? s.submitted_at.slice(11, 16) : '--:--';
+                            const catColors = {
+                                'MC': '#dbeafe|#1d4ed8',
+                                'SPM': '#ede9fe|#7c3aed',
+                                'ASSEMBLING': '#ccfbf1|#0f766e',
+                                'PAINTING': '#fce7f3|#be185d',
+                                'TEST_RUNNING': '#ffedd5|#c2410c',
+                                'PACKING': '#dcfce7|#15803d',
+                                'BOILER': '#fee2e2|#dc2626',
+                                'KOMPRESSOR': '#cffafe|#0e7490',
+                            };
+                            const [bg, fc] = (catColors[s.category_key] || '#f1f5f9|#64748b').split('|');
+                            return `<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;">
                             <span style="font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:4px;background:${bg};color:${fc};flex-shrink:0;">${s.category_key || '-'}</span>
                             <span style="font-size:.72rem;font-weight:600;color:#1e293b;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;" title="${s.machine_name}">${s.machine_name}</span>
                             <span style="font-size:.62rem;color:#94a3b8;flex-shrink:0;">${jam}</span>
                         </div>`;
-                    }).join('') :
-                    '<span style="font-size:.7rem;color:#94a3b8;">—</span>';
+                        }).join('') :
+                        '<span style="font-size:.7rem;color:#94a3b8;">—</span>';
 
-                const tr = document.createElement('tr');
-                tr.className = 'fade-in checker-row';
-                tr.style.animationDelay = `${idx * 20}ms`;
-                tr.innerHTML = `
+                    const tr = document.createElement('tr');
+                    tr.className = 'fade-in checker-row';
+                    tr.style.animationDelay = `${idx * 20}ms`;
+                    tr.innerHTML = `
                     <td style="padding:10px 12px;text-align:center;font-size:.72rem;color:#94a3b8;font-weight:700;">${idx + 1}</td>
                     <td style="padding:10px 12px;">
                         <div style="display:flex;align-items:center;gap:9px;">
                             <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                <span style="color:#fff;font-size:.65rem;font-weight:800;">${row.checker.charAt(0).toUpperCase()}</span>
+                                <span style="color:#fff;font-size:.65rem;font-weight:800;">${(row.checker || '?').charAt(0).toUpperCase()}</span>
                             </div>
                             <div>
                                 <div style="font-size:.82rem;font-weight:700;color:#1e293b;">${row.checker}</div>
-                                <div style="font-size:.65rem;color:#94a3b8;margin-top:1px;">${row.departments}</div>
+                                <div style="font-size:.65rem;color:#94a3b8;margin-top:1px;">${row.departments || '—'}</div>
                             </div>
                         </div>
                     </td>
@@ -1400,11 +1465,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     </td>
                     <td style="padding:10px 12px;text-align:center;">
                         <div style="display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap;">
-                            <span class="pill pill-v" title="OK (V)">${row.ok_count}</span>
-                            <span class="pill pill-x" title="Problem (X)">${row.problem_count}</span>
-                            <span class="pill pill-r" title="Repair (R)">${row.repair_count}</span>
-                            <span class="pill pill-ro" title="Outsider (RO)">${row.outsider_count}</span>
-                            <span class="pill pill-na" title="N/A">${row.na_count}</span>
+                            <span class="pill pill-v" title="OK (V)">${parseInt(row.ok_count)||0}</span>
+                            <span class="pill pill-x" title="Problem (X)">${parseInt(row.problem_count)||0}</span>
+                            <span class="pill pill-r" title="Repair (R)">${parseInt(row.repair_count)||0}</span>
+                            <span class="pill pill-ro" title="Outsider (RO)">${parseInt(row.outsider_count)||0}</span>
+                            <span class="pill pill-na" title="N/A">${parseInt(row.na_count)||0}</span>
                         </div>
                     </td>
                     <td style="padding:10px 16px;">
@@ -1415,7 +1480,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                             <span style="font-size:.72rem;font-weight:800;color:${barColor};min-width:34px;text-align:right;">${pct}%</span>
                         </div>
                     </td>`;
-                tbody.appendChild(tr);
+                    tbody.appendChild(tr);
+                } catch (e) {
+                    console.error('renderCheckerTable row error:', e, row);
+                }
             });
 
             document.getElementById('checker-summary-table').style.display = 'table';
