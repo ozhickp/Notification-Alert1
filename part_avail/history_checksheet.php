@@ -1,19 +1,8 @@
 <?php
 // history_checksheet.php
-$host    = 'db.yadin.com';
-$db      = 'db_notif_alert';
-$user    = 'ozick';
-$pass    = 'Yadin.5678';
-$charset = 'utf8mb4';
+require_once __DIR__ . '/config.php';
 
-$dsn     = "mysql:host=$host;dbname=$db;charset=$charset";
-$options = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC];
-
-try {
-    $pdo = new PDO($dsn, $user, $pass, $options);
-} catch (\PDOException $e) {
-    die('DB Error: ' . $e->getMessage());
-}
+$pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 // ─── AJAX: fetch history data ─────────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
