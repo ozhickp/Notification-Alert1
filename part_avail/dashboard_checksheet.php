@@ -117,29 +117,36 @@ if (isset($_GET['ajax'])) {
                 $inList = implode(',', $periodicIds);
 
                 // Pakai machine_name jika tersedia, fallback ke dept+line+op
+                // ORDER BY DESC + first-seen per item_id, hanya result yang benar-benar diisi
                 if ($machineName !== '') {
                     $stmtLast = $pdo->prepare("
-                        SELECT d.item_id, MAX(DATE(s.check_date)) AS last_date
+                        SELECT d.item_id, DATE(s.check_date) AS last_date
                         FROM checksheet_submission_details d
                         JOIN checksheet_submissions s ON s.id = d.submission_id
                         WHERE d.item_id IN ({$inList})
                           AND s.machine_name = ?
-                        GROUP BY d.item_id
+                          AND d.result != '-'
+                        ORDER BY s.check_date DESC
                     ");
                     $stmtLast->execute([$machineName]);
                 } else {
                     $stmtLast = $pdo->prepare("
-                        SELECT d.item_id, MAX(DATE(s.check_date)) AS last_date
+                        SELECT d.item_id, DATE(s.check_date) AS last_date
                         FROM checksheet_submission_details d
                         JOIN checksheet_submissions s ON s.id = d.submission_id
                         WHERE d.item_id IN ({$inList})
                           AND s.department = ? AND s.line = ? AND s.op = ?
-                        GROUP BY d.item_id
+                          AND d.result != '-'
+                        ORDER BY s.check_date DESC
                     ");
                     $stmtLast->execute([$dept, $line, $op]);
                 }
+                // Hanya simpan baris pertama (terbaru) per item_id
                 foreach ($stmtLast->fetchAll() as $r) {
-                    $lastDateMap[(int)$r['item_id']] = $r['last_date'];
+                    $itemId = (int)$r['item_id'];
+                    if (!isset($lastDateMap[$itemId])) {
+                        $lastDateMap[$itemId] = $r['last_date'];
+                    }
                 }
             }
 
