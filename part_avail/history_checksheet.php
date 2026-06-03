@@ -308,9 +308,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             flex-shrink: 0;
         }
 
-        /* ── PERBAIKAN: Container Tabel dengan Batas Tinggi & Scroll Internal ── */
+        /* ── Container Tabel: flex-1 agar isi sisa tinggi, scroll internal ── */
         .table-scroll-container {
-            height: calc(100vh - 215px);
+            flex: 1 1 0;
+            min-height: 0;
             overflow-y: auto;
         }
 
@@ -703,6 +704,22 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
 
                     <div class="flex-1"></div>
 
+                    <div>
+                        <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Cari Data</label>
+                        <div class="relative">
+                            <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
+                            <input type="text" id="inp-search"
+                                placeholder="Mesin, Dept, Line, Checker…"
+                                oninput="filterTable()"
+                                class="form-field pl-8"
+                                style="min-width:220px;">
+                            <button id="btn-clear-search" onclick="clearSearch()" style="display:none;"
+                                class="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-slate-200 hover:bg-slate-300 flex items-center justify-center transition-all">
+                                <i class="fas fa-times text-slate-500" style="font-size:9px;"></i>
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="flex gap-2">
                         <button onclick="exportData()"
                             class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm">
@@ -718,6 +735,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         <i class="fas fa-table text-slate-400 text-sm"></i>
                         <span class="text-sm font-bold text-slate-700">Riwayat Submission</span>
                         <span id="result-label" class="text-[11px] text-slate-400 font-medium ml-1"></span>
+                        <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-600 ml-1"></span>
                     </div>
                     <span id="showing-label" class="text-[11px] text-slate-400 font-medium"></span>
                 </div>
@@ -892,6 +910,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                 return;
             }
             currentPage = page;
+
+            // Reset search saat load data baru
+            document.getElementById('inp-search').value = '';
+            document.getElementById('btn-clear-search').style.display = 'none';
+            document.getElementById('search-label').style.display = 'none';
 
             document.getElementById('hist-table').style.display = 'none';
             document.getElementById('hist-empty').style.display = 'none';
@@ -1092,6 +1115,55 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             const d = document.createElement('div');
             d.textContent = str || '';
             return d.innerHTML;
+        }
+        // ── Search / Filter ───────────────────────────────────────────────────────
+        function filterTable() {
+            const query = document.getElementById('inp-search').value.trim().toLowerCase();
+            const rows = document.querySelectorAll('#hist-tbody tr');
+            const clearBtn = document.getElementById('btn-clear-search');
+            const searchLabel = document.getElementById('search-label');
+
+            clearBtn.style.display = query ? 'flex' : 'none';
+
+            let visible = 0;
+            rows.forEach(tr => {
+                const text = tr.textContent.toLowerCase();
+                const match = !query || text.includes(query);
+                tr.style.display = match ? '' : 'none';
+                if (match) visible++;
+            });
+
+            // Update label
+            if (query) {
+                searchLabel.style.display = 'inline-flex';
+                searchLabel.textContent = `${visible} cocok`;
+            } else {
+                searchLabel.style.display = 'none';
+            }
+
+            // Tampilkan baris "tidak ada hasil" jika semua tersembunyi
+            let noResultRow = document.getElementById('search-no-result-row');
+            if (visible === 0 && rows.length > 0) {
+                if (!noResultRow) {
+                    noResultRow = document.createElement('tr');
+                    noResultRow.id = 'search-no-result-row';
+                    noResultRow.innerHTML = `
+                        <td colspan="11" class="text-center py-10 text-slate-400">
+                            <i class="fas fa-search-minus text-3xl mb-2 block opacity-30"></i>
+                            <p class="font-bold text-sm">Tidak ada data yang cocok</p>
+                            <p class="text-xs mt-1">Coba kata kunci yang berbeda</p>
+                        </td>`;
+                    document.getElementById('hist-tbody').appendChild(noResultRow);
+                }
+                noResultRow.style.display = '';
+            } else if (noResultRow) {
+                noResultRow.style.display = 'none';
+            }
+        }
+
+        function clearSearch() {
+            document.getElementById('inp-search').value = '';
+            filterTable();
         }
     </script>
 </body>
