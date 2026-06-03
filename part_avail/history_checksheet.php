@@ -1051,7 +1051,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         <td class="font-medium text-slate-700">${item.part}</td>
                         <td class="text-slate-500 text-xs">${item.standard}</td>
                         <td class="text-center">${resultMap[item.result] || item.result}</td>
-                        <td class="text-slate-400 text-xs italic">${item.note || '—'}</td>`;
+                        <td class="text-xs">${item.note ? `<span style="color:#b45309;font-style:italic;">${item.note}</span>` : '<span class="text-slate-300">—</span>'}</td>`;
                         tbody.appendChild(tr);
                     });
                     const ok = items.filter(i => i.result === 'V').length;

@@ -597,6 +597,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             box-shadow: 0 0 0 3px rgba(244, 63, 94, .15);
         }
 
+        .note-input {
+            margin-top: 4px;
+            width: 100%;
+            padding: 4px 8px;
+            border: 1.5px solid #fca5a5;
+            border-radius: 8px;
+            font-size: .72rem;
+            color: #1e293b;
+            background: #fff7f7;
+            outline: none;
+            font-family: inherit;
+            transition: border-color .2s, box-shadow .2s;
+        }
+
+        .note-input:focus {
+            border-color: #f43f5e;
+            box-shadow: 0 0 0 3px rgba(244, 63, 94, .12);
+        }
+
+        .note-input.missing {
+            border-color: #ef4444;
+            background: #fef2f2;
+            animation: shake .3s ease;
+        }
+
+        @keyframes shake {
+
+            0%,
+            100% {
+                transform: translateX(0)
+            }
+
+            25% {
+                transform: translateX(-4px)
+            }
+
+            75% {
+                transform: translateX(4px)
+            }
+        }
+
         .result-select.val-v {
             background: #dcfce7;
             color: #15803d;
@@ -1296,13 +1337,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                     if (!lastDateStr) {
                         // Belum pernah dicek → tampilkan dropdown agar bisa diisi pertama kali
                         resultCell = `
-                            <select class="result-select val-dash" onchange="onResultChange(this)" data-idx="${idx}">
-                                <option value="-" selected>—</option>
-                                <option value="V">V — OK</option>
-                                <option value="X">X — Problem</option>
-                                <option value="R">R — Repair</option>
-                                <option value="RO">RO — Outsider</option>
-                            </select>`;
+                            <div class="result-cell-wrap">
+                                <select class="result-select val-dash" onchange="onResultChange(this)" data-item-idx="${idx}">
+                                    <option value="-" selected>—</option>
+                                    <option value="V">V — OK</option>
+                                    <option value="X">X — Problem</option>
+                                    <option value="R">R — Repair</option>
+                                    <option value="RO">RO — Outsider</option>
+                                </select>
+                            </div>`;
                     } else {
                         // Hitung next_due berdasarkan last_check_date
                         const lastDate = new Date(lastDateStr + 'T00:00:00');
@@ -1317,13 +1360,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                         if (todayDate >= nextDue) {
                             // Sudah waktunya → dropdown untuk diisi ulang
                             resultCell = `
-                                <select class="result-select val-dash" onchange="onResultChange(this)" data-idx="${idx}">
-                                    <option value="-" selected>—</option>
-                                    <option value="V">V — OK</option>
-                                    <option value="X">X — Problem</option>
-                                    <option value="R">R — Repair</option>
-                                    <option value="RO">RO — Outsider</option>
-                                </select>`;
+                                <div class="result-cell-wrap">
+                                    <select class="result-select val-dash" onchange="onResultChange(this)" data-item-idx="${idx}">
+                                        <option value="-" selected>—</option>
+                                        <option value="V">V — OK</option>
+                                        <option value="X">X — Problem</option>
+                                        <option value="R">R — Repair</option>
+                                        <option value="RO">RO — Outsider</option>
+                                    </select>
+                                </div>`;
                         } else {
                             // Belum waktunya → tampilkan Last / Next, auto V
                             resultCell = `
@@ -1338,13 +1383,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                     }
                 } else {
                     resultCell = `
-                        <select class="result-select val-dash" onchange="onResultChange(this)" data-idx="${idx}">
-                            <option value="-" selected>—</option>
-                            <option value="V">V — OK</option>
-                            <option value="X">X — Problem</option>
-                            <option value="R">R — Repair</option>
-                            <option value="RO">RO — Outsider</option>
-                        </select>`;
+                        <div class="result-cell-wrap">
+                            <select class="result-select val-dash" onchange="onResultChange(this)" data-item-idx="${idx}">
+                                <option value="-" selected>—</option>
+                                <option value="V">V — OK</option>
+                                <option value="X">X — Problem</option>
+                                <option value="R">R — Repair</option>
+                                <option value="RO">RO — Outsider</option>
+                            </select>
+                        </div>`;
                 }
 
                 tr.innerHTML = `
@@ -1374,6 +1421,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 '-': 'val-dash'
             };
             sel.className = 'result-select ' + (map[sel.value] || 'val-dash');
+
+            // Tampilkan note input jika result bukan OK / dash
+            const wrap = sel.closest('.result-cell-wrap');
+            if (!wrap) {
+                checkAllResultsFilled();
+                return;
+            }
+
+            let noteEl = wrap.querySelector('.note-input');
+            const needsNote = sel.value !== '-' && sel.value !== 'V';
+
+            if (needsNote) {
+                if (!noteEl) {
+                    noteEl = document.createElement('input');
+                    noteEl.type = 'text';
+                    noteEl.className = 'note-input';
+                    noteEl.placeholder = 'Tulis keterangan... (wajib)';
+                    noteEl.addEventListener('input', checkAllResultsFilled);
+                    wrap.appendChild(noteEl);
+                }
+                noteEl.focus();
+            } else {
+                if (noteEl) noteEl.remove();
+            }
+
             checkAllResultsFilled();
         }
 
@@ -1383,9 +1455,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 return;
             }
             const selects = document.querySelectorAll('#check-tbody .result-select');
+            // Semua dropdown harus terisi (bukan —)
             const allDropdownFilled = Array.from(selects).every(s => s.value !== '-');
-            // Weekly/Monthly items have _autoResult so no dropdown — treat as already filled
-            setSubmitEnabled(allDropdownFilled);
+            // Semua yang bukan V/— wajib punya note terisi
+            const allNotesFilled = Array.from(selects).every(s => {
+                if (s.value === '-' || s.value === 'V') return true;
+                const noteEl = s.closest('.result-cell-wrap')?.querySelector('.note-input');
+                return noteEl && noteEl.value.trim() !== '';
+            });
+            setSubmitEnabled(allDropdownFilled && allNotesFilled);
         }
 
         function setSubmitEnabled(enabled) {
@@ -1428,13 +1506,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                     result = selects[dropdownIdx]?.value ?? '-';
                     dropdownIdx++;
                 }
+                // Ambil note dari input — pakai selects[dropdownIdx-1] karena sudah diincrement
+                let note = null;
+                if (!item._autoResult) {
+                    const sel = selects[dropdownIdx - 1];
+                    const noteEl = sel?.closest('.result-cell-wrap')?.querySelector('.note-input');
+                    note = noteEl ? noteEl.value.trim() || null : null;
+                }
                 return {
                     id: item.id,
                     no: item.no,
                     part: item.part,
                     standard: item.standard,
                     result: result,
-                    note: null,
+                    note: note,
                 };
             });
 
