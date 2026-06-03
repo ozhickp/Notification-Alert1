@@ -5,7 +5,7 @@ $dbname = 'db_notif_alert';
 $username = 'ozick';
 $password = 'Yadin.5678';
 
-$conn = new mysqli("localhost", "root", "", "db_notif_alert");
+$conn = new mysqli("db.yadin.com", "ozick", "Yadin.5678", "db_notif_alert");
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $username, $password);
