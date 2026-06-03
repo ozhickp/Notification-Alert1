@@ -1,9 +1,9 @@
 <?php
 
-$host = 'localhost';
+$host = 'db.yadin.com';
 $dbname = 'db_notif_alert';
-$username = 'root';
-$password = '';
+$username = 'ozick';
+$password = 'Yadin.5678';
 
 $conn = new mysqli("localhost", "root", "", "db_notif_alert");
 
