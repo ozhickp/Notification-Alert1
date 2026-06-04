@@ -143,12 +143,104 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     $stmt->execute([$id]);
     $items = $stmt->fetchAll();
 
-    // Ambil check_date untuk hitung next_due weekly/monthly di JS
-    $subStmt = $pdo->prepare("SELECT DATE(check_date) AS check_date FROM checksheet_submissions WHERE id = ?");
+    // Ambil check_date dan photo_path untuk ditampilkan di modal
+    $subStmt = $pdo->prepare("SELECT DATE(check_date) AS check_date, photo_path FROM checksheet_submissions WHERE id = ?");
     $subStmt->execute([$id]);
     $sub = $subStmt->fetch();
 
-    echo json_encode(['items' => $items, 'check_date' => $sub['check_date'] ?? null]);
+    echo json_encode([
+        'items'      => $items,
+        'check_date' => $sub['check_date'] ?? null,
+        'photo_path' => $sub['photo_path'] ?? null,
+    ]);
+    exit;
+}
+
+// ─── AJAX: completion rate per department / line ──────────────────────────────
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
+    error_reporting(0);
+    @ini_set('display_errors', 0);
+    header('Content-Type: application/json');
+
+    $mode  = $_GET['mode']  ?? 'daily';
+    $value = $_GET['value'] ?? '';
+
+    if ($value === '') {
+        echo json_encode(['departments' => []]);
+        exit;
+    }
+
+    if ($mode === 'daily') {
+        $whereSub = "WHERE DATE(s.check_date) = ?";
+        $whereMl  = "WHERE DATE(?) = DATE(?)"; // dummy, machine_list tidak pakai filter tanggal
+    } else {
+        $whereSub = "WHERE DATE_FORMAT(s.check_date, '%Y-%m') = ?";
+    }
+
+    try {
+        // 1. Ambil semua kombinasi dept+line yang ada di machine_list
+        $stmtML = $pdo->query("
+            SELECT department, `line`, COUNT(DISTINCT machine_name) AS total_machines
+            FROM machine_list
+            GROUP BY department, `line`
+            ORDER BY department, `line`
+        ");
+        $allLines = $stmtML->fetchAll();
+
+        // 2. Ambil submission yang sudah diisi sesuai filter tanggal
+        $stmtFilled = $pdo->prepare("
+            SELECT s.department, s.line,
+                   COUNT(DISTINCT s.machine_name) AS filled_machines,
+                   GROUP_CONCAT(DISTINCT s.machine_name ORDER BY s.machine_name SEPARATOR '||') AS filled_list
+            FROM checksheet_submissions s
+            {$whereSub}
+            GROUP BY s.department, s.line
+        ");
+        $stmtFilled->execute([$value]);
+        $filledMap = [];
+        foreach ($stmtFilled->fetchAll() as $r) {
+            $filledMap[$r['department'] . '|||' . $r['line']] = $r;
+        }
+
+        // 3. Gabungkan: per dept kumpulkan semua line-nya
+        $depts = [];
+        foreach ($allLines as $row) {
+            $dept = $row['department'];
+            $line = $row['line'];
+            $total = (int)$row['total_machines'];
+            $key   = $dept . '|||' . $line;
+            $filled = (int)($filledMap[$key]['filled_machines'] ?? 0);
+            $filledList = isset($filledMap[$key]) ? explode('||', $filledMap[$key]['filled_list']) : [];
+
+            // Ambil semua nama mesin di line ini
+            $stmtMachines = $pdo->prepare("SELECT DISTINCT machine_name FROM machine_list WHERE department = ? AND `line` = ? ORDER BY machine_name");
+            $stmtMachines->execute([$dept, $line]);
+            $allMachines = array_column($stmtMachines->fetchAll(), 'machine_name');
+
+            if (!isset($depts[$dept])) {
+                $depts[$dept] = ['name' => $dept, 'lines' => [], 'total' => 0, 'filled' => 0];
+            }
+            $depts[$dept]['lines'][] = [
+                'line'         => $line,
+                'total'        => $total,
+                'filled'       => $filled,
+                'pct'          => $total > 0 ? round($filled / $total * 100) : 0,
+                'all_machines' => $allMachines,
+                'filled_list'  => $filledList,
+            ];
+            $depts[$dept]['total']  += $total;
+            $depts[$dept]['filled'] += $filled;
+        }
+
+        // Hitung pct dept level
+        foreach ($depts as &$d) {
+            $d['pct'] = $d['total'] > 0 ? round($d['filled'] / $d['total'] * 100) : 0;
+        }
+
+        echo json_encode(['departments' => array_values($depts)]);
+    } catch (\Exception $e) {
+        echo json_encode(['error' => $e->getMessage(), 'departments' => []]);
+    }
     exit;
 }
 ?>
@@ -619,6 +711,119 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             border-bottom: 1px solid #f1f5f9;
         }
 
+        /* ── Foto di modal detail ── */
+        #modal-photo-section {
+            display: none;
+            padding: 10px 16px 12px;
+            border-top: 1px solid #f1f5f9;
+            background: #fafbfc;
+            flex-shrink: 0;
+        }
+
+        #modal-photo-section .photo-label {
+            font-size: .67rem;
+            font-weight: 800;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        #modal-photo-section .photo-label i {
+            color: #f43f5e;
+        }
+
+        #modal-photo-thumb-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #modal-photo-thumb {
+            width: 72px;
+            height: 54px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 2px solid #e2e8f0;
+            cursor: pointer;
+            transition: opacity .15s, border-color .15s;
+            flex-shrink: 0;
+        }
+
+        #modal-photo-thumb:hover {
+            opacity: .85;
+            border-color: #f43f5e;
+        }
+
+        #modal-photo-open-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 8px;
+            background: #1e293b;
+            color: #fff;
+            font-size: .7rem;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background .15s;
+        }
+
+        #modal-photo-open-btn:hover {
+            background: #0f172a;
+        }
+
+        /* Large photo lightbox */
+        #photo-lightbox {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 600;
+            background: rgba(15, 23, 42, .88);
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+
+        #photo-lightbox.open {
+            display: flex;
+        }
+
+        #photo-lightbox img {
+            max-width: min(680px, calc(100vw - 32px));
+            max-height: calc(100vh - 48px);
+            border-radius: 14px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .45);
+            object-fit: contain;
+        }
+
+        #photo-lightbox-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, .15);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: .85rem;
+            transition: background .15s;
+        }
+
+        #photo-lightbox-close:hover {
+            background: rgba(255, 255, 255, .28);
+        }
+
         /* ── Skeleton ── */
         .skeleton {
             background: linear-gradient(90deg, #f0f4f8 25%, #e2e8f0 50%, #f0f4f8 75%);
@@ -720,6 +925,121 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
 
         .fade-in {
             animation: fadeInUp .2s ease forwards;
+        }
+
+        /* ── Completion Rate Tab ── */
+        .tab-btn {
+            padding: 7px 16px;
+            font-size: .75rem;
+            font-weight: 700;
+            border-radius: 9px;
+            cursor: pointer;
+            transition: all .15s;
+            border: none;
+            background: transparent;
+            color: #64748b;
+        }
+
+        .tab-btn.active {
+            background: #f43f5e;
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(244, 63, 94, .25);
+        }
+
+        .tab-btn:not(.active):hover {
+            background: #f1f5f9;
+            color: #334155;
+        }
+
+        .dept-card {
+            background: #fff;
+            border: 1.5px solid #e2e8f0;
+            border-radius: 14px;
+            overflow: hidden;
+            transition: box-shadow .2s;
+        }
+
+        .dept-card:hover {
+            box-shadow: 0 4px 16px rgba(0, 0, 0, .07);
+        }
+
+        .dept-header {
+            padding: 14px 18px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+            user-select: none;
+            background: #f8fafc;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .dept-header:hover {
+            background: #f1f5f9;
+        }
+
+        .dept-body {
+            display: none;
+            padding: 12px 16px;
+        }
+
+        .dept-body.open {
+            display: block;
+        }
+
+        .pct-bar-wrap {
+            flex: 1;
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 99px;
+            overflow: hidden;
+        }
+
+        .pct-bar-fill {
+            height: 100%;
+            border-radius: 99px;
+            transition: width .4s ease;
+        }
+
+        .line-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 9px;
+            margin-bottom: 4px;
+            background: #f8fafc;
+            border: 1px solid #f1f5f9;
+        }
+
+        .line-row:hover {
+            background: #f1f5f9;
+        }
+
+        .machine-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+            margin-left: 4px;
+        }
+
+        .machine-chip {
+            font-size: .62rem;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 5px;
+            white-space: nowrap;
+        }
+
+        .machine-chip.filled {
+            background: #dcfce7;
+            color: #15803d;
+        }
+
+        .machine-chip.unfilled {
+            background: #fee2e2;
+            color: #dc2626;
         }
     </style>
 </head>
@@ -827,16 +1147,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             </div>
 
             <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-0">
-                <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-3 flex-shrink-0">
-                    <!-- Judul -->
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <i class="fas fa-table text-slate-400 text-sm"></i>
-                        <span class="text-sm font-bold text-slate-700">Riwayat Submission</span>
-                        <span id="result-label" class="text-[11px] text-slate-400 font-medium"></span>
-                        <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-600"></span>
+                <!-- Tab buttons -->
+                <div class="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
+                    <div class="flex gap-1 bg-slate-100 rounded-xl p-1">
+                        <button class="tab-btn active" id="tab-btn-history" onclick="switchTab('history')">
+                            <i class="fas fa-table mr-1.5"></i>Riwayat Submission
+                        </button>
+                        <button class="tab-btn" id="tab-btn-completion" onclick="switchTab('completion')">
+                            <i class="fas fa-chart-pie mr-1.5"></i>Completion Rate
+                        </button>
                     </div>
-                    <!-- Search box -->
-                    <div class="relative flex-1" style="max-width:280px;">
+                    <!-- Search box — hanya muncul di tab history -->
+                    <div class="relative flex-1 tab-history-only" style="max-width:280px;">
                         <i class="fas fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" style="font-size:10px;"></i>
                         <input type="text" id="inp-search"
                             placeholder="Cari mesin, dept, line, checker…"
@@ -848,57 +1170,86 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                             <i class="fas fa-times text-slate-500" style="font-size:8px;"></i>
                         </button>
                     </div>
-                    <!-- Spacer + showing label -->
-                    <div class="flex-1"></div>
-                    <span id="showing-label" class="text-[11px] text-slate-400 font-medium flex-shrink-0"></span>
+                    <div class="flex-1 tab-history-only"></div>
+                    <span id="result-label" class="text-[11px] text-slate-400 font-medium tab-history-only"></span>
+                    <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-600 tab-history-only"></span>
+                    <span id="showing-label" class="text-[11px] text-slate-400 font-medium flex-shrink-0 tab-history-only"></span>
                 </div>
 
-                <div class="table-scroll-container flex-1 min-h-0">
-                    <table class="hist-table w-full" id="hist-table" style="display:none;">
-                        <thead>
-                            <tr>
-                                <th class="text-center w-10">No</th>
-                                <th>Tanggal</th>
-                                <th>Department</th>
-                                <th>Line</th>
-                                <th>OP</th>
-                                <th>Mesin</th>
-                                <th>Checker</th>
-                                <th class="text-center">Category</th>
-                                <th class="text-center">Hasil</th>
-                                <th class="text-center">Submitted At</th>
-                                <th class="text-center w-16">Detail</th>
-                            </tr>
-                        </thead>
-                        <tbody id="hist-tbody"></tbody>
-                    </table>
+                <!-- ── Tab: Riwayat Submission ── -->
+                <div id="tab-history" class="flex flex-col flex-1 min-h-0">
+                    <div class="table-scroll-container flex-1 min-h-0">
+                        <table class="hist-table w-full" id="hist-table" style="display:none;">
+                            <thead>
+                                <tr>
+                                    <th class="text-center w-10">No</th>
+                                    <th>Tanggal</th>
+                                    <th>Department</th>
+                                    <th>Line</th>
+                                    <th>OP</th>
+                                    <th>Mesin</th>
+                                    <th>Checker</th>
+                                    <th class="text-center">Category</th>
+                                    <th class="text-center">Hasil</th>
+                                    <th class="text-center">Submitted At</th>
+                                    <th class="text-center w-16">Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody id="hist-tbody"></tbody>
+                        </table>
 
-                    <div id="hist-empty" class="flex flex-col items-center justify-center py-16 text-slate-400">
-                        <i class="fas fa-folder-open text-5xl mb-3 opacity-30"></i>
-                        <p class="font-bold text-sm">Pilih tanggal / bulan lalu klik Cari</p>
-                        <p class="text-xs mt-1">Data history checksheet akan tampil di sini</p>
+                        <div id="hist-empty" class="flex flex-col items-center justify-center py-16 text-slate-400">
+                            <i class="fas fa-folder-open text-5xl mb-3 opacity-30"></i>
+                            <p class="font-bold text-sm">Pilih tanggal / bulan lalu klik Cari</p>
+                            <p class="text-xs mt-1">Data history checksheet akan tampil di sini</p>
+                        </div>
+
+                        <div id="hist-loading" style="display:none;" class="p-5 space-y-3">
+                            <?php for ($i = 0; $i < 6; $i++): ?>
+                                <div class="flex gap-3 items-center">
+                                    <div class="skeleton w-6 h-5"></div>
+                                    <div class="skeleton w-20 h-5"></div>
+                                    <div class="skeleton flex-1 h-5"></div>
+                                    <div class="skeleton w-16 h-5"></div>
+                                    <div class="skeleton w-24 h-5"></div>
+                                    <div class="skeleton w-20 h-5"></div>
+                                    <div class="skeleton w-20 h-5"></div>
+                                    <div class="skeleton w-28 h-5"></div>
+                                    <div class="skeleton w-16 h-5"></div>
+                                </div>
+                            <?php endfor; ?>
+                        </div>
                     </div>
 
-                    <div id="hist-loading" style="display:none;" class="p-5 space-y-3">
-                        <?php for ($i = 0; $i < 6; $i++): ?>
-                            <div class="flex gap-3 items-center">
-                                <div class="skeleton w-6 h-5"></div>
-                                <div class="skeleton w-20 h-5"></div>
-                                <div class="skeleton flex-1 h-5"></div>
-                                <div class="skeleton w-16 h-5"></div>
-                                <div class="skeleton w-24 h-5"></div>
-                                <div class="skeleton w-20 h-5"></div>
-                                <div class="skeleton w-20 h-5"></div>
-                                <div class="skeleton w-28 h-5"></div>
-                                <div class="skeleton w-16 h-5"></div>
-                            </div>
-                        <?php endfor; ?>
+                    <div id="pagination" class="hidden border-t border-slate-100 px-5 py-3 flex items-center justify-between flex-shrink-0 bg-white">
+                        <span id="page-info" class="text-xs text-slate-400 font-medium"></span>
+                        <div id="page-btns" class="flex gap-1.5"></div>
                     </div>
                 </div>
 
-                <div id="pagination" class="hidden border-t border-slate-100 px-5 py-3 flex items-center justify-between flex-shrink-0 bg-white">
-                    <span id="page-info" class="text-xs text-slate-400 font-medium"></span>
-                    <div id="page-btns" class="flex gap-1.5"></div>
+                <!-- ── Tab: Completion Rate ── -->
+                <div id="tab-completion" class="flex flex-col flex-1 min-h-0" style="display:none;">
+                    <div class="flex-1 overflow-y-auto p-5" id="completion-body">
+                        <!-- Empty state -->
+                        <div id="completion-empty" class="flex flex-col items-center justify-center py-16 text-slate-400">
+                            <i class="fas fa-chart-pie text-5xl mb-3 opacity-30"></i>
+                            <p class="font-bold text-sm">Pilih tanggal / bulan lalu klik Cari</p>
+                            <p class="text-xs mt-1">Data completion rate akan tampil di sini</p>
+                        </div>
+                        <!-- Loading -->
+                        <div id="completion-loading" style="display:none;" class="space-y-3">
+                            <?php for ($i = 0; $i < 4; $i++): ?>
+                                <div class="skeleton h-14 rounded-xl w-full"></div>
+                            <?php endfor; ?>
+                        </div>
+                        <!-- Content -->
+                        <div id="completion-content" style="display:none;">
+                            <!-- Summary bar -->
+                            <div id="completion-summary" class="mb-5 p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap gap-4 items-center"></div>
+                            <!-- Dept cards -->
+                            <div id="completion-dept-list" class="space-y-3"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1019,6 +1370,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     <?php endfor; ?>
                 </div>
             </div>
+
+            <!-- Foto kondisi mesin -->
+            <div id="modal-photo-section">
+                <div class="photo-label"><i class="fas fa-camera"></i> Foto Kondisi Mesin</div>
+                <div id="modal-photo-thumb-wrap">
+                    <img id="modal-photo-thumb" src="" alt="Foto Mesin" onclick="openPhotoLightbox()">
+                    <div>
+                        <div style="font-size:.7rem;color:#475569;font-weight:600;margin-bottom:4px;">Klik gambar untuk memperbesar</div>
+                        <a id="modal-photo-open-btn" href="#" target="_blank">
+                            <i class="fas fa-external-link-alt"></i> Open Photo
+                        </a>
+                    </div>
+                </div>
+            </div>
+
             <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-between">
                 <span id="modal-summary" class="text-[11px] text-slate-500 font-medium"></span>
                 <button onclick="closeModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
@@ -1026,6 +1392,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                 </button>
             </div>
         </div>
+    </div>
+
+    <!-- Photo Lightbox -->
+    <div id="photo-lightbox" onclick="if(event.target===this)closePhotoLightbox()">
+        <button id="photo-lightbox-close" onclick="closePhotoLightbox()"><i class="fas fa-times"></i></button>
+        <img id="photo-lightbox-img" src="" alt="Foto Mesin">
     </div>
 
     <div id="toast"></div>
@@ -1139,6 +1511,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     document.getElementById('hist-empty').style.display = 'flex';
                     showToast('Gagal memuat data.', 'error');
                 });
+
+            // Juga load completion rate setiap kali search
+            loadCompletionRate();
         }
 
         // ── Render table ──────────────────────────────────────────────────────────
@@ -1248,6 +1623,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             document.getElementById('modal-tbody').innerHTML = '';
             document.getElementById('modal-loading').style.display = 'block';
             document.getElementById('modal-summary').textContent = '';
+            document.getElementById('modal-photo-section').style.display = 'none';
 
             fetch(`history_checksheet.php?ajax=detail&id=${id}`)
                 .then(r => r.json())
@@ -1257,6 +1633,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     // Support both old (array) and new (object) response format
                     const items = Array.isArray(data) ? data : (data.items || []);
                     const checkDate = Array.isArray(data) ? null : (data.check_date || null);
+                    const photoPath = Array.isArray(data) ? null : (data.photo_path || null);
 
                     const resultMap = {
                         'V': '<span class="badge badge-v">V — OK</span>',
@@ -1309,6 +1686,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         <td class="text-xs">${item.note ? `<span style="color:#b45309;font-style:italic;">${item.note}</span>` : '<span class="text-slate-300">—</span>'}</td>`;
                         tbody.appendChild(tr);
                     });
+
                     // Hitung ok hanya dari item non-periodic
                     const ok = items.filter(i => {
                         const iv = (i.interval || '').trim();
@@ -1317,6 +1695,16 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     const pr = items.filter(i => i.result === 'X').length;
                     document.getElementById('modal-summary').textContent =
                         `${items.length} item total — ${ok} OK, ${pr} Problem`;
+
+                    // Tampilkan foto jika ada
+                    if (photoPath) {
+                        const thumb = document.getElementById('modal-photo-thumb');
+                        const openBtn = document.getElementById('modal-photo-open-btn');
+                        thumb.src = photoPath;
+                        document.getElementById('photo-lightbox-img').src = photoPath;
+                        openBtn.href = photoPath;
+                        document.getElementById('modal-photo-section').style.display = 'block';
+                    }
                 });
         }
 
@@ -1324,6 +1712,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             if (!e || e.target === document.getElementById('modal-overlay')) {
                 document.getElementById('modal-overlay').classList.remove('open');
             }
+        }
+
+        function openPhotoLightbox() {
+            document.getElementById('photo-lightbox').classList.add('open');
+        }
+
+        function closePhotoLightbox() {
+            document.getElementById('photo-lightbox').classList.remove('open');
         }
 
         // ── Export ────────────────────────────────────────────────────────────────
@@ -1556,6 +1952,147 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         function clearSearch() {
             document.getElementById('inp-search').value = '';
             filterTable();
+        }
+
+        // ── Tab switching ─────────────────────────────────────────────────────────
+        let currentTab = 'history';
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('tab-history').style.display = tab === 'history' ? 'flex' : 'none';
+            document.getElementById('tab-completion').style.display = tab === 'completion' ? 'flex' : 'none';
+            document.getElementById('tab-btn-history').classList.toggle('active', tab === 'history');
+            document.getElementById('tab-btn-completion').classList.toggle('active', tab === 'completion');
+            // Show/hide history-only elements
+            document.querySelectorAll('.tab-history-only').forEach(el => {
+                el.style.display = tab === 'history' ? '' : 'none';
+            });
+        }
+
+        // Override loadHistory to also trigger completion if already on that tab
+        const _origLoadHistory = loadHistory;
+
+        // ── Load Completion Rate ──────────────────────────────────────────────────
+        function loadCompletionRate() {
+            const value = document.getElementById('inp-date').value;
+            if (!value) return;
+
+            document.getElementById('completion-empty').style.display = 'none';
+            document.getElementById('completion-loading').style.display = 'block';
+            document.getElementById('completion-content').style.display = 'none';
+
+            fetch(`history_checksheet.php?ajax=completion_rate&mode=${currentMode}&value=${encodeURIComponent(value)}`)
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('completion-loading').style.display = 'none';
+                    if (!data.departments || data.departments.length === 0) {
+                        document.getElementById('completion-empty').style.display = 'flex';
+                        return;
+                    }
+                    renderCompletion(data.departments, value, currentMode);
+                })
+                .catch(() => {
+                    document.getElementById('completion-loading').style.display = 'none';
+                    document.getElementById('completion-empty').style.display = 'flex';
+                });
+        }
+
+        function pctColor(pct) {
+            if (pct >= 90) return '#22c55e';
+            if (pct >= 60) return '#f59e0b';
+            return '#ef4444';
+        }
+
+        function renderCompletion(depts, value, mode) {
+            // Summary
+            const totalAll = depts.reduce((s, d) => s + d.total, 0);
+            const filledAll = depts.reduce((s, d) => s + d.filled, 0);
+            const pctAll = totalAll > 0 ? Math.round(filledAll / totalAll * 100) : 0;
+            const summaryEl = document.getElementById('completion-summary');
+            summaryEl.innerHTML = `
+                <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:200px;">
+                    <div style="font-size:2rem;font-weight:900;color:${pctColor(pctAll)};">${pctAll}%</div>
+                    <div>
+                        <div style="font-size:.82rem;font-weight:700;color:#1e293b;">Overall Completion</div>
+                        <div style="font-size:.72rem;color:#64748b;">${filledAll} dari ${totalAll} mesin sudah diisi • ${value}</div>
+                    </div>
+                </div>
+                <div style="flex:2;min-width:200px;">
+                    <div class="pct-bar-wrap" style="height:12px;">
+                        <div class="pct-bar-fill" style="width:${pctAll}%;background:${pctColor(pctAll)};"></div>
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <span style="font-size:.72rem;font-weight:700;background:#dcfce7;color:#15803d;padding:3px 10px;border-radius:8px;">${filledAll} sudah diisi</span>
+                    <span style="font-size:.72rem;font-weight:700;background:#fee2e2;color:#dc2626;padding:3px 10px;border-radius:8px;">${totalAll - filledAll} belum diisi</span>
+                </div>`;
+
+            // Dept cards
+            const listEl = document.getElementById('completion-dept-list');
+            listEl.innerHTML = '';
+
+            depts.forEach((dept, di) => {
+                const card = document.createElement('div');
+                card.className = 'dept-card fade-in';
+                card.style.animationDelay = `${di * 30}ms`;
+
+                const deptColor = pctColor(dept.pct);
+                card.innerHTML = `
+                    <div class="dept-header" onclick="toggleDept(this)">
+                        <div style="width:36px;height:36px;border-radius:10px;background:${deptColor}22;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                            <i class="fas fa-industry" style="color:${deptColor};font-size:.85rem;"></i>
+                        </div>
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-size:.82rem;font-weight:800;color:#1e293b;">${esc(dept.name)}</div>
+                            <div style="font-size:.68rem;color:#64748b;margin-top:1px;">${dept.lines.length} line · ${dept.filled}/${dept.total} mesin</div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+                            <div class="pct-bar-wrap" style="width:100px;">
+                                <div class="pct-bar-fill" style="width:${dept.pct}%;background:${deptColor};"></div>
+                            </div>
+                            <span style="font-size:.82rem;font-weight:900;color:${deptColor};min-width:36px;text-align:right;">${dept.pct}%</span>
+                            <i class="fas fa-chevron-down" style="font-size:.7rem;color:#94a3b8;transition:transform .2s;"></i>
+                        </div>
+                    </div>
+                    <div class="dept-body">
+                        ${dept.lines.map(line => {
+                            const lc = pctColor(line.pct);
+                            const filledSet = new Set(line.filled_list);
+                            const machineChips = line.all_machines.map(m =>
+                                `<span class="machine-chip ${filledSet.has(m) ? 'filled' : 'unfilled'}" title="${filledSet.has(m) ? 'Sudah diisi' : 'Belum diisi'}">${esc(m)}</span>`
+                            ).join('');
+                            return `
+                            <div style="margin-bottom:10px;">
+                                <div class="line-row">
+                                    <div style="width:28px;height:28px;border-radius:8px;background:${lc}22;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                        <i class="fas fa-stream" style="color:${lc};font-size:.7rem;"></i>
+                                    </div>
+                                    <div style="flex:1;min-width:0;">
+                                        <div style="font-size:.77rem;font-weight:700;color:#1e293b;">${esc(line.line)}</div>
+                                        <div style="font-size:.65rem;color:#64748b;">${line.filled}/${line.total} mesin</div>
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                                        <div class="pct-bar-wrap" style="width:80px;">
+                                            <div class="pct-bar-fill" style="width:${line.pct}%;background:${lc};"></div>
+                                        </div>
+                                        <span style="font-size:.77rem;font-weight:800;color:${lc};min-width:32px;text-align:right;">${line.pct}%</span>
+                                    </div>
+                                </div>
+                                <div class="machine-chips">${machineChips}</div>
+                            </div>`;
+                        }).join('')}
+                    </div>`;
+                listEl.appendChild(card);
+            });
+
+            document.getElementById('completion-content').style.display = 'block';
+        }
+
+        function toggleDept(header) {
+            const body = header.nextElementSibling;
+            const icon = header.querySelector('.fa-chevron-down');
+            body.classList.toggle('open');
+            if (icon) icon.style.transform = body.classList.contains('open') ? 'rotate(180deg)' : '';
         }
     </script>
 </body>

@@ -674,17 +674,115 @@ function partOrderBadge(string $v): string
 
             <div class="max-w-[1400px] mx-auto">
 
-                <!-- ═══════════════════════ HEADER ═══════════════════════ -->
-                <div class="mb-4">
-                    <h1 class="text-2xl font-extrabold text-slate-900">
-                        <i class="fas fa-display text-violet-500 mr-2"></i>Monitor
-                    </h1>
-                </div>
-
                 <!-- ═══════════════════════════════════════════════════════════
          SECTION: SCHEDULE
     ═══════════════════════════════════════════════════════════ -->
                 <div id="sectionSchedule" class="section-enter <?= $activeSection !== 'schedule' ? 'hidden' : '' ?>">
+
+                    <!-- ══════════════════════════════════════════════════
+                         TODAY'S SCHEDULE — Unified (Predictive + Preventive)
+                         Displayed above the tabs, auto-refreshed via AJAX
+                    ══════════════════════════════════════════════════ -->
+                    <div id="todayScheduleSection" class="mb-5">
+                        <!-- Header bar -->
+                        <div class="flex items-center gap-3 mb-3">
+                            <!-- Icon + Title -->
+                            <div class="w-9 h-9 bg-gradient-to-br from-violet-600 to-purple-500 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm">
+                                <i class="fas fa-calendar-day text-white text-sm"></i>
+                            </div>
+                            <h2 class="font-extrabold text-slate-800 text-base leading-tight">Today's Schedule</h2>
+                            <!-- Date label -->
+                            <p class="text-slate-400 font-semibold" style="font-size:.65rem;" id="todayDateLabel"><?= date('d M Y') ?></p>
+                            <!-- Clock — sejajar header -->
+                            <div class="ml-auto flex items-center gap-3 flex-shrink-0">
+                                <div class="text-right">
+                                    <div id="live-clock" class="font-mono font-black text-slate-800 tabular-nums" style="font-size:1.5rem;line-height:1;letter-spacing:-.02em;"></div>
+                                    <div id="live-date" class="font-semibold text-slate-400 tracking-wide" style="font-size:.6rem;"></div>
+                                </div>
+                                <!-- AJAX live indicator -->
+                                <div class="flex items-center gap-1.5 bg-slate-100 rounded-full px-2.5 py-1">
+                                    <span id="ajaxDot" class="w-2 h-2 rounded-full bg-emerald-400 inline-block" title="Auto-refresh aktif"></span>
+                                    <span id="ajaxLabel" class="text-slate-500 font-bold" style="font-size:.62rem;">Live</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Two-column layout: Predictive (left) | Preventive (right) -->
+                        <div class="grid gap-4" style="grid-template-columns:1fr 1fr;">
+
+                            <!-- ── Predictive Column ── -->
+                            <div class="rounded-2xl overflow-hidden" style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;">
+                                <div class="flex items-center gap-2 px-4 py-2.5">
+                                    <i class="fas fa-chart-line text-blue-600 text-xs"></i>
+                                    <span class="text-blue-800 font-bold text-sm">Predictive</span>
+                                    <span id="todayPredCount" class="bg-blue-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= $todayCount ?></span>
+                                </div>
+                                <div class="px-3 pb-3" id="todayPredList">
+                                    <?php if ($todayCount > 0): ?>
+                                        <div class="flex flex-col gap-1.5">
+                                            <?php foreach ($todaySchedArr as $i => $td): ?>
+                                                <div class="bg-white/80 rounded-xl px-3 py-2 flex items-start gap-2 border border-blue-100 shadow-sm">
+                                                    <div class="w-5 h-5 rounded-md bg-blue-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                                        <span class="text-blue-600 font-black" style="font-size:.55rem;"><?= $i + 1 ?></span>
+                                                    </div>
+                                                    <div class="min-w-0 flex-1">
+                                                        <p class="font-black text-blue-900 truncate" style="font-size:.72rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
+                                                        <p class="text-blue-600 mt-0.5" style="font-size:.63rem;line-height:1.4;"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
+                                                        <?php if (!empty($td['department'])): ?>
+                                                            <p class="text-blue-400 mt-0.5 truncate" style="font-size:.58rem;"><?= htmlspecialchars($td['department']) ?><?= !empty($td['line']) ? ' · ' . $td['line'] : '' ?></p>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <span class="flex-shrink-0 bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.58rem;"><?= (int)($td['interval_month'] ?? 0) ?>mo</span>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="flex items-center gap-2 py-2 px-1">
+                                            <i class="fas fa-check-circle text-blue-300 text-xs"></i>
+                                            <span class="text-blue-400 font-semibold" style="font-size:.7rem;">No predictive schedule for today</span>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+
+                            <!-- ── Preventive Column ── -->
+                            <div class="rounded-2xl overflow-hidden" style="background:linear-gradient(135deg,#eef2ff,#e0e7ff);border:1px solid #a5b4fc;">
+                                <div class="flex items-center gap-2 px-4 py-2.5">
+                                    <i class="fas fa-shield-halved text-indigo-600 text-xs"></i>
+                                    <span class="text-indigo-800 font-bold text-sm">Preventive</span>
+                                    <span id="todayPrevCount" class="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= $prevTodayCount ?></span>
+                                </div>
+                                <div class="px-3 pb-3" id="todayPrevList">
+                                    <?php if ($prevTodayCount > 0): ?>
+                                        <div class="flex flex-col gap-1.5">
+                                            <?php foreach ($prevTodayArr as $i => $td): ?>
+                                                <div class="bg-white/80 rounded-xl px-3 py-2 flex items-start gap-2 border border-indigo-100 shadow-sm">
+                                                    <div class="w-5 h-5 rounded-md bg-indigo-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                                        <span class="text-indigo-600 font-black" style="font-size:.55rem;"><?= $i + 1 ?></span>
+                                                    </div>
+                                                    <div class="min-w-0 flex-1">
+                                                        <p class="font-black text-indigo-900 truncate" style="font-size:.72rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
+                                                        <p class="text-indigo-600 mt-0.5" style="font-size:.63rem;line-height:1.4;"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
+                                                        <?php if (!empty($td['department'])): ?>
+                                                            <p class="text-indigo-400 mt-0.5 truncate" style="font-size:.58rem;"><?= htmlspecialchars($td['department']) ?><?= !empty($td['line']) ? ' · ' . $td['line'] : '' ?></p>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <span class="flex-shrink-0 bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.58rem;"><?= (int)($td['interval_month'] ?? 0) ?>mo</span>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="flex items-center gap-2 py-2 px-1">
+                                            <i class="fas fa-check-circle text-indigo-300 text-xs"></i>
+                                            <span class="text-indigo-400 font-semibold" style="font-size:.7rem;">No preventive schedule for today</span>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+
+                        </div><!-- /grid -->
+                    </div><!-- /todayScheduleSection -->
+
 
                     <!-- Sub-tab (Predictive / Preventive) + Clock -->
                     <div class="mb-5 flex items-center gap-3">
@@ -702,25 +800,10 @@ function partOrderBadge(string $v): string
                                 <span class="ml-1 text-[10px] font-black px-2 py-0.5 rounded-full <?= $activeTab === 'preventive' ? 'bg-white/20 text-white' : 'bg-slate-300/60 text-slate-600' ?>"><?= count($prevSchedules) ?></span>
                             </button>
                         </div>
-                        <!-- Digital Clock — Schedule -->
-                        <div class="flex flex-col items-end ml-auto flex-shrink-0">
-                            <div id="live-clock" class="font-mono font-black text-slate-800 tabular-nums" style="font-size:1.7rem;line-height:1;letter-spacing:-.02em;"></div>
-                            <div id="live-date" class="font-semibold text-slate-400 mt-0.5 tracking-wide" style="font-size:.65rem;"></div>
-                        </div>
                     </div>
 
                     <!-- ── PREDICTIVE TAB ── -->
-                    <?php
-                    $todaySchedArrVal = array_values($todaySchedArr);
-                    $predTodayJson = json_encode(array_map(fn($r) => [
-                        'machine'  => $r['machine_name'] ?? '-',
-                        'point'    => $r['maintenance_point'] ?? '-',
-                        'dept'     => $r['department'] ?? '',
-                        'line'     => $r['line'] ?? '',
-                        'op'       => $r['operation_process'] ?? '',
-                        'interval' => ($r['interval_month'] ?? 0) . ' mo',
-                    ], $todaySchedArrVal), JSON_UNESCAPED_UNICODE);
-                    ?>
+                    <?php $todaySchedArrVal = array_values($todaySchedArr); ?>
                     <div id="schedPredTab" class="<?= $activeTab === 'preventive' ? 'hidden' : '' ?>">
                         <!-- ── Status Checkbox Filter — Predictive ── -->
                         <div class="mb-1.5 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-1" style="font-size:.65rem;">
@@ -746,50 +829,6 @@ function partOrderBadge(string $v): string
                             <button onclick="predCheckAll(false)" class="font-bold text-slate-400 hover:text-red-500 transition px-1 rounded hover:bg-red-50">None</button>
                             <span id="predFilterCount" class="ml-auto font-bold text-slate-300 whitespace-nowrap"></span>
                         </div>
-                        <!-- Today Schedule Card — Predictive -->
-                        <?php if ($todayCount > 0): ?>
-                            <div class="mb-4 rounded-2xl overflow-hidden" style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;">
-                                <!-- Header -->
-                                <div class="flex items-center gap-3 px-4 py-3">
-                                    <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                                        <i class="fas fa-calendar-day text-white text-xs"></i>
-                                    </div>
-                                    <span class="text-blue-800 font-bold text-sm">Today's Schedule</span>
-                                    <span class="bg-blue-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= $todayCount ?></span>
-                                    <span class="ml-auto text-blue-400 text-[10px] font-semibold"><?= date('d M Y') ?></span>
-                                </div>
-                                <!-- List body -->
-                                <div class="px-4 pb-3">
-                                    <div class="grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));">
-                                        <?php foreach ($todaySchedArrVal as $i => $td): ?>
-                                            <div class="bg-white/80 rounded-xl px-3 py-2.5 flex items-start gap-2.5 border border-blue-100 shadow-sm">
-                                                <div class="w-6 h-6 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                                                    <span class="text-blue-600 font-black" style="font-size:.6rem;"><?= $i + 1 ?></span>
-                                                </div>
-                                                <div class="min-w-0 flex-1">
-                                                    <p class="font-black text-blue-900 truncate" style="font-size:.75rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
-                                                    <p class="text-blue-600 mt-0.5" style="font-size:.67rem;word-break:break-word;white-space:normal;line-height:1.4;"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
-                                                    <?php if (!empty($td['department']) || !empty($td['line']) || !empty($td['operation_process'])): ?>
-                                                        <p class="text-blue-400 mt-0.5 truncate" style="font-size:.62rem;">
-                                                            <?= htmlspecialchars($td['department'] ?? '') ?><?= !empty($td['line']) ? ' · ' . htmlspecialchars($td['line']) : '' ?><?= !empty($td['operation_process']) ? ' · OP ' . htmlspecialchars($td['operation_process']) : '' ?>
-                                                        </p>
-                                                    <?php endif; ?>
-                                                </div>
-                                                <span class="flex-shrink-0 bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.6rem;"><?= (int)($td['interval_month'] ?? 0) ?>mo</span>
-                                            </div>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </div>
-                            </div>
-                        <?php else: ?>
-                            <div class="today-banner mb-4" style="background:#f8fafc;border:1px solid #e2e8f0;">
-                                <div class="w-9 h-9 bg-slate-200 rounded-xl flex items-center justify-center flex-shrink-0">
-                                    <i class="fas fa-calendar-day text-slate-400 text-sm"></i>
-                                </div>
-                                <span class="text-slate-500">No predictive schedule for today</span>
-                            </div>
-                        <?php endif; ?>
-
                         <!-- Table -->
                         <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                             <div class="table-scroll">
@@ -883,17 +922,7 @@ function partOrderBadge(string $v): string
                     </div>
 
                     <!-- ── PREVENTIVE TAB ── -->
-                    <?php
-                    $prevTodayArrVal = array_values($prevTodayArr);
-                    $prevTodayJson = json_encode(array_map(fn($r) => [
-                        'machine'  => $r['machine_name'] ?? '-',
-                        'point'    => $r['maintenance_point'] ?? '-',
-                        'dept'     => $r['department'] ?? '',
-                        'line'     => $r['line'] ?? '',
-                        'op'       => $r['operation_process'] ?? '',
-                        'interval' => ($r['interval_month'] ?? 0) . ' mo',
-                    ], $prevTodayArrVal), JSON_UNESCAPED_UNICODE);
-                    ?>
+                    <?php $prevTodayArrVal = array_values($prevTodayArr); ?>
                     <div id="schedPrevTab" class="<?= $activeTab === 'predictive' ? 'hidden' : '' ?>">
                         <!-- ── Status Checkbox Filter — Preventive ── -->
                         <div class="mb-1.5 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-1" style="font-size:.65rem;">
@@ -919,50 +948,6 @@ function partOrderBadge(string $v): string
                             <button onclick="prevCheckAll(false)" class="font-bold text-slate-400 hover:text-red-500 transition px-1 rounded hover:bg-red-50">None</button>
                             <span id="prevFilterCount" class="ml-auto font-bold text-slate-300 whitespace-nowrap"></span>
                         </div>
-                        <!-- Today Schedule Card — Preventive -->
-                        <?php if ($prevTodayCount > 0): ?>
-                            <div class="mb-4 rounded-2xl overflow-hidden" style="background:linear-gradient(135deg,#eef2ff,#e0e7ff);border:1px solid #a5b4fc;">
-                                <!-- Header -->
-                                <div class="flex items-center gap-3 px-4 py-3">
-                                    <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                                        <i class="fas fa-calendar-day text-white text-xs"></i>
-                                    </div>
-                                    <span class="text-indigo-800 font-bold text-sm">Today's Schedule</span>
-                                    <span class="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= $prevTodayCount ?></span>
-                                    <span class="ml-auto text-indigo-400 text-[10px] font-semibold"><?= date('d M Y') ?></span>
-                                </div>
-                                <!-- List body -->
-                                <div class="px-4 pb-3">
-                                    <div class="grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));">
-                                        <?php foreach ($prevTodayArrVal as $i => $td): ?>
-                                            <div class="bg-white/80 rounded-xl px-3 py-2.5 flex items-start gap-2.5 border border-indigo-100 shadow-sm">
-                                                <div class="w-6 h-6 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                                                    <span class="text-indigo-600 font-black" style="font-size:.6rem;"><?= $i + 1 ?></span>
-                                                </div>
-                                                <div class="min-w-0 flex-1">
-                                                    <p class="font-black text-indigo-900 truncate" style="font-size:.75rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
-                                                    <p class="text-indigo-600 mt-0.5" style="font-size:.67rem;word-break:break-word;white-space:normal;line-height:1.4;"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
-                                                    <?php if (!empty($td['department']) || !empty($td['line']) || !empty($td['operation_process'])): ?>
-                                                        <p class="text-indigo-400 mt-0.5 truncate" style="font-size:.62rem;">
-                                                            <?= htmlspecialchars($td['department'] ?? '') ?><?= !empty($td['line']) ? ' · ' . htmlspecialchars($td['line']) : '' ?><?= !empty($td['operation_process']) ? ' · OP ' . htmlspecialchars($td['operation_process']) : '' ?>
-                                                        </p>
-                                                    <?php endif; ?>
-                                                </div>
-                                                <span class="flex-shrink-0 bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.6rem;"><?= (int)($td['interval_month'] ?? 0) ?>mo</span>
-                                            </div>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </div>
-                            </div>
-                        <?php else: ?>
-                            <div class="today-banner mb-4" style="background:#f8fafc;border:1px solid #e2e8f0;">
-                                <div class="w-9 h-9 bg-slate-200 rounded-xl flex items-center justify-center flex-shrink-0">
-                                    <i class="fas fa-calendar-day text-slate-400 text-sm"></i>
-                                </div>
-                                <span class="text-slate-500">No preventive schedule for today</span>
-                            </div>
-                        <?php endif; ?>
-
                         <!-- Table -->
                         <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                             <div class="table-scroll">
@@ -1400,7 +1385,7 @@ function partOrderBadge(string $v): string
         //  - Section tanpa tab (parts): scroll down → up → ... (loop)
         //  - Berhenti saat kursor gerak, resume 2 detik setelah diam
         // ══════════════════════════════════════════════════════════════
-        const SCROLL_SPEED = 0.8; // px per frame
+        const SCROLL_SPEED = 1.5; // px per frame
         const SCROLL_PAUSE = 2000; // ms jeda di atas/bawah sebelum balik / ganti tab
         const RESUME_DELAY = 2000; // ms tunggu setelah kursor diam
 
@@ -1692,6 +1677,263 @@ function partOrderBadge(string $v): string
         });
     </script>
 
+
+    <script>
+        // ══════════════════════════════════════════════════════════════
+        //  AJAX AUTO-REFRESH — polls monitor_ajax.php every 30 seconds
+        //  Updates: Today's Schedule (both columns), table row data
+        //           and "Last updated" timestamps
+        // ══════════════════════════════════════════════════════════════
+        (function() {
+            const POLL_INTERVAL = 30000; // 30 seconds
+            const AJAX_URL = 'monitor_ajax.php';
+
+            const ajaxDot = document.getElementById('ajaxDot');
+            const ajaxLabel = document.getElementById('ajaxLabel');
+
+            // ── Utility helpers ──────────────────────────────────────
+            function setDot(state) { // 'ok' | 'loading' | 'error'
+                if (!ajaxDot) return;
+                const map = {
+                    ok: '#22c55e',
+                    loading: '#f59e0b',
+                    error: '#ef4444'
+                };
+                ajaxDot.style.background = map[state] || map.ok;
+                if (ajaxLabel) ajaxLabel.textContent = state === 'loading' ? 'Refreshing…' : state === 'error' ? 'Retry…' : 'Live';
+            }
+
+            function remainingCls(val) {
+                // returns Tailwind colour classes matching PHP remainingClass()
+                if (val <= 0) return 'text-red-600 font-black';
+                if (val <= 7) return 'text-amber-600 font-black';
+                if (val <= 30) return 'text-orange-500 font-bold'; // simplified (no per-row reminder)
+                return 'text-slate-700 font-semibold';
+            }
+
+            function badgePO(v) {
+                return v && v.toLowerCase() === 'open' ?
+                    '<span class="badge ps-open">Open</span>' :
+                    '<span class="badge ps-close">Close</span>';
+            }
+
+            function badgeMS(v) {
+                const lv = (v || '').toLowerCase();
+                if (lv === 'soon') return '<span class="badge ms-soon">Soon</span>';
+                if (lv === 'done') return '<span class="badge ms-done">Done</span>';
+                return '<span class="badge badge-none">' + v + '</span>';
+            }
+
+            // ── Build a today card item ────────────────────────────────
+            function makeTodayItem(item, idx, color) {
+                const sub = [item.dept, item.line ? '· ' + item.line : ''].filter(Boolean).join(' ');
+                return `<div class="bg-white/80 rounded-xl px-3 py-2 flex items-start gap-2 border border-${color}-100 shadow-sm">
+                <div class="w-5 h-5 rounded-md bg-${color}-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <span class="text-${color}-600 font-black" style="font-size:.55rem;">${idx + 1}</span>
+                </div>
+                <div class="min-w-0 flex-1">
+                    <p class="font-black text-${color}-900 truncate" style="font-size:.72rem;">${item.machine}</p>
+                    <p class="text-${color}-600 mt-0.5" style="font-size:.63rem;line-height:1.4;">${item.point}</p>
+                    ${sub ? `<p class="text-${color}-400 mt-0.5 truncate" style="font-size:.58rem;">${sub}</p>` : ''}
+                </div>
+                <span class="flex-shrink-0 bg-${color}-100 text-${color}-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.58rem;">${item.interval}mo</span>
+            </div>`;
+            }
+
+            // ── Render Today's Schedule ────────────────────────────────
+            function renderToday(data) {
+                const today = data.today;
+                if (!today) return;
+
+                // Predictive column
+                const predList = document.getElementById('todayPredList');
+                const predCount = document.getElementById('todayPredCount');
+                if (predList) {
+                    if (today.predictive.length > 0) {
+                        predList.innerHTML = '<div class="flex flex-col gap-1.5">' +
+                            today.predictive.map((it, i) => makeTodayItem(it, i, 'blue')).join('') +
+                            '</div>';
+                    } else {
+                        predList.innerHTML = '<div class="flex items-center gap-2 py-2 px-1"><i class="fas fa-check-circle text-blue-300 text-xs"></i><span class="text-blue-400 font-semibold" style="font-size:.7rem;">No predictive schedule for today</span></div>';
+                    }
+                }
+                if (predCount) predCount.textContent = today.predictive.length;
+
+                // Preventive column
+                const prevList = document.getElementById('todayPrevList');
+                const prevCount = document.getElementById('todayPrevCount');
+                if (prevList) {
+                    if (today.preventive.length > 0) {
+                        prevList.innerHTML = '<div class="flex flex-col gap-1.5">' +
+                            today.preventive.map((it, i) => makeTodayItem(it, i, 'indigo')).join('') +
+                            '</div>';
+                    } else {
+                        prevList.innerHTML = '<div class="flex items-center gap-2 py-2 px-1"><i class="fas fa-check-circle text-indigo-300 text-xs"></i><span class="text-indigo-400 font-semibold" style="font-size:.7rem;">No preventive schedule for today</span></div>';
+                    }
+                }
+                if (prevCount) prevCount.textContent = today.preventive.length;
+
+                // Date label
+                const dl = document.getElementById('todayDateLabel');
+                if (dl && today.date) dl.textContent = today.date;
+            }
+
+            // ── Render Predictive schedule rows ───────────────────────
+            function renderPredSchedule(rows) {
+                const tbody = document.querySelector('#schedPredTab table tbody');
+                if (!tbody || !rows) return;
+                if (rows.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="10" class="tbl-td text-center py-16 text-slate-400">
+                    <i class="fas fa-calendar-xmark text-4xl block mb-3 text-slate-200"></i>
+                    <p class="font-semibold">Belum ada data schedule predictive.</p></td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = rows.map((r, i) => {
+                    const cls = remainingCls(r.remaining);
+                    return `<tr class="pred-sched-row" data-status="${r.status_cls}">
+                    <td class="tbl-td text-slate-400 font-mono px-2 py-2" style="font-size:.68rem;">${i + 1}</td>
+                    <td class="tbl-td px-2 py-2" style="overflow:hidden;">
+                        <div class="font-bold text-slate-800 leading-tight" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.machine}">${r.machine}</div>
+                        ${r.process ? `<div class="text-slate-500 mt-0.5" style="font-size:.65rem;">${r.process}</div>` : ''}
+                        <div class="text-slate-400 mt-0.5" style="font-size:.62rem;">${r.dept}${r.line ? ' · ' + r.line : ''}${r.op ? ' · OP ' + r.op : ''}</div>
+                    </td>
+                    <td class="tbl-td px-2 py-2">
+                        <span style="font-size:.72rem;color:#334155;display:block;word-break:break-word;white-space:normal;line-height:1.4;">${r.point}</span>
+                        ${r.unit ? `<div class="text-slate-400 italic mt-0.5" style="font-size:.62rem;">${r.unit}</div>` : ''}
+                    </td>
+                    <td class="tbl-td text-center text-slate-500 px-1 py-2" style="font-size:.65rem;">${r.use_date}</td>
+                    <td class="tbl-td text-center px-1 py-2"><span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded" style="font-size:.65rem;">${r.interval}mo</span></td>
+                    <td class="tbl-td text-center text-slate-600 font-semibold px-1 py-2" style="font-size:.65rem;">${r.plan_date}</td>
+                    <td class="tbl-td text-center px-1 py-2 ${cls}" style="font-size:.75rem;">${r.remaining}</td>
+                    <td class="tbl-td text-center px-1 py-2">${badgePO(r.part_order)}</td>
+                    <td class="tbl-td text-center px-1 py-2">${badgePO(r.part_avail)}</td>
+                    <td class="tbl-td text-center px-1 py-2">${badgeMS(r.maint_status)}</td>
+                </tr>`;
+                }).join('');
+                applyPredFilter();
+                // Update count badge in tab
+                const badge = document.querySelector('#schedTabPred span');
+                if (badge) badge.textContent = rows.length;
+                // Update footer
+                const footer = document.querySelector('#schedPredTab .bg-slate-50 span:first-child');
+                if (footer) footer.textContent = rows.length + ' jadwal predictive';
+            }
+
+            // ── Render Preventive schedule rows ───────────────────────
+            function renderPrevSchedule(rows) {
+                const tbody = document.querySelector('#schedPrevTab table tbody');
+                if (!tbody || !rows) return;
+                if (rows.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="8" class="tbl-td text-center py-16 text-slate-400">
+                    <i class="fas fa-shield-halved text-4xl block mb-3 text-slate-200"></i>
+                    <p class="font-semibold">Belum ada data schedule preventive.</p></td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = rows.map((r, i) => {
+                    const cls = remainingCls(r.remaining);
+                    return `<tr class="prev-sched-row" data-status="${r.status_cls}">
+                    <td class="tbl-td text-slate-400 text-xs font-mono">${i + 1}</td>
+                    <td class="tbl-td" style="min-width:160px;">
+                        <div class="font-bold text-slate-800 text-sm leading-tight">${r.machine}</div>
+                        ${r.process ? `<div class="text-xs text-slate-500 mt-0.5">${r.process}</div>` : ''}
+                        <div class="text-[11px] text-slate-400 mt-0.5">${r.dept}${r.line ? ' · ' + r.line : ''}${r.op ? ' · OP ' + r.op : ''}</div>
+                    </td>
+                    <td class="tbl-td" style="min-width:160px;">
+                        <span style="font-size:.72rem;color:#334155;display:block;word-break:break-word;white-space:normal;line-height:1.4;">${r.point}</span>
+                        ${r.unit ? `<div class="text-xs text-slate-400 italic mt-0.5">${r.unit}</div>` : ''}
+                    </td>
+                    <td class="tbl-td text-center text-xs text-slate-500 whitespace-nowrap">${r.use_date}</td>
+                    <td class="tbl-td text-center"><span class="bg-slate-100 text-slate-600 font-bold px-2.5 py-1 rounded-lg text-xs">${r.interval} mo</span></td>
+                    <td class="tbl-td text-center text-xs whitespace-nowrap font-semibold text-slate-600">${r.plan_date}</td>
+                    <td class="tbl-td text-center ${cls} whitespace-nowrap">${r.remaining}</td>
+                    <td class="tbl-td text-center">${badgeMS(r.maint_status)}</td>
+                </tr>`;
+                }).join('');
+                applyPrevFilter();
+                // Update count badge in tab
+                const badge = document.querySelector('#schedTabPrev span');
+                if (badge) badge.textContent = rows.length;
+                const footer = document.querySelector('#schedPrevTab .bg-slate-50 span:first-child');
+                if (footer) footer.textContent = rows.length + ' jadwal preventive';
+            }
+
+            // ── Render Parts table ─────────────────────────────────────
+            function renderParts(rows) {
+                const tbody = document.querySelector('#sectionParts table tbody');
+                if (!tbody || !rows) return;
+                const STATUS_CLS = {
+                    'Zero Stock': 'badge-zero',
+                    'Low Stock': 'badge-low',
+                    'In Stock': 'badge-in',
+                    'Over Stock': 'badge-over',
+                };
+                const ACTUAL_CLS = (actual, safety) => {
+                    if (actual === 0) return 'text-red-500';
+                    if (actual < safety) return 'text-orange-500';
+                    if (actual === safety) return 'text-emerald-600';
+                    return 'text-violet-600';
+                };
+                if (rows.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" class="tbl-td text-center py-16 text-slate-400">
+                    <i class="fas fa-box-open text-4xl block mb-3 text-slate-200"></i>
+                    <p class="font-semibold">Belum ada data part.</p></td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = rows.map((p, i) => {
+                    const badgeCls = STATUS_CLS[p.status] || 'badge-none';
+                    const aCls = ACTUAL_CLS(p.actual, p.safety);
+                    const effSign = p.effective >= 0 ? '+' : '';
+                    const effCls = p.effective < 0 ? 'text-red-500' : 'text-slate-600';
+                    return `<tr>
+                    <td class="tbl-td text-slate-400 text-xs font-mono">${i + 1}</td>
+                    <td class="tbl-td font-mono font-bold text-slate-700 tracking-wide text-sm">${p.code}</td>
+                    <td class="tbl-td text-slate-700 text-sm font-medium" style="max-width:260px;">${p.description}</td>
+                    <td class="tbl-td text-center"><span class="bg-slate-100 text-slate-600 font-bold px-3 py-1 rounded-lg text-sm">${p.safety}</span></td>
+                    <td class="tbl-td text-center font-black text-lg ${aCls}">${p.actual}</td>
+                    <td class="tbl-td text-center font-bold text-sm ${effCls}">${effSign}${p.effective}</td>
+                    <td class="tbl-td text-center"><span class="badge ${badgeCls}">${p.status}</span></td>
+                </tr>`;
+                }).join('');
+                // Update footer
+                const footer = document.querySelector('#sectionParts .bg-slate-50 span:first-child');
+                if (footer) footer.textContent = rows.length + ' parts';
+            }
+
+            // ── Update "Last updated" timestamps ──────────────────────
+            function updateTimestamps(ts) {
+                document.querySelectorAll('.bg-slate-50 span:last-child').forEach(el => {
+                    if (el.textContent.startsWith('Last updated:')) el.textContent = 'Last updated: ' + ts;
+                });
+            }
+
+            // ── Main poll function ─────────────────────────────────────
+            async function poll() {
+                setDot('loading');
+                try {
+                    const res = await fetch(AJAX_URL + '?type=all&_=' + Date.now());
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const data = await res.json();
+
+                    renderToday(data);
+                    renderPredSchedule(data.schedules);
+                    renderPrevSchedule(data.prevSchedules);
+                    renderParts(data.parts);
+                    if (data.refreshed_at) updateTimestamps(data.refreshed_at);
+
+                    setDot('ok');
+                } catch (e) {
+                    console.warn('[AJAX] poll error:', e);
+                    setDot('error');
+                }
+            }
+
+            // Start polling after initial load
+            window.addEventListener('load', () => {
+                setTimeout(poll, 5000); // first check 5 s after load
+                setInterval(poll, POLL_INTERVAL);
+            });
+        })();
+    </script>
 </body>
 
 </html>

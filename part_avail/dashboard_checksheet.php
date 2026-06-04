@@ -209,13 +209,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         exit;
     }
 
+    // ─── Validasi & proses foto ───────────────────────────────────────────────
+    if (empty($_FILES['photo']) || $_FILES['photo']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'message' => 'Foto kondisi mesin wajib diambil sebelum submit.']);
+        exit;
+    }
+
+    $allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime  = $finfo->file($_FILES['photo']['tmp_name']);
+    if (!in_array($mime, $allowedMimes)) {
+        echo json_encode(['success' => false, 'message' => 'Format foto tidak valid (hanya JPEG/PNG/WebP).']);
+        exit;
+    }
+
     $items = json_decode($itemsJson, true);
     if (!is_array($items) || empty($items)) {
         echo json_encode(['success' => false, 'message' => 'Tidak ada item checklist.']);
         exit;
     }
 
-    // ─── Cek duplikasi server-side: mesin ini sudah diisi hari ini? ──────────
+    // ─── Cek duplikasi server-side ────────────────────────────────────────────
     $stmtDup = $pdo->prepare(
         "SELECT COUNT(*) FROM checksheet_submissions
          WHERE machine_name = ? AND DATE(check_date) = ?"
@@ -223,12 +237,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
     $stmtDup->execute([$machineName, $checkDate]);
     if ((int)$stmtDup->fetchColumn() > 0) {
         echo json_encode([
-            'success' => false,
-            'message' => "Mesin \"{$machineName}\" sudah diisi checksheet pada tanggal ini.",
+            'success'   => false,
+            'message'   => "Mesin \"{$machineName}\" sudah diisi checksheet pada tanggal ini.",
             'duplicate' => true,
         ]);
         exit;
     }
+
+    // ─── Simpan foto ke server (hanya jika semua validasi lolos) ─────────────
+    $uploadDir = __DIR__ . '/uploads/checksheet/';
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+    $ext      = $mime === 'image/png' ? 'png' : ($mime === 'image/webp' ? 'webp' : 'jpg');
+    $filename = 'cs_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+    $destPath = $uploadDir . $filename;
+
+    if (!move_uploaded_file($_FILES['photo']['tmp_name'], $destPath)) {
+        echo json_encode(['success' => false, 'message' => 'Gagal menyimpan foto ke server.']);
+        exit;
+    }
+    $photoPath = 'uploads/checksheet/' . $filename;
 
     $categoryKey = resolveCategoryKey($machineType, $dept, $line) ?? '';
 
@@ -237,10 +266,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
 
         $stmt = $pdo->prepare(
             "INSERT INTO checksheet_submissions
-             (department, `line`, op, machine_name, machine_type, category_key, check_date, checker, ip_address)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             (department, `line`, op, machine_name, machine_type, category_key, check_date, checker, photo_path, ip_address)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         );
-        $stmt->execute([$dept, $line, $op, $machineName, $machineType, $categoryKey, $checkDate, $checker, $_SERVER['REMOTE_ADDR'] ?? null]);
+        $stmt->execute([$dept, $line, $op, $machineName, $machineType, $categoryKey, $checkDate, $checker, $photoPath, $_SERVER['REMOTE_ADDR'] ?? null]);
         $submissionId = $pdo->lastInsertId();
 
         $stmtDetail = $pdo->prepare(
@@ -261,10 +290,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         $pdo->commit();
-        // PERBAIKAN POINT 1: Response diganti tanpa ID
         echo json_encode(['success' => true, 'message' => 'Check sheet berhasil disimpan.']);
     } catch (\Exception $e) {
         $pdo->rollBack();
+        // Hapus foto karena transaksi DB gagal
+        if (file_exists($destPath)) unlink($destPath);
         echo json_encode(['success' => false, 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
     }
     exit;
@@ -615,7 +645,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             vertical-align: middle;
         }
 
-        /* ── Result select ── */
+        /* ── Result button group ── */
+        .result-btn-group {
+            display: flex;
+            gap: 3px;
+            flex-wrap: nowrap;
+        }
+
+        .result-btn {
+            border: 1.5px solid #e2e8f0;
+            border-radius: 7px;
+            padding: 4px 7px;
+            font-size: .68rem;
+            font-weight: 800;
+            background: #f8fafc;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all .15s;
+            white-space: nowrap;
+            line-height: 1.3;
+            letter-spacing: .02em;
+        }
+
+        .result-btn:hover {
+            border-color: #cbd5e1;
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .result-btn.active-v {
+            background: #dcfce7;
+            color: #15803d;
+            border-color: #86efac;
+        }
+
+        .result-btn.active-x {
+            background: #fee2e2;
+            color: #dc2626;
+            border-color: #fca5a5;
+        }
+
+        .result-btn.active-r {
+            background: #fef9c3;
+            color: #ca8a04;
+            border-color: #fde047;
+        }
+
+        .result-btn.active-ro {
+            background: #ede9fe;
+            color: #7c3aed;
+            border-color: #c4b5fd;
+        }
+
+        /* Keep old classes for weekly/monthly auto-rows (not rendered as buttons) */
         .result-select {
             border: 1.5px solid #e2e8f0;
             border-radius: 8px;
@@ -626,12 +708,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             cursor: pointer;
             min-width: 82px;
             transition: all .2s;
-        }
-
-        .result-select:focus {
-            outline: none;
-            border-color: #f43f5e;
-            box-shadow: 0 0 0 3px rgba(244, 63, 94, .15);
+            display: none;
+            /* hidden – replaced by buttons */
         }
 
         .note-input {
@@ -673,36 +751,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             75% {
                 transform: translateX(4px)
             }
-        }
-
-        .result-select.val-v {
-            background: #dcfce7;
-            color: #15803d;
-            border-color: #86efac;
-        }
-
-        .result-select.val-x {
-            background: #fee2e2;
-            color: #dc2626;
-            border-color: #fca5a5;
-        }
-
-        .result-select.val-r {
-            background: #fef9c3;
-            color: #ca8a04;
-            border-color: #fde047;
-        }
-
-        .result-select.val-ro {
-            background: #ede9fe;
-            color: #7c3aed;
-            border-color: #c4b5fd;
-        }
-
-        .result-select.val-dash {
-            background: #f1f5f9;
-            color: #94a3b8;
-            border-color: #e2e8f0;
         }
 
         /* ── Badges ── */
@@ -893,6 +941,372 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             color: #94a3b8;
             font-size: .7rem;
         }
+
+        /* ── Foto Strip (inline di bawah tabel) ── */
+        #foto-section {
+            border-top: 1px solid #e2e8f0;
+            padding: 8px 16px;
+            background: #f8fafc;
+            flex-shrink: 0;
+            display: none;
+        }
+
+        #foto-strip {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #foto-strip .foto-label {
+            font-size: .68rem;
+            font-weight: 800;
+            color: #475569;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        #foto-strip .foto-label i {
+            color: #f43f5e;
+        }
+
+        #btn-open-camera {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 8px;
+            background: #1e293b;
+            color: #fff;
+            font-size: .72rem;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            transition: background .15s;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        #btn-open-camera:hover {
+            background: #0f172a;
+        }
+
+        /* Thumbnail kecil hasil foto */
+        #foto-thumb-wrap {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        #foto-thumb {
+            width: 40px;
+            height: 30px;
+            object-fit: cover;
+            border-radius: 5px;
+            border: 1.5px solid #86efac;
+            cursor: pointer;
+            transition: opacity .15s;
+        }
+
+        #foto-thumb:hover {
+            opacity: .8;
+        }
+
+        #btn-foto-retake {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 9px;
+            border-radius: 7px;
+            background: transparent;
+            border: 1.5px solid #e2e8f0;
+            color: #64748b;
+            font-size: .68rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all .15s;
+            white-space: nowrap;
+        }
+
+        #btn-foto-retake:hover {
+            border-color: #f43f5e;
+            color: #f43f5e;
+        }
+
+        .foto-status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: .67rem;
+            font-weight: 700;
+            padding: 3px 9px;
+            border-radius: 99px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .foto-status-badge.ok {
+            background: #dcfce7;
+            color: #15803d;
+        }
+
+        .foto-status-badge.required {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        /* ── Camera Modal ── */
+        #camera-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 500;
+            background: rgba(15, 23, 42, .7);
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(3px);
+        }
+
+        #camera-modal.open {
+            display: flex;
+        }
+
+        #camera-modal-box {
+            background: #fff;
+            border-radius: 18px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .25);
+            width: 480px;
+            max-width: calc(100vw - 32px);
+            overflow: hidden;
+            animation: modalIn .2s ease;
+        }
+
+        @keyframes modalIn {
+            from {
+                opacity: 0;
+                transform: scale(.95) translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        #camera-modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        #camera-modal-header .modal-title {
+            font-size: .82rem;
+            font-weight: 800;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        #camera-modal-header .modal-title i {
+            color: #f43f5e;
+        }
+
+        #btn-modal-close {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            background: #f1f5f9;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+            font-size: .75rem;
+            transition: background .15s;
+        }
+
+        #btn-modal-close:hover {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        #camera-modal-body {
+            padding: 14px 18px 16px;
+        }
+
+        /* Video live feed */
+        #camera-preview-wrap {
+            position: relative;
+            width: 100%;
+            background: #0f172a;
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 4/3;
+            display: none;
+        }
+
+        #camera-video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        #camera-overlay-hint {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, .55);
+            color: #fff;
+            font-size: .65rem;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 99px;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+
+        /* Foto hasil di modal */
+        #photo-result-wrap {
+            position: relative;
+            display: none;
+        }
+
+        #photo-preview {
+            width: 100%;
+            border-radius: 12px;
+            border: 2px solid #86efac;
+            object-fit: cover;
+            aspect-ratio: 4/3;
+            display: block;
+        }
+
+        #photo-delete-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: rgba(239, 68, 68, .9);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: .7rem;
+            transition: background .15s;
+        }
+
+        #photo-delete-btn:hover {
+            background: rgba(220, 38, 38, 1);
+        }
+
+        /* Placeholder di modal sebelum kamera dibuka */
+        .foto-empty-box {
+            width: 100%;
+            aspect-ratio: 4/3;
+            border: 2px dashed #e2e8f0;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #cbd5e1;
+            background: #f8fafc;
+            gap: 8px;
+        }
+
+        .foto-empty-box i {
+            font-size: 2rem;
+        }
+
+        .foto-empty-box p {
+            font-size: .72rem;
+            font-weight: 600;
+            color: #94a3b8;
+        }
+
+        /* Modal action buttons */
+        #camera-modal-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        #btn-capture {
+            flex: 1;
+            padding: 8px 0;
+            border-radius: 10px;
+            background: #f43f5e;
+            color: #fff;
+            font-size: .78rem;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            transition: background .15s;
+        }
+
+        #btn-capture:hover {
+            background: #e11d48;
+        }
+
+        #btn-cancel-camera {
+            flex: 1;
+            padding: 8px 0;
+            border-radius: 10px;
+            background: transparent;
+            color: #94a3b8;
+            font-size: .72rem;
+            font-weight: 600;
+            border: 1.5px solid #e2e8f0;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all .15s;
+        }
+
+        #btn-cancel-camera:hover {
+            border-color: #f43f5e;
+            color: #f43f5e;
+        }
+
+        #btn-use-photo {
+            flex: 1;
+            padding: 8px 0;
+            border-radius: 10px;
+            background: #15803d;
+            color: #fff;
+            font-size: .78rem;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            transition: background .15s;
+        }
+
+        #btn-use-photo:hover {
+            background: #166534;
+        }
     </style>
 </head>
 
@@ -1024,6 +1438,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             </div>
                         </div>
                     </div>
+
                 </div>
 
                 <div class="flex-1 min-w-0">
@@ -1110,10 +1525,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             </div>
                         </div>
 
+                        <!-- ─── FOTO STRIP (inline kompak di bawah tabel) ─── -->
+                        <div id="foto-section">
+                            <div id="foto-strip">
+                                <span class="foto-label">
+                                    <i class="fas fa-camera"></i> Take Machine Photo <span style="color:#f43f5e;margin-left:1px;">*</span>
+                                </span>
+                                <button id="btn-open-camera" type="button" onclick="openCameraModal()">
+                                    <i class="fas fa-camera"></i> Open Camera
+                                </button>
+                                <!-- Thumbnail + retake (muncul setelah ada foto) -->
+                                <div id="foto-thumb-wrap">
+                                    <img id="foto-thumb" src="" alt="thumb" onclick="openPhotoPreviewModal()" title="Klik untuk lihat foto">
+                                    <button id="btn-foto-retake" type="button" onclick="openCameraModal()">
+                                        <i class="fas fa-redo"></i> Retake
+                                    </button>
+                                </div>
+                                <span id="foto-status-badge" class="foto-status-badge required" style="margin-left:auto;">
+                                    <i class="fas fa-exclamation-circle"></i> Photo required
+                                </span>
+                            </div>
+                        </div>
+
                         <div class="border-t border-slate-100 px-5 py-3 flex items-center justify-between gap-3 bg-slate-50/60 rounded-b-2xl flex-shrink-0">
                             <div class="text-xs text-slate-400 font-medium">
                                 <i class="fas fa-circle-info mr-1"></i>
-                                Pastikan semua item telah dicek sebelum submit
+                                Pastikan semua item dicek &amp; foto mesin sudah diambil
                             </div>
                             <div class="flex items-center gap-2.5">
                                 <button onclick="resetForm()"
@@ -1131,12 +1568,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             </div>
         </div>
     </div>
+    <!-- ─── CAMERA MODAL ─────────────────────────────────────────────── -->
+    <div id="camera-modal">
+        <div id="camera-modal-box">
+            <div id="camera-modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-camera"></i> Take Machine Photo
+                </div>
+                <button id="btn-modal-close" type="button" onclick="closeCameraModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div id="camera-modal-body">
+                <!-- Placeholder sebelum kamera dibuka -->
+                <div id="foto-empty-box" class="foto-empty-box">
+                    <i class="fas fa-image"></i>
+                    <p>Belum ada foto</p>
+                </div>
+                <!-- Live kamera -->
+                <div id="camera-preview-wrap">
+                    <video id="camera-video" playsinline autoplay muted></video>
+                    <div id="camera-overlay-hint">Arahkan ke mesin lalu tekan Ambil Foto</div>
+                </div>
+                <!-- Hasil foto di modal -->
+                <div id="photo-result-wrap">
+                    <img id="photo-preview" src="" alt="Foto Mesin">
+                    <button id="photo-delete-btn" type="button" onclick="deleteCapturedPhoto()" title="Hapus foto">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <!-- Canvas tersembunyi -->
+                <canvas id="photo-canvas" style="display:none;"></canvas>
+                <!-- Action buttons -->
+                <div id="camera-modal-actions">
+                    <button id="btn-capture" type="button" onclick="capturePhoto()">
+                        <i class="fas fa-circle"></i> Ambil Foto
+                    </button>
+                    <button id="btn-cancel-camera" type="button" onclick="cancelCamera()">
+                        <i class="fas fa-times"></i> Batalkan
+                    </button>
+                    <button id="btn-use-photo" type="button" onclick="closeCameraModal()">
+                        <i class="fas fa-check"></i> Gunakan Foto
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── PHOTO PREVIEW MODAL (klik thumbnail) ──────────────────────── -->
+    <div id="photo-preview-modal" style="display:none; position:fixed; inset:0; z-index:600; background:rgba(15,23,42,.85); align-items:center; justify-content:center; backdrop-filter:blur(4px);">
+        <div style="position:relative; max-width:560px; width:calc(100vw - 32px);">
+            <img id="photo-preview-large" src="" alt="Preview" style="width:100%; border-radius:14px; box-shadow:0 24px 60px rgba(0,0,0,.4);">
+            <button onclick="closePhotoPreviewModal()" style="position:absolute; top:-12px; right:-12px; width:32px; height:32px; border-radius:50%; background:#fff; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:.8rem; color:#1e293b; box-shadow:0 4px 12px rgba(0,0,0,.2);">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+
     <div id="toast"></div>
 
     <script>
         const BASE = window.location.pathname;
         let currentItems = [];
         let isMachineDropdownActive = false; // Flag kontrol internal
+        let capturedPhotoBlob = null; // Blob foto hasil capture dari kamera
+        let cameraStream = null; // MediaStream aktif
 
         // ── Sidebar ───────────────────────────────────────────────────────────────
         function toggleSidebar() {
@@ -1372,6 +1868,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 empty.style.display = 'flex';
                 document.getElementById('row-count').textContent = '';
                 catBadge.classList.add('hidden');
+                document.getElementById('foto-section').style.display = 'none';
                 setSubmitEnabled(false);
                 return;
             }
@@ -1411,16 +1908,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                     const lastDateStr = item.last_check_date || null; // 'YYYY-MM-DD' or null
 
                     if (!lastDateStr) {
-                        // Belum pernah dicek → tampilkan dropdown agar bisa diisi pertama kali
+                        // Belum pernah dicek → tampilkan button group agar bisa diisi pertama kali
                         resultCell = `
                             <div class="result-cell-wrap">
-                                <select class="result-select val-dash" onchange="onResultChange(this)" data-item-idx="${idx}">
-                                    <option value="-" selected>—</option>
-                                    <option value="V">V — OK</option>
-                                    <option value="X">X — Problem</option>
-                                    <option value="R">R — Repair</option>
-                                    <option value="RO">RO — Outsider</option>
-                                </select>
+                                <div class="result-btn-group" data-item-idx="${idx}">
+                                    <button type="button" class="result-btn" data-val="V" onclick="onResultBtnClick(this)">V OK</button>
+                                    <button type="button" class="result-btn" data-val="X" onclick="onResultBtnClick(this)">X Prob</button>
+                                    <button type="button" class="result-btn" data-val="R" onclick="onResultBtnClick(this)">R Rep</button>
+                                    <button type="button" class="result-btn" data-val="RO" onclick="onResultBtnClick(this)">RO Out</button>
+                                </div>
+                                <input type="hidden" class="result-select" value="-">
                             </div>`;
                     } else {
                         // Hitung next_due berdasarkan last_check_date
@@ -1434,16 +1931,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                         nextDue.setHours(0, 0, 0, 0);
 
                         if (todayDate >= nextDue) {
-                            // Sudah waktunya → dropdown untuk diisi ulang
+                            // Sudah waktunya → button group untuk diisi ulang
                             resultCell = `
                                 <div class="result-cell-wrap">
-                                    <select class="result-select val-dash" onchange="onResultChange(this)" data-item-idx="${idx}">
-                                        <option value="-" selected>—</option>
-                                        <option value="V">V — OK</option>
-                                        <option value="X">X — Problem</option>
-                                        <option value="R">R — Repair</option>
-                                        <option value="RO">RO — Outsider</option>
-                                    </select>
+                                    <div class="result-btn-group" data-item-idx="${idx}">
+                                        <button type="button" class="result-btn" data-val="V" onclick="onResultBtnClick(this)">V OK</button>
+                                        <button type="button" class="result-btn" data-val="X" onclick="onResultBtnClick(this)">X Prob</button>
+                                        <button type="button" class="result-btn" data-val="R" onclick="onResultBtnClick(this)">R Rep</button>
+                                        <button type="button" class="result-btn" data-val="RO" onclick="onResultBtnClick(this)">RO Out</button>
+                                    </div>
+                                    <input type="hidden" class="result-select" value="-">
                                 </div>`;
                         } else {
                             // Belum waktunya → tampilkan Last / Next, auto V
@@ -1460,13 +1957,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 } else {
                     resultCell = `
                         <div class="result-cell-wrap">
-                            <select class="result-select val-dash" onchange="onResultChange(this)" data-item-idx="${idx}">
-                                <option value="-" selected>—</option>
-                                <option value="V">V — OK</option>
-                                <option value="X">X — Problem</option>
-                                <option value="R">R — Repair</option>
-                                <option value="RO">RO — Outsider</option>
-                            </select>
+                            <div class="result-btn-group" data-item-idx="${idx}">
+                                <button type="button" class="result-btn" data-val="V" onclick="onResultBtnClick(this)">V OK</button>
+                                <button type="button" class="result-btn" data-val="X" onclick="onResultBtnClick(this)">X Prob</button>
+                                <button type="button" class="result-btn" data-val="R" onclick="onResultBtnClick(this)">R Rep</button>
+                                <button type="button" class="result-btn" data-val="RO" onclick="onResultBtnClick(this)">RO Out</button>
+                            </div>
+                            <input type="hidden" class="result-select" value="-">
                         </div>`;
                 }
 
@@ -1485,28 +1982,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             empty.style.display = 'none';
             document.getElementById('row-count').textContent = `${items.length} item checklist`;
             catBadge.classList.remove('hidden');
+            document.getElementById('foto-section').style.display = 'block';
             checkAllResultsFilled();
         }
 
-        function onResultChange(sel) {
-            const map = {
-                'V': 'val-v',
-                'X': 'val-x',
-                'R': 'val-r',
-                'RO': 'val-ro',
-                '-': 'val-dash'
-            };
-            sel.className = 'result-select ' + (map[sel.value] || 'val-dash');
+        function onResultBtnClick(btn) {
+            const group = btn.closest('.result-btn-group');
+            const wrap = btn.closest('.result-cell-wrap');
+            const hidden = wrap ? wrap.querySelector('.result-select') : null;
+            const val = btn.getAttribute('data-val');
 
-            // Tampilkan note input jika result bukan OK / dash
-            const wrap = sel.closest('.result-cell-wrap');
+            // Toggle: jika sudah aktif → deaktifkan (kembali ke -)
+            const wasActive = btn.classList.contains('active-v') ||
+                btn.classList.contains('active-x') ||
+                btn.classList.contains('active-r') ||
+                btn.classList.contains('active-ro');
+
+            // Reset semua button di group ini
+            group.querySelectorAll('.result-btn').forEach(b => {
+                b.classList.remove('active-v', 'active-x', 'active-r', 'active-ro');
+            });
+
+            let newVal = '-';
+            if (!wasActive) {
+                const classMap = {
+                    V: 'active-v',
+                    X: 'active-x',
+                    R: 'active-r',
+                    RO: 'active-ro'
+                };
+                btn.classList.add(classMap[val] || '');
+                newVal = val;
+            }
+
+            if (hidden) hidden.value = newVal;
+
+            // Tampilkan note input jika result bukan V / -
             if (!wrap) {
                 checkAllResultsFilled();
                 return;
             }
-
             let noteEl = wrap.querySelector('.note-input');
-            const needsNote = sel.value !== '-' && sel.value !== 'V';
+            const needsNote = newVal !== '-' && newVal !== 'V';
 
             if (needsNote) {
                 if (!noteEl) {
@@ -1525,21 +2042,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             checkAllResultsFilled();
         }
 
+        function onResultChange(sel) {
+            // Legacy – tidak dipakai untuk baris baru, tapi dipertahankan untuk kompatibilitas
+            checkAllResultsFilled();
+        }
+
         function checkAllResultsFilled() {
             if (!currentItems.length) {
                 setSubmitEnabled(false);
                 return;
             }
-            const selects = document.querySelectorAll('#check-tbody .result-select');
-            // Semua dropdown harus terisi (bukan —)
-            const allDropdownFilled = Array.from(selects).every(s => s.value !== '-');
-            // Semua yang bukan V/— wajib punya note terisi
-            const allNotesFilled = Array.from(selects).every(s => {
-                if (s.value === '-' || s.value === 'V') return true;
-                const noteEl = s.closest('.result-cell-wrap')?.querySelector('.note-input');
+            // Hanya item yang perlu diisi user (tidak punya _autoResult)
+            const itemsNeedingInput = currentItems.filter(i => !i._autoResult);
+
+            // Ambil semua hidden .result-select yang ada di DOM
+            const hiddens = Array.from(document.querySelectorAll('#check-tbody .result-select'));
+
+            // Jumlah hidden di DOM harus sama dengan item yang butuh input
+            if (hiddens.length !== itemsNeedingInput.length) {
+                // DOM belum sinkron, belum bisa submit
+                setSubmitEnabled(false);
+                return;
+            }
+
+            const allFilled = hiddens.every(h => h.value !== '-');
+            const allNotesFilled = hiddens.every(h => {
+                if (h.value === '-' || h.value === 'V') return true;
+                const noteEl = h.closest('.result-cell-wrap')?.querySelector('.note-input');
                 return noteEl && noteEl.value.trim() !== '';
             });
-            setSubmitEnabled(allDropdownFilled && allNotesFilled);
+
+            // Foto wajib sudah di-capture (tersimpan di memori browser)
+            const fotoReady = capturedPhotoBlob !== null;
+            setSubmitEnabled(allFilled && allNotesFilled && fotoReady);
         }
 
         function setSubmitEnabled(enabled) {
@@ -1571,22 +2106,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 return;
             }
 
-            const selects = document.querySelectorAll('#check-tbody .result-select');
-            // Map dropdown index only for items WITHOUT _autoResult (weekly/monthly)
-            let dropdownIdx = 0;
+            const hiddens = document.querySelectorAll('#check-tbody .result-select');
+            // Map hidden input index only for items WITHOUT _autoResult (weekly/monthly)
+            let hiddenIdx = 0;
             const itemsPayload = currentItems.map((item) => {
                 let result;
                 if (item._autoResult) {
                     result = item._autoResult; // 'V' for weekly/monthly
                 } else {
-                    result = selects[dropdownIdx]?.value ?? '-';
-                    dropdownIdx++;
+                    result = hiddens[hiddenIdx]?.value ?? '-';
+                    hiddenIdx++;
                 }
-                // Ambil note dari input — pakai selects[dropdownIdx-1] karena sudah diincrement
+                // Ambil note dari input — pakai hiddens[hiddenIdx-1] karena sudah diincrement
                 let note = null;
                 if (!item._autoResult) {
-                    const sel = selects[dropdownIdx - 1];
-                    const noteEl = sel?.closest('.result-cell-wrap')?.querySelector('.note-input');
+                    const hid = hiddens[hiddenIdx - 1];
+                    const noteEl = hid?.closest('.result-cell-wrap')?.querySelector('.note-input');
                     note = noteEl ? noteEl.value.trim() || null : null;
                 }
                 return {
@@ -1613,6 +2148,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             fd.append('check_date', tanggal);
             fd.append('checker', checker);
             fd.append('items', JSON.stringify(itemsPayload));
+            // Kirim foto bersamaan dengan submit — seperti form_maintenance.php
+            fd.append('photo', capturedPhotoBlob, 'checksheet_photo.jpg');
 
             fetch(BASE, {
                     method: 'POST',
@@ -1648,6 +2185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             selOp.disabled = true;
             clearMachine();
             clearTable();
+            resetPhotoState();
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1665,6 +2203,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             document.getElementById('check-tbody').innerHTML = '';
             document.getElementById('row-count').textContent = '';
             document.getElementById('category-badge').classList.add('hidden');
+            document.getElementById('foto-section').style.display = 'none';
             currentItems = [];
             setSubmitEnabled(false);
         }
@@ -1682,6 +2221,202 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             t.className = `show ${type}`;
             setTimeout(() => t.classList.remove('show'), 4000);
         }
+
+        // ── Kamera & Foto (Modal) ─────────────────────────────────────────────────
+        function openCameraModal() {
+            document.getElementById('camera-modal').classList.add('open');
+            openCamera();
+        }
+
+        function closeCameraModal() {
+            // Hentikan stream jika masih aktif
+            stopCameraStream();
+            document.getElementById('camera-modal').classList.remove('open');
+            // Kembalikan state modal ke sesuai kondisi (ada foto / tidak)
+            if (capturedPhotoBlob) {
+                document.getElementById('foto-empty-box').style.display = 'none';
+                document.getElementById('camera-preview-wrap').style.display = 'none';
+                document.getElementById('photo-result-wrap').style.display = 'block';
+                document.getElementById('btn-capture').style.display = 'none';
+                document.getElementById('btn-cancel-camera').style.display = 'none';
+                document.getElementById('btn-use-photo').style.display = 'none';
+                document.getElementById('btn-open-camera').innerHTML = '<i class="fas fa-redo"></i> Retake Photo';
+            } else {
+                document.getElementById('foto-empty-box').style.display = 'flex';
+                document.getElementById('camera-preview-wrap').style.display = 'none';
+                document.getElementById('photo-result-wrap').style.display = 'none';
+                document.getElementById('btn-capture').style.display = 'none';
+                document.getElementById('btn-cancel-camera').style.display = 'none';
+                document.getElementById('btn-use-photo').style.display = 'none';
+            }
+        }
+
+        function openCamera() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showToast('Browser tidak mendukung akses kamera.', 'error');
+                return;
+            }
+            const constraints = {
+                video: {
+                    facingMode: {
+                        ideal: 'environment'
+                    },
+                    width: {
+                        ideal: 1280
+                    },
+                    height: {
+                        ideal: 960
+                    }
+                },
+                audio: false
+            };
+            navigator.mediaDevices.getUserMedia(constraints)
+                .then(stream => {
+                    cameraStream = stream;
+                    const video = document.getElementById('camera-video');
+                    video.srcObject = stream;
+                    document.getElementById('foto-empty-box').style.display = 'none';
+                    document.getElementById('photo-result-wrap').style.display = 'none';
+                    document.getElementById('camera-preview-wrap').style.display = 'block';
+                    document.getElementById('btn-capture').style.display = 'flex';
+                    document.getElementById('btn-cancel-camera').style.display = 'flex';
+                    document.getElementById('btn-use-photo').style.display = 'none';
+                    document.getElementById('btn-open-camera').style.display = 'none';
+                })
+                .catch(err => {
+                    console.error('Camera error:', err);
+                    showToast('Tidak bisa mengakses kamera. Pastikan izin kamera sudah diberikan.', 'error');
+                });
+        }
+
+        function capturePhoto() {
+            const video = document.getElementById('camera-video');
+            const canvas = document.getElementById('photo-canvas');
+            canvas.width = video.videoWidth || 1280;
+            canvas.height = video.videoHeight || 960;
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            stopCameraStream();
+
+            canvas.toBlob(blob => {
+                capturedPhotoBlob = blob;
+                const url = URL.createObjectURL(blob);
+
+                // Update gambar di modal
+                const preview = document.getElementById('photo-preview');
+                preview.src = url;
+
+                // Update thumbnail di strip
+                const thumb = document.getElementById('foto-thumb');
+                thumb.src = url;
+
+                // Update large preview
+                document.getElementById('photo-preview-large').src = url;
+
+                document.getElementById('camera-preview-wrap').style.display = 'none';
+                document.getElementById('photo-result-wrap').style.display = 'block';
+                document.getElementById('btn-capture').style.display = 'none';
+                document.getElementById('btn-cancel-camera').style.display = 'none';
+                document.getElementById('btn-use-photo').style.display = 'flex';
+                document.getElementById('btn-open-camera').style.display = 'inline-flex';
+                document.getElementById('btn-open-camera').innerHTML = '<i class="fas fa-redo"></i> Retake Photo';
+
+                // Tampilkan thumbnail di strip
+                document.getElementById('foto-thumb-wrap').style.display = 'flex';
+
+                // Update badge
+                const statusBadge = document.getElementById('foto-status-badge');
+                statusBadge.className = 'foto-status-badge ok';
+                statusBadge.innerHTML = '<i class="fas fa-check-circle"></i> Photo ready';
+
+                checkAllResultsFilled();
+            }, 'image/jpeg', 0.88);
+        }
+
+        function cancelCamera() {
+            stopCameraStream();
+            document.getElementById('camera-preview-wrap').style.display = 'none';
+            document.getElementById('btn-capture').style.display = 'none';
+            document.getElementById('btn-cancel-camera').style.display = 'none';
+            if (capturedPhotoBlob) {
+                document.getElementById('photo-result-wrap').style.display = 'block';
+                document.getElementById('btn-use-photo').style.display = 'flex';
+            } else {
+                document.getElementById('foto-empty-box').style.display = 'flex';
+                document.getElementById('btn-use-photo').style.display = 'none';
+            }
+            document.getElementById('btn-open-camera').style.display = 'inline-flex';
+        }
+
+        function deleteCapturedPhoto() {
+            capturedPhotoBlob = null;
+            const preview = document.getElementById('photo-preview');
+            if (preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
+            preview.src = '';
+            document.getElementById('photo-result-wrap').style.display = 'none';
+            document.getElementById('foto-empty-box').style.display = 'flex';
+            document.getElementById('btn-use-photo').style.display = 'none';
+            document.getElementById('btn-open-camera').style.display = 'inline-flex';
+            document.getElementById('btn-open-camera').innerHTML = '<i class="fas fa-camera"></i> Open Camera';
+            // Sembunyikan thumbnail
+            document.getElementById('foto-thumb-wrap').style.display = 'none';
+            document.getElementById('foto-thumb').src = '';
+            // Update badge
+            const statusBadge = document.getElementById('foto-status-badge');
+            statusBadge.className = 'foto-status-badge required';
+            statusBadge.innerHTML = '<i class="fas fa-exclamation-circle"></i> Photo required';
+            checkAllResultsFilled();
+        }
+
+        function stopCameraStream() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+            const video = document.getElementById('camera-video');
+            video.srcObject = null;
+        }
+
+        function resetPhotoState() {
+            stopCameraStream();
+            capturedPhotoBlob = null;
+            const preview = document.getElementById('photo-preview');
+            if (preview.src && preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
+            preview.src = '';
+            document.getElementById('photo-result-wrap').style.display = 'none';
+            document.getElementById('camera-preview-wrap').style.display = 'none';
+            document.getElementById('foto-empty-box').style.display = 'flex';
+            document.getElementById('btn-capture').style.display = 'none';
+            document.getElementById('btn-cancel-camera').style.display = 'none';
+            document.getElementById('btn-use-photo').style.display = 'none';
+            document.getElementById('btn-open-camera').style.display = 'inline-flex';
+            document.getElementById('btn-open-camera').innerHTML = '<i class="fas fa-camera"></i> Open Camera';
+            document.getElementById('foto-thumb-wrap').style.display = 'none';
+            document.getElementById('foto-thumb').src = '';
+            const statusBadge = document.getElementById('foto-status-badge');
+            statusBadge.className = 'foto-status-badge required';
+            statusBadge.innerHTML = '<i class="fas fa-exclamation-circle"></i> Photo required';
+            // Tutup modal jika terbuka
+            document.getElementById('camera-modal').classList.remove('open');
+        }
+
+        function openPhotoPreviewModal() {
+            if (!capturedPhotoBlob) return;
+            document.getElementById('photo-preview-modal').style.display = 'flex';
+        }
+
+        function closePhotoPreviewModal() {
+            document.getElementById('photo-preview-modal').style.display = 'none';
+        }
+
+        // Tutup modal preview jika klik di luar gambar
+        document.getElementById('photo-preview-modal').addEventListener('click', function(e) {
+            if (e.target === this) closePhotoPreviewModal();
+        });
+
+        // Tutup camera modal jika klik backdrop
+        document.getElementById('camera-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeCameraModal();
+        });
 
         function esc(str) {
             const d = document.createElement('div');
