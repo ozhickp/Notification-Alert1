@@ -112,12 +112,12 @@ try {
 }
 
 // ── Helper ─────────────────────────────────────────────────────────────────────
-function remainingClass(int $days): string
+function remainingClass(int $days, int $reminder = 30): string
 {
-    if ($days < 0)  return 'text-red-600 font-black';
-    if ($days <= 7) return 'text-amber-600 font-black';
-    if ($days <= 30) return 'text-orange-500 font-bold';
-    return 'text-slate-700 font-semibold';
+    if ($days <= 0)           return 'text-red-600 font-black';    // overdue (termasuk hari-H = 0)
+    if ($days <= 7)           return 'text-amber-600 font-black';  // alert
+    if ($days <= $reminder)   return 'text-orange-500 font-bold';  // reminder (dinamis per baris)
+    return                           'text-slate-700 font-semibold'; // secure
 }
 function maintenanceStatusBadge(string $status): string
 {
@@ -831,10 +831,10 @@ function partOrderBadge(string $v): string
                                         <?php else: ?>
                                             <?php foreach ($schedules as $i => $row):
                                                 $days = (int)$row['remaining_day'];
-                                                $daysCls = remainingClass($days);
+                                                $reminder = (int)($row['reminder_activity'] ?? 30);
+                                                $daysCls = remainingClass($days, $reminder);
                                                 $useDate = $row['use_date'] ? date('d M Y', strtotime($row['use_date'])) : '-';
                                                 $planDate = $row['change_date_plan'] ? date('d M Y', strtotime($row['change_date_plan'])) : '-';
-                                                $reminder = (int)($row['reminder_activity'] ?? 30);
                                                 if ($days <= 0) $rowStatus = 'overdue';
                                                 elseif ($days <= 7) $rowStatus = 'alert';
                                                 elseif ($days <= $reminder) $rowStatus = 'reminder';
@@ -990,10 +990,10 @@ function partOrderBadge(string $v): string
                                         <?php else: ?>
                                             <?php foreach ($prevSchedules as $i => $row):
                                                 $days = (int)($row['remaining_day'] ?? 0);
-                                                $daysCls = remainingClass($days);
+                                                $pReminder = (int)($row['reminder_activity'] ?? 30);
+                                                $daysCls = remainingClass($days, $pReminder);
                                                 $useDate = !empty($row['use_date']) ? date('d M Y', strtotime($row['use_date'])) : '-';
                                                 $planDate = !empty($row['change_date_plan']) ? date('d M Y', strtotime($row['change_date_plan'])) : '-';
-                                                $pReminder = (int)($row['reminder_activity'] ?? 30);
                                                 if ($days <= 0) $pRowStatus = 'overdue';
                                                 elseif ($days <= 7) $pRowStatus = 'alert';
                                                 elseif ($days <= $pReminder) $pRowStatus = 'reminder';
