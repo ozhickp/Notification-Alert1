@@ -213,7 +213,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             $filledList = isset($filledMap[$key]) ? explode('||', $filledMap[$key]['filled_list']) : [];
 
             // Ambil semua nama mesin + op di line ini
-            $stmtMachines = $pdo->prepare("SELECT DISTINCT machine_name, op FROM machine_list WHERE department = ? AND `line` = ? ORDER BY CASE WHEN op = '' OR op IS NULL THEN 1 ELSE 0 END, op, machine_name");
+            $stmtMachines = $pdo->prepare("SELECT DISTINCT machine_name, op FROM machine_list WHERE department = ? AND `line` = ? ORDER BY CASE WHEN op = '' OR op IS NULL THEN 1 ELSE 0 END, CAST(REGEXP_REPLACE(op, '[^0-9]', '') AS UNSIGNED), op, machine_name");
             $stmtMachines->execute([$dept, $line]);
             $allMachines = $stmtMachines->fetchAll(); // array of ['machine_name'=>..., 'op'=>...]
 
