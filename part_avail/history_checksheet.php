@@ -212,10 +212,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             $filled = (int)($filledMap[$key]['filled_machines'] ?? 0);
             $filledList = isset($filledMap[$key]) ? explode('||', $filledMap[$key]['filled_list']) : [];
 
-            // Ambil semua nama mesin di line ini
-            $stmtMachines = $pdo->prepare("SELECT DISTINCT machine_name FROM machine_list WHERE department = ? AND `line` = ? ORDER BY machine_name");
+            // Ambil semua nama mesin + op di line ini
+            $stmtMachines = $pdo->prepare("SELECT DISTINCT machine_name, op FROM machine_list WHERE department = ? AND `line` = ? ORDER BY CASE WHEN op = '' OR op IS NULL THEN 1 ELSE 0 END, op, machine_name");
             $stmtMachines->execute([$dept, $line]);
-            $allMachines = array_column($stmtMachines->fetchAll(), 'machine_name');
+            $allMachines = $stmtMachines->fetchAll(); // array of ['machine_name'=>..., 'op'=>...]
 
             if (!isset($depts[$dept])) {
                 $depts[$dept] = ['name' => $dept, 'lines' => [], 'total' => 0, 'filled' => 0];
@@ -2003,7 +2003,49 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             return '#ef4444';
         }
 
+        function renderLineHtml(line) {
+            const lc = pctColor(line.pct);
+            const filledSet = new Set(line.filled_list);
+            const machineChips = line.all_machines.map(function(m) {
+                const name = m.machine_name;
+                const op = (m.op && m.op !== '-') ? m.op : '';
+                const label = op ? (esc(op) + ' - ' + esc(name)) : esc(name);
+                const isFilled = filledSet.has(name);
+                const cls = isFilled ? 'filled' : 'unfilled';
+                const title = isFilled ? 'Sudah diisi' : 'Belum diisi';
+                return '<span class="machine-chip ' + cls + '" title="' + title + '">' + label + '</span>';
+            }).join('');
+            return '<div style="margin-bottom:10px;">' +
+                '<div class="line-row">' +
+                '<div style="width:28px;height:28px;border-radius:8px;background:' + lc + '22;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+                '<i class="fas fa-stream" style="color:' + lc + ';font-size:.7rem;"></i>' +
+                '</div>' +
+                '<div style="flex:1;min-width:0;">' +
+                '<div style="font-size:.77rem;font-weight:700;color:#1e293b;">' + esc(line.line) + '</div>' +
+                '<div style="font-size:.65rem;color:#64748b;">' + line.filled + '/' + line.total + ' mesin</div>' +
+                '</div>' +
+                '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">' +
+                '<div class="pct-bar-wrap" style="width:80px;">' +
+                '<div class="pct-bar-fill" style="width:' + line.pct + '%;background:' + lc + ';"></div>' +
+                '</div>' +
+                '<span style="font-size:.77rem;font-weight:800;color:' + lc + ';min-width:32px;text-align:right;">' + line.pct + '%</span>' +
+                '</div>' +
+                '</div>' +
+                '<div class="machine-chips">' + machineChips + '</div>' +
+                '</div>';
+        }
+
         function renderCompletion(depts, value, mode) {
+            // Format tanggal
+            const bulanId = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+            let labelTanggal = value;
+            if (mode === 'daily') {
+                const d = new Date(value + 'T00:00:00');
+                labelTanggal = d.getDate() + ' ' + bulanId[d.getMonth()] + ' ' + d.getFullYear();
+            } else {
+                const d = new Date(value + '-01T00:00:00');
+                labelTanggal = bulanId[d.getMonth()] + ' ' + d.getFullYear();
+            }
             // Summary
             const totalAll = depts.reduce((s, d) => s + d.total, 0);
             const filledAll = depts.reduce((s, d) => s + d.filled, 0);
@@ -2014,7 +2056,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     <div style="font-size:2rem;font-weight:900;color:${pctColor(pctAll)};">${pctAll}%</div>
                     <div>
                         <div style="font-size:.82rem;font-weight:700;color:#1e293b;">Overall Completion</div>
-                        <div style="font-size:.72rem;color:#64748b;">${filledAll} dari ${totalAll} mesin sudah diisi • ${value}</div>
+                        <div style="font-size:.72rem;color:#64748b;white-space:nowrap;">${filledAll} dari ${totalAll} mesin sudah diisi</div>
+                        <div style="font-size:.72rem;color:#64748b;margin-top:1px;">${labelTanggal}</div>
                     </div>
                 </div>
                 <div style="flex:2;min-width:200px;">
@@ -2055,32 +2098,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                         </div>
                     </div>
                     <div class="dept-body">
-                        ${dept.lines.map(line => {
-                            const lc = pctColor(line.pct);
-                            const filledSet = new Set(line.filled_list);
-                            const machineChips = line.all_machines.map(m =>
-                                `<span class="machine-chip ${filledSet.has(m) ? 'filled' : 'unfilled'}" title="${filledSet.has(m) ? 'Sudah diisi' : 'Belum diisi'}">${esc(m)}</span>`
-                            ).join('');
-                            return `
-                            <div style="margin-bottom:10px;">
-                                <div class="line-row">
-                                    <div style="width:28px;height:28px;border-radius:8px;background:${lc}22;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                        <i class="fas fa-stream" style="color:${lc};font-size:.7rem;"></i>
-                                    </div>
-                                    <div style="flex:1;min-width:0;">
-                                        <div style="font-size:.77rem;font-weight:700;color:#1e293b;">${esc(line.line)}</div>
-                                        <div style="font-size:.65rem;color:#64748b;">${line.filled}/${line.total} mesin</div>
-                                    </div>
-                                    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-                                        <div class="pct-bar-wrap" style="width:80px;">
-                                            <div class="pct-bar-fill" style="width:${line.pct}%;background:${lc};"></div>
-                                        </div>
-                                        <span style="font-size:.77rem;font-weight:800;color:${lc};min-width:32px;text-align:right;">${line.pct}%</span>
-                                    </div>
-                                </div>
-                                <div class="machine-chips">${machineChips}</div>
-                            </div>`;
-                        }).join('')}
+                        ${dept.lines.map(line => renderLineHtml(line)).join('')}
                     </div>`;
                 listEl.appendChild(card);
             });
