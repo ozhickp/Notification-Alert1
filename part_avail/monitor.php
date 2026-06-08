@@ -9,6 +9,22 @@ $activeTab = ($_GET['tab'] ?? 'predictive') === 'preventive' ? 'preventive' : 'p
 
 // ── Today's date ───────────────────────────────────────────────────────────────
 $todayStr = date('Y-m-d');
+// ── Auto-update remaining_day setiap monitor dibuka ──────────────────────────
+try {
+    $pdo->exec("
+        UPDATE schedules
+        SET remaining_day = DATEDIFF(change_date_plan, CURDATE())
+        WHERE change_date_plan IS NOT NULL
+    ");
+    $pdo->exec("
+        UPDATE schedules_preventive
+        SET remaining_day = DATEDIFF(change_date_plan, CURDATE())
+        WHERE change_date_plan IS NOT NULL
+    ");
+} catch (\Exception $e) {
+    error_log('[Monitor] Gagal update remaining_day: ' . $e->getMessage());
+}
+
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  SCHEDULE DATA (Predictive)

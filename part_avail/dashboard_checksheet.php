@@ -176,9 +176,9 @@ if (isset($_GET['ajax'])) {
     if ($_GET['ajax'] === 'check_duplicate' && isset($_GET['machine_name'], $_GET['date'])) {
         $stmt = $pdo->prepare(
             "SELECT COUNT(*) FROM checksheet_submissions
-             WHERE machine_name = ? AND department = ? AND `line` = ? AND DATE(check_date) = ?"
+             WHERE machine_name = ? AND DATE(check_date) = ?"
         );
-        $stmt->execute([$_GET['machine_name'], $_GET['department'] ?? '', $_GET['line'] ?? '', $_GET['date']]);
+        $stmt->execute([$_GET['machine_name'], $_GET['date']]);
         $count = (int)$stmt->fetchColumn();
         echo json_encode([
             'already_filled' => $count > 0,
@@ -232,9 +232,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
     // ─── Cek duplikasi server-side ────────────────────────────────────────────
     $stmtDup = $pdo->prepare(
         "SELECT COUNT(*) FROM checksheet_submissions
-         WHERE machine_name = ? AND department = ? AND `line` = ? AND DATE(check_date) = ?"
+         WHERE machine_name = ? AND DATE(check_date) = ?"
     );
-    $stmtDup->execute([$machineName, $dept, $line, $checkDate]);
+    $stmtDup->execute([$machineName, $checkDate]);
     if ((int)$stmtDup->fetchColumn() > 0) {
         echo json_encode([
             'success'   => false,
@@ -1389,7 +1389,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                                 <i class="fas fa-calendar-day text-slate-300 mr-1"></i> Tanggal
                                 <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
                             </label>
-                            <input type="date" id="inp-tanggal" class="form-field" readonly>
+                            <input type="hidden" id="inp-tanggal">
+                            <input type="text" id="inp-tanggal-display" class="form-field" readonly
+                                style="cursor:default;" tabindex="-1">
                         </div>
 
                         <div>
@@ -1669,7 +1671,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             }
 
             const today = new Date();
-            document.getElementById('inp-tanggal').value = today.toISOString().split('T')[0];
+            const todayISO = today.toISOString().split('T')[0];
+            document.getElementById('inp-tanggal').value = todayISO;
+            const todayFormatted = today.toLocaleDateString('id-ID', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric'
+            });
+            document.getElementById('inp-tanggal-display').value = todayFormatted;
             document.getElementById('today-label').textContent = today.toLocaleDateString('id-ID', {
                 weekday: 'long',
                 year: 'numeric',
@@ -1809,7 +1818,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             const date = document.getElementById('inp-tanggal').value;
 
             // Cek duplikasi terlebih dahulu sebelum render checklist
-            fetch(`${BASE}?ajax=check_duplicate&machine_name=${encodeURIComponent(machineName)}&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}&date=${encodeURIComponent(date)}`)
+            fetch(`${BASE}?ajax=check_duplicate&machine_name=${encodeURIComponent(machineName)}&date=${encodeURIComponent(date)}`)
                 .then(r => r.json())
                 .then(dupData => {
                     if (dupData.already_filled) {
@@ -2176,7 +2185,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         function resetForm() {
             document.getElementById('sel-dept').value = '';
             document.getElementById('sel-checker').value = '';
-            document.getElementById('inp-tanggal').value = new Date().toISOString().split('T')[0];
+            const resetToday = new Date();
+            document.getElementById('inp-tanggal').value = resetToday.toISOString().split('T')[0];
+            document.getElementById('inp-tanggal-display').value = resetToday.toLocaleDateString('id-ID', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric'
+            });
             const selLine = document.getElementById('sel-line');
             const selOp = document.getElementById('sel-op');
             selLine.innerHTML = '<option value="">— Pilih Line —</option>';
