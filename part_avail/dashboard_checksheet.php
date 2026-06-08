@@ -176,9 +176,14 @@ if (isset($_GET['ajax'])) {
     if ($_GET['ajax'] === 'check_duplicate' && isset($_GET['machine_name'], $_GET['date'])) {
         $stmt = $pdo->prepare(
             "SELECT COUNT(*) FROM checksheet_submissions
-             WHERE machine_name = ? AND DATE(check_date) = ?"
+             WHERE machine_name = ? AND `line` = ? AND op = ? AND DATE(check_date) = ?"
         );
-        $stmt->execute([$_GET['machine_name'], $_GET['date']]);
+        $stmt->execute([
+            $_GET['machine_name'],
+            $_GET['line'] ?? '',
+            $_GET['op']   ?? '-',
+            $_GET['date'],
+        ]);
         $count = (int)$stmt->fetchColumn();
         echo json_encode([
             'already_filled' => $count > 0,
@@ -232,13 +237,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
     // ─── Cek duplikasi server-side ────────────────────────────────────────────
     $stmtDup = $pdo->prepare(
         "SELECT COUNT(*) FROM checksheet_submissions
-         WHERE machine_name = ? AND DATE(check_date) = ?"
+         WHERE machine_name = ? AND `line` = ? AND op = ? AND DATE(check_date) = ?"
     );
-    $stmtDup->execute([$machineName, $checkDate]);
+    $stmtDup->execute([$machineName, $line, $op, $checkDate]);
     if ((int)$stmtDup->fetchColumn() > 0) {
         echo json_encode([
             'success'   => false,
-            'message'   => "Mesin \"{$machineName}\" sudah diisi checksheet pada tanggal ini.",
+            'message'   => "Mesin \"{$machineName}\" di line \"{$line}\" OP \"{$op}\" sudah diisi checksheet pada tanggal ini.",
             'duplicate' => true,
         ]);
         exit;
@@ -1818,7 +1823,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             const date = document.getElementById('inp-tanggal').value;
 
             // Cek duplikasi terlebih dahulu sebelum render checklist
-            fetch(`${BASE}?ajax=check_duplicate&machine_name=${encodeURIComponent(machineName)}&date=${encodeURIComponent(date)}`)
+            fetch(`${BASE}?ajax=check_duplicate&machine_name=${encodeURIComponent(machineName)}&line=${encodeURIComponent(line)}&op=${encodeURIComponent(op)}&date=${encodeURIComponent(date)}`)
                 .then(r => r.json())
                 .then(dupData => {
                     if (dupData.already_filled) {
