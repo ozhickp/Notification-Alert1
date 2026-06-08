@@ -176,9 +176,9 @@ if (isset($_GET['ajax'])) {
     if ($_GET['ajax'] === 'check_duplicate' && isset($_GET['machine_name'], $_GET['date'])) {
         $stmt = $pdo->prepare(
             "SELECT COUNT(*) FROM checksheet_submissions
-             WHERE machine_name = ? AND DATE(check_date) = ?"
+             WHERE machine_name = ? AND department = ? AND `line` = ? AND DATE(check_date) = ?"
         );
-        $stmt->execute([$_GET['machine_name'], $_GET['date']]);
+        $stmt->execute([$_GET['machine_name'], $_GET['department'] ?? '', $_GET['line'] ?? '', $_GET['date']]);
         $count = (int)$stmt->fetchColumn();
         echo json_encode([
             'already_filled' => $count > 0,
@@ -232,9 +232,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
     // ─── Cek duplikasi server-side ────────────────────────────────────────────
     $stmtDup = $pdo->prepare(
         "SELECT COUNT(*) FROM checksheet_submissions
-         WHERE machine_name = ? AND DATE(check_date) = ?"
+         WHERE machine_name = ? AND department = ? AND `line` = ? AND DATE(check_date) = ?"
     );
-    $stmtDup->execute([$machineName, $checkDate]);
+    $stmtDup->execute([$machineName, $dept, $line, $checkDate]);
     if ((int)$stmtDup->fetchColumn() > 0) {
         echo json_encode([
             'success'   => false,
@@ -1809,7 +1809,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             const date = document.getElementById('inp-tanggal').value;
 
             // Cek duplikasi terlebih dahulu sebelum render checklist
-            fetch(`${BASE}?ajax=check_duplicate&machine_name=${encodeURIComponent(machineName)}&date=${encodeURIComponent(date)}`)
+            fetch(`${BASE}?ajax=check_duplicate&machine_name=${encodeURIComponent(machineName)}&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}&date=${encodeURIComponent(date)}`)
                 .then(r => r.json())
                 .then(dupData => {
                     if (dupData.already_filled) {
