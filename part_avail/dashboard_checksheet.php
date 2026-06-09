@@ -112,12 +112,11 @@ if (isset($_GET['ajax'])) {
 
             $lastDateMap = []; // item_id => 'YYYY-MM-DD' | null
             if (!empty($periodicIds)) {
-                // Cari submission terakhir untuk mesin ini yang berisi item periodic
-                // JOIN ke submission_details agar per-item_id
+                // Ambil SEMUA tanggal submission per item_id (bukan hanya terbaru),
+                // agar bisa menentukan "periode aktif" dengan benar di PHP.
+                // Tanpa ini, submit auto-V di hari berikutnya akan menggeser last_check_date.
                 $inList = implode(',', $periodicIds);
 
-                // Pakai machine_name jika tersedia, fallback ke dept+line+op
-                // ORDER BY DESC + first-seen per item_id, hanya result yang benar-benar diisi
                 if ($machineName !== '') {
                     $stmtLast = $pdo->prepare("
                         SELECT d.item_id, DATE(s.check_date) AS last_date
@@ -141,11 +140,56 @@ if (isset($_GET['ajax'])) {
                     ");
                     $stmtLast->execute([$dept, $line, $op]);
                 }
-                // Hanya simpan baris pertama (terbaru) per item_id
+
+                // Kumpulkan semua tanggal per item_id (sudah DESC dari query)
+                $allDatesMap = []; // item_id => ['YYYY-MM-DD', ...]
                 foreach ($stmtLast->fetchAll() as $r) {
-                    $itemId = (int)$r['item_id'];
-                    if (!isset($lastDateMap[$itemId])) {
-                        $lastDateMap[$itemId] = $r['last_date'];
+                    $allDatesMap[(int)$r['item_id']][] = $r['last_date'];
+                }
+
+                // Buat interval map per item_id untuk dipakai di bawah
+                $itemIntervalMap = [];
+                foreach ($items as $it) {
+                    $itemIntervalMap[(int)$it['id']] = strtolower(trim($it['interval'] ?? ''));
+                }
+
+                $today = new DateTime('today');
+
+                foreach ($allDatesMap as $itemId => $dates) {
+                    $iv = $itemIntervalMap[$itemId] ?? '';
+                    // Cari tanggal terbaru yang MEMULAI periode yang masih mencakup today.
+                    // Periode aktif = [periodStart, periodStart + 7 hari) untuk weekly,
+                    //                  [periodStart, periodStart + 1 bulan) untuk monthly.
+                    // Jika ada beberapa submission dalam satu periode (misal auto-V hari berikutnya),
+                    // kita ambil yang TERTUA dalam periode tersebut sebagai "last_check_date" asli.
+                    $periodStart = null;
+                    foreach (array_reverse($dates) as $d) { // oldest → newest
+                        $dt = new DateTime($d);
+                        $next = clone $dt;
+                        if ($iv === 'weekly') {
+                            $next->modify('+7 days');
+                        } elseif ($iv === 'monthly' || $iv === 'montly') {
+                            $next->modify('+1 month');
+                        } else {
+                            break;
+                        }
+                        if ($today < $next) {
+                            // $dt masih dalam periode aktif, terus iterasi ke yang lebih baru
+                            // tapi simpan kandidat awal periode
+                            if ($periodStart === null) {
+                                $periodStart = $dt;
+                            }
+                        } else {
+                            // $dt sudah lewat, periode-nya sudah selesai
+                            // periodStart yang sudah kita simpan adalah awal periode aktif
+                            break;
+                        }
+                    }
+                    if ($periodStart !== null) {
+                        $lastDateMap[$itemId] = $periodStart->format('Y-m-d');
+                    } else {
+                        // Semua submission sudah lewat periode → ambil terbaru (sudah expired, tombol muncul)
+                        $lastDateMap[$itemId] = $dates[0]; // terbaru (index 0 karena DESC)
                     }
                 }
             }
