@@ -125,7 +125,7 @@ if (isset($_GET['ajax'])) {
                         WHERE d.item_id IN ({$inList})
                           AND s.machine_name = ?
                           AND d.result != '-'
-                        ORDER BY s.check_date DESC
+                        ORDER BY s.check_date ASC
                     ");
                     $stmtLast->execute([$machineName]);
                 } else {
@@ -136,13 +136,13 @@ if (isset($_GET['ajax'])) {
                         WHERE d.item_id IN ({$inList})
                           AND s.department = ? AND s.line = ? AND s.op = ?
                           AND d.result != '-'
-                        ORDER BY s.check_date DESC
+                        ORDER BY s.check_date ASC
                     ");
                     $stmtLast->execute([$dept, $line, $op]);
                 }
 
-                // Kumpulkan semua tanggal per item_id (sudah DESC dari query)
-                $allDatesMap = []; // item_id => ['YYYY-MM-DD', ...]
+                // Kumpulkan semua tanggal per item_id (sudah ASC dari query: oldest first)
+                $allDatesMap = []; // item_id => ['YYYY-MM-DD', ...] oldest→newest
                 foreach ($stmtLast->fetchAll() as $r) {
                     $allDatesMap[(int)$r['item_id']][] = $r['last_date'];
                 }
@@ -157,13 +157,17 @@ if (isset($_GET['ajax'])) {
 
                 foreach ($allDatesMap as $itemId => $dates) {
                     $iv = $itemIntervalMap[$itemId] ?? '';
-                    // Cari tanggal terbaru yang MEMULAI periode yang masih mencakup today.
-                    // Periode aktif = [periodStart, periodStart + 7 hari) untuk weekly,
-                    //                  [periodStart, periodStart + 1 bulan) untuk monthly.
-                    // Jika ada beberapa submission dalam satu periode (misal auto-V hari berikutnya),
-                    // kita ambil yang TERTUA dalam periode tersebut sebagai "last_check_date" asli.
-                    $periodStart = null;
-                    foreach (array_reverse($dates) as $d) { // oldest → newest
+
+                    // Strategi: iterasi dari terbaru ke terlama (reverse ASC = DESC).
+                    // Cari tanggal submit PERTAMA (tertua) dalam periode yang masih aktif hari ini.
+                    // "Periode aktif" = [firstSubmitDate, firstSubmitDate + 7hari/1bulan).
+                    // Jika user submit tanggal 9 Juni (monthly), periode aktif = 9 Juni–9 Juli.
+                    // Submit auto-V tanggal 10 Juni masuk dalam periode yang sama →
+                    // last_check_date tetap 9 Juni, next tetap 9 Juli.
+                    $datesDesc = array_reverse($dates); // newest first
+                    $activePeriodStart = null;
+
+                    foreach ($datesDesc as $d) {
                         $dt = new DateTime($d);
                         $next = clone $dt;
                         if ($iv === 'weekly') {
@@ -173,24 +177,29 @@ if (isset($_GET['ajax'])) {
                         } else {
                             break;
                         }
+
                         if ($today < $next) {
-                            // $dt masih dalam periode aktif, terus iterasi ke yang lebih baru
-                            // tapi simpan kandidat awal periode
-                            if ($periodStart === null) {
-                                $periodStart = $dt;
-                            }
+                            // $d masih dalam periode aktif → ini kandidat period start
+                            // Terus iterasi ke tanggal lebih lama (mungkin ada yg lebih tua
+                            // tapi masih dalam periode yang sama)
+                            $activePeriodStart = $dt;
                         } else {
-                            // $dt sudah lewat, periode-nya sudah selesai
-                            // periodStart yang sudah kita simpan adalah awal periode aktif
+                            // $d sudah expired. Jika kita sudah punya activePeriodStart,
+                            // hentikan — $d ini bukan bagian dari periode aktif.
+                            // Jika belum punya, lanjut cari yang lebih lama (sudah expired semua).
+                            if ($activePeriodStart !== null) {
+                                break;
+                            }
+                            // Semua tanggal expired → simpan yang terbaru sebagai referensi
+                            $activePeriodStart = $dt;
                             break;
                         }
                     }
-                    if ($periodStart !== null) {
-                        $lastDateMap[$itemId] = $periodStart->format('Y-m-d');
-                    } else {
-                        // Semua submission sudah lewat periode → ambil terbaru (sudah expired, tombol muncul)
-                        $lastDateMap[$itemId] = $dates[0]; // terbaru (index 0 karena DESC)
+
+                    if ($activePeriodStart !== null) {
+                        $lastDateMap[$itemId] = $activePeriodStart->format('Y-m-d');
                     }
+                    // Jika tidak ada data sama sekali, $lastDateMap[$itemId] tidak di-set → null
                 }
             }
 

@@ -134,6 +134,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     // Ambil interval dari checksheet_items via LEFT JOIN
     $stmt = $pdo->prepare("
         SELECT d.no, d.part, d.standard, d.result, d.note,
+               d.item_id,
                COALESCE(ci.`interval`, 'Daily') AS `interval`
         FROM checksheet_submission_details d
         LEFT JOIN checksheet_items ci ON ci.id = d.item_id
@@ -143,10 +144,109 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     $stmt->execute([$id]);
     $items = $stmt->fetchAll();
 
-    // Ambil check_date dan photo_path untuk ditampilkan di modal
-    $subStmt = $pdo->prepare("SELECT DATE(check_date) AS check_date, photo_path FROM checksheet_submissions WHERE id = ?");
+    // Ambil check_date, machine_name, dept, line, op, photo_path dari submission ini
+    $subStmt = $pdo->prepare("SELECT DATE(check_date) AS check_date, photo_path,
+                                      machine_name, department, `line`, op
+                               FROM checksheet_submissions WHERE id = ?");
     $subStmt->execute([$id]);
     $sub = $subStmt->fetch();
+
+    // Hitung last_check_date yang benar untuk item periodic (weekly/monthly):
+    // Ambil tanggal submit PERTAMA (tertua) dalam periode yang aktif per item,
+    // agar Last/Next tidak bergeser karena auto-V di hari berikutnya.
+    $periodicItemIds = [];
+    foreach ($items as $it) {
+        $iv = strtolower(trim($it['interval'] ?? ''));
+        if (($iv === 'weekly' || $iv === 'monthly' || $iv === 'montly') && $it['item_id']) {
+            $periodicItemIds[] = (int)$it['item_id'];
+        }
+    }
+
+    $lastCheckDateMap = []; // item_id => 'YYYY-MM-DD'
+    if (!empty($periodicItemIds) && $sub) {
+        $inList = implode(',', $periodicItemIds);
+        $machineName = $sub['machine_name'] ?? '';
+
+        if ($machineName !== '') {
+            $stmtH = $pdo->prepare("
+                SELECT d2.item_id, DATE(s2.check_date) AS last_date
+                FROM checksheet_submission_details d2
+                JOIN checksheet_submissions s2 ON s2.id = d2.submission_id
+                WHERE d2.item_id IN ({$inList})
+                  AND s2.machine_name = ?
+                  AND d2.result != '-'
+                ORDER BY s2.check_date ASC
+            ");
+            $stmtH->execute([$machineName]);
+        } else {
+            $stmtH = $pdo->prepare("
+                SELECT d2.item_id, DATE(s2.check_date) AS last_date
+                FROM checksheet_submission_details d2
+                JOIN checksheet_submissions s2 ON s2.id = d2.submission_id
+                WHERE d2.item_id IN ({$inList})
+                  AND s2.department = ? AND s2.`line` = ? AND s2.op = ?
+                  AND d2.result != '-'
+                ORDER BY s2.check_date ASC
+            ");
+            $stmtH->execute([$sub['department'], $sub['line'], $sub['op']]);
+        }
+
+        $allDatesH = [];
+        foreach ($stmtH->fetchAll() as $r) {
+            $allDatesH[(int)$r['item_id']][] = $r['last_date']; // ASC: oldest first
+        }
+
+        // Gunakan check_date submission ini sebagai "today" referensi untuk history
+        $refDate = new DateTime($sub['check_date']);
+
+        foreach ($allDatesH as $itemId => $dates) {
+            // Cari interval untuk item ini
+            $iv = '';
+            foreach ($items as $it) {
+                if ((int)$it['item_id'] === $itemId) {
+                    $iv = strtolower(trim($it['interval'] ?? ''));
+                    break;
+                }
+            }
+
+            // Cari tanggal tertua yang periodenya mencakup check_date submission ini
+            $datesDesc = array_reverse($dates); // newest first
+            $activePeriodStart = null;
+            foreach ($datesDesc as $d) {
+                $dt = new DateTime($d);
+                $next = clone $dt;
+                if ($iv === 'weekly') {
+                    $next->modify('+7 days');
+                } elseif ($iv === 'monthly' || $iv === 'montly') {
+                    $next->modify('+1 month');
+                } else {
+                    break;
+                }
+                if ($refDate < $next) {
+                    $activePeriodStart = $dt;
+                } else {
+                    if ($activePeriodStart !== null) break;
+                    $activePeriodStart = $dt;
+                    break;
+                }
+            }
+            if ($activePeriodStart !== null) {
+                $lastCheckDateMap[$itemId] = $activePeriodStart->format('Y-m-d');
+            }
+        }
+    }
+
+    // Tambahkan last_check_date ke setiap item
+    foreach ($items as &$it) {
+        $iv = strtolower(trim($it['interval'] ?? ''));
+        if (($iv === 'weekly' || $iv === 'monthly' || $iv === 'montly') && $it['item_id']) {
+            $it['last_check_date'] = $lastCheckDateMap[(int)$it['item_id']] ?? null;
+        } else {
+            $it['last_check_date'] = null;
+        }
+        unset($it['item_id']); // tidak perlu dikirim ke frontend
+    }
+    unset($it);
 
     echo json_encode([
         'items'      => $items,
@@ -1662,9 +1762,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                             '';
 
                         let resultCell;
-                        if (isPeriodic && item.result !== '-' && checkDate) {
+                        if (isPeriodic && item.result !== '-' && item.last_check_date) {
                             // Item periodic yg sudah diisi → tampilkan Last / Next
-                            const lastDate = new Date(checkDate + 'T00:00:00');
+                            // Gunakan last_check_date dari server (tanggal submit PERTAMA dalam periode),
+                            // bukan checkDate submission ini (agar auto-V hari berikutnya tidak menggeser Next).
+                            const lastDate = new Date(item.last_check_date + 'T00:00:00');
                             const nextDue = new Date(lastDate);
                             if (isWeekly) nextDue.setDate(nextDue.getDate() + 7);
                             else nextDue.setMonth(nextDue.getMonth() + 1);
