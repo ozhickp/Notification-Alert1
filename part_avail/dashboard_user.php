@@ -111,21 +111,39 @@ if (file_exists($reminderFile)) {
 // ==================== API ENDPOINTS (AJAX) ====================
 
 if (isset($_GET['get_lines'])) {
+    // Ambil distinct line dari machine_list berdasarkan department (nama, bukan ID)
+    $dept = $_GET['get_lines'] ?? '';
+    $stmt = $pdo->prepare("SELECT DISTINCT `line` FROM machine_list WHERE department = ? ORDER BY `line`");
+    $stmt->execute([$dept]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Kembalikan dalam format {id, line_name} agar JS tidak perlu berubah banyak
+    echo json_encode(array_map(fn($r) => ['id' => $r['line'], 'line_name' => $r['line']], $rows));
+    exit;
+}
+
+if (isset($_GET['get_lines_plant'])) {
+    // Endpoint khusus addMachineModal — masih pakai tabel line lama
     $stmt = $pdo->prepare("SELECT id, line_name FROM line WHERE plant_id = ?");
-    $stmt->execute([$_GET['get_lines']]);
+    $stmt->execute([$_GET['get_lines_plant']]);
     echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
     exit;
 }
 
 if (isset($_GET['get_ops'])) {
-    $stmt = $pdo->prepare("
-        SELECT op.id, op.operation_process, m.machine_name, m.process_machine
-        FROM op_process op
-        LEFT JOIN machines m ON op.id = m.process_id
-        WHERE op.line = ?
-    ");
-    $stmt->execute([$_GET['get_ops']]);
-    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    // Ambil distinct op + machine dari machine_list berdasarkan department+line
+    // Format: ?get_ops=LINE_NAME&dept=DEPT_NAME
+    $dept = $_GET['dept'] ?? '';
+    $line = $_GET['get_ops'] ?? '';
+    $stmt = $pdo->prepare("SELECT DISTINCT op, machine_name, machine_type FROM machine_list WHERE department = ? AND `line` = ? ORDER BY op, machine_name");
+    $stmt->execute([$dept, $line]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Kembalikan format {id, operation_process, machine_name, process_machine} agar JS tetap kompatibel
+    echo json_encode(array_map(fn($r) => [
+        'id'                => $r['op'],
+        'operation_process' => $r['op'],
+        'machine_name'      => $r['machine_name'],
+        'process_machine'   => $r['machine_type'],
+    ], $rows));
     exit;
 }
 
@@ -165,8 +183,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                  reminder_activity, remaining_day, maintenance_status, part_order, part_availability)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             $stmt->execute([
-                (int)($_POST['department']     ?? 0),   // FIX: kirim ID integer, bukan nama string
-                (int)($_POST['line']           ?? 0),   // FIX: kirim ID integer, bukan nama string
+                $_POST['dept_name']            ?? ($_POST['department'] ?? ''),  // Nama dept string
+                $_POST['line_name']            ?? ($_POST['line']       ?? ''),  // Nama line string
                 $_POST['operation_process']    ?? '',
                 $_POST['machine_name']         ?? '',
                 $_POST['process_machine']      ?? '',
@@ -243,8 +261,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 maintenance_status = ?
                 WHERE id = ?");
             $stmt->execute([
-                (int)($_POST['department']     ?? 0),
-                (int)($_POST['line']           ?? 0),
+                $_POST['dept_name']            ?? ($_POST['department'] ?? ''),
+                $_POST['line_name']            ?? ($_POST['line']       ?? ''),
                 $_POST['operation_process']    ?? '',
                 $_POST['machine_name']         ?? '',
                 $_POST['process_machine']      ?? '',
@@ -369,23 +387,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $newRemainingDay = ($cdp >= $now) ? $diff : -$diff;
             }
 
-            // ── Resolve department ID → plant_name, line ID → line_name ──
+            // ── department/line sudah berupa nama string langsung ──
             $histDept = $sched['department'];
             $histLine = $sched['line'];
-            try {
-                $rDept = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ?");
-                $rDept->execute([$sched['department']]);
-                $rDeptVal = $rDept->fetchColumn();
-                if ($rDeptVal !== false) $histDept = $rDeptVal;
-            } catch (\Exception $e) {
-            }
-            try {
-                $rLine = $pdo->prepare("SELECT line_name FROM line WHERE id = ?");
-                $rLine->execute([$sched['line']]);
-                $rLineVal = $rLine->fetchColumn();
-                if ($rLineVal !== false) $histLine = $rLineVal;
-            } catch (\Exception $e) {
-            }
 
             $teknisi = trim($_POST['teknisi'] ?? '');
 
@@ -459,8 +463,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                  reminder_activity, remaining_day, maintenance_status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             $stmt->execute([
-                (int)($_POST['department']        ?? 0),   // FIX: ID integer
-                (int)($_POST['line']              ?? 0),   // FIX: ID integer
+                $_POST['dept_name'] ?? ($_POST['department'] ?? ''),
+                $_POST['line_name'] ?? ($_POST['line'] ?? ''),
                 $_POST['operation_process'] ?? '',
                 $_POST['machine_name']     ?? '',
                 $_POST['process_machine']  ?? '',
@@ -521,8 +525,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                 reminder_activity = ?, remaining_day = ?, maintenance_status = ?
                 WHERE id = ?");
             $stmt->execute([
-                (int)($_POST['department']        ?? 0),   // FIX: ID integer
-                (int)($_POST['line']              ?? 0),   // FIX: ID integer
+                $_POST['dept_name'] ?? ($_POST['department'] ?? ''),
+                $_POST['line_name'] ?? ($_POST['line'] ?? ''),
                 $_POST['operation_process'] ?? '',
                 $_POST['machine_name']     ?? '',
                 $_POST['process_machine']  ?? '',
@@ -597,23 +601,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                 $newRemainingDay = ($cdp >= $now) ? $diff : -$diff;
             }
 
-            // ── Resolve department ID → plant_name, line ID → line_name ──
+            // ── department/line sudah berupa nama string langsung ──
             $prevHistDept = $sched['department'];
             $prevHistLine = $sched['line'];
-            try {
-                $rDept2 = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ?");
-                $rDept2->execute([$sched['department']]);
-                $rDeptVal2 = $rDept2->fetchColumn();
-                if ($rDeptVal2 !== false) $prevHistDept = $rDeptVal2;
-            } catch (\Exception $e) {
-            }
-            try {
-                $rLine2 = $pdo->prepare("SELECT line_name FROM line WHERE id = ?");
-                $rLine2->execute([$sched['line']]);
-                $rLineVal2 = $rLine2->fetchColumn();
-                if ($rLineVal2 !== false) $prevHistLine = $rLineVal2;
-            } catch (\Exception $e) {
-            }
 
             $teknisi = trim($_POST['teknisi'] ?? '');
 
@@ -663,7 +653,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
 
 // Fetch data
 // Gunakan prepare+execute+fetchAll+closeCursor agar tidak ada unbuffered cursor tersisa
-$stmtPlants = $pdo->prepare("SELECT id, plant_name FROM plants ORDER BY plant_name ASC");
+// Ambil distinct department dari machine_list (bukan dari tabel plants lagi)
+$stmtPlants = $pdo->prepare("SELECT DISTINCT department AS id, department AS plant_name FROM machine_list ORDER BY department ASC");
 $stmtPlants->execute();
 $plants = $stmtPlants->fetchAll(PDO::FETCH_ASSOC);
 $stmtPlants->closeCursor();
@@ -671,11 +662,9 @@ $stmtPlants->closeCursor();
 $stmt = $pdo->prepare("
     SELECT s.*,
            DATEDIFF(s.change_date_plan, CURDATE()) AS remaining_day,
-           COALESCE(pl.plant_name, s.department)   AS department,
-           COALESCE(ln.line_name,  s.line)         AS line
+           s.department AS department,
+           s.line AS line
     FROM schedules s
-    LEFT JOIN plants pl ON pl.id = s.department
-    LEFT JOIN line   ln ON ln.id = s.line
     ORDER BY s.change_date_plan ASC
 ");
 $stmt->execute();
@@ -718,11 +707,9 @@ try {
     $stmtPrev = $pdo->prepare("
         SELECT ps.*,
                DATEDIFF(ps.change_date_plan, CURDATE()) AS remaining_day,
-               COALESCE(pl.plant_name, ps.department)   AS department,
-               COALESCE(ln.line_name,  ps.line)         AS line
+               ps.department AS department,
+               ps.line AS line
         FROM schedules_preventive ps
-        LEFT JOIN plants pl ON pl.id = ps.department
-        LEFT JOIN line   ln ON ln.id = ps.line
         ORDER BY ps.change_date_plan ASC
     ");
     $stmtPrev->execute();
@@ -2179,24 +2166,37 @@ HTML;
         async function handleDeptChange(prefix) {
             const ds = document.getElementById(`${prefix}_dept_select`);
             const ls = document.getElementById(`${prefix}_line_select`);
-            document.getElementById(`${prefix}_dept_name_val`).value =
-                ds.options[ds.selectedIndex].getAttribute('data-name') || '';
+            // Simpan dept name (value sekarang adalah nama department langsung)
+            if (document.getElementById(`${prefix}_dept_name_val`)) {
+                document.getElementById(`${prefix}_dept_name_val`).value = ds.value || '';
+            }
             if (!ds.value) return resetDropdowns(prefix);
-            const data = await (await fetch(`?get_lines=${ds.value}`)).json();
+            // get_lines sekarang menerima nama department
+            const data = await (await fetch(`?get_lines=${encodeURIComponent(ds.value)}`)).json();
             ls.innerHTML = '<option value="">-- Choose Line --</option>';
             data.forEach(l => ls.innerHTML += `<option value="${l.id}" data-name="${l.line_name}">${l.line_name}</option>`);
             setDropdownEnabled(ls, true);
         }
         async function handleLineChange(prefix) {
+            const ds = document.getElementById(`${prefix}_dept_select`);
             const ls = document.getElementById(`${prefix}_line_select`);
             const os = document.getElementById(`${prefix}_op_select`);
-            document.getElementById(`${prefix}_line_name_val`).value =
-                ls.options[ls.selectedIndex].getAttribute('data-name') || '';
+            if (document.getElementById(`${prefix}_line_name_val`)) {
+                document.getElementById(`${prefix}_line_name_val`).value =
+                    ls.options[ls.selectedIndex].getAttribute('data-name') || '';
+            }
             if (!ls.value) return;
-            const data = await (await fetch(`?get_ops=${ls.value}`)).json();
+            // get_ops sekarang menerima line name + dept name
+            const data = await (await fetch(`?get_ops=${encodeURIComponent(ls.value)}&dept=${encodeURIComponent(ds.value)}`)).json();
             os.innerHTML = '<option value="">-- Choose Process --</option>';
-            data.forEach(o => os.innerHTML +=
-                `<option value="${o.operation_process}" data-machine="${o.machine_name||''}" data-procmachine="${o.process_machine||''}">${o.operation_process}</option>`);
+            // Deduplicate by OP (ambil machine pertama per OP unik)
+            const seen = new Set();
+            data.forEach(o => {
+                if (seen.has(o.operation_process)) return;
+                seen.add(o.operation_process);
+                os.innerHTML +=
+                    `<option value="${o.operation_process}" data-machine="${o.machine_name||''}" data-procmachine="${o.process_machine||''}">${o.operation_process}</option>`;
+            });
             setDropdownEnabled(os, true);
         }
 
@@ -3030,7 +3030,7 @@ HTML;
 
             if (!plantId) return;
 
-            const data = await (await fetch(`?get_lines=${plantId}`)).json();
+            const data = await (await fetch(`?get_lines_plant=${plantId}`)).json();
             data.forEach(l => {
                 lineSel.innerHTML += `<option value="${l.id}">${l.line_name}</option>`;
             });

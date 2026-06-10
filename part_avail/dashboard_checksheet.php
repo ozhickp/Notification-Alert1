@@ -244,17 +244,25 @@ if (isset($_GET['ajax'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet'])) {
     header('Content-Type: application/json');
 
-    $dept        = trim($_POST['department']    ?? '');
-    $line        = trim($_POST['line']          ?? '');
-    $op          = trim($_POST['op']            ?? '-');
-    $machineName = trim($_POST['machine_name']  ?? '');
-    $machineType = trim($_POST['machine_type']  ?? '');
-    $checkDate   = trim($_POST['check_date']    ?? '');
-    $checker     = trim($_POST['checker']       ?? '');
-    $itemsJson   = $_POST['items']              ?? '[]';
+    $dept             = trim($_POST['department']       ?? '');
+    $line             = trim($_POST['line']             ?? '');
+    $op               = trim($_POST['op']               ?? '-');
+    $machineName      = trim($_POST['machine_name']     ?? '');
+    $machineType      = trim($_POST['machine_type']     ?? '');
+    $checkDate        = trim($_POST['check_date']       ?? '');
+    $checker          = trim($_POST['checker']          ?? '');
+    $compressorStatus = trim($_POST['compressor_status'] ?? ''); // 'on' | 'off' | ''
+    $itemsJson        = $_POST['items']                 ?? '[]';
 
     if (!$dept || !$line || !$checker || !$checkDate || !$machineName) {
         echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib.']);
+        exit;
+    }
+
+    // ─── Validasi status kompressor jika Power House + Kompressor ────────────
+    $isKompressor = (strtoupper(trim($dept)) === 'POWER HOUSE' && str_contains(strtoupper(trim($line)), 'KOMPRESSOR'));
+    if ($isKompressor && !in_array($compressorStatus, ['on', 'off'])) {
+        echo json_encode(['success' => false, 'message' => 'Pilih status kondisi kompressor (ON/OFF) terlebih dahulu.']);
         exit;
     }
 
@@ -273,10 +281,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
     }
 
     $items = json_decode($itemsJson, true);
-    if (!is_array($items) || empty($items)) {
+    // Jika kompressor OFF, item checklist boleh kosong (submit langsung)
+    $kompressorOff = ($isKompressor && $compressorStatus === 'off');
+    if (!$kompressorOff && (!is_array($items) || empty($items))) {
         echo json_encode(['success' => false, 'message' => 'Tidak ada item checklist.']);
         exit;
     }
+    if (!is_array($items)) $items = [];
 
     // ─── Cek duplikasi server-side ────────────────────────────────────────────
     $stmtDup = $pdo->prepare(
@@ -315,10 +326,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
 
         $stmt = $pdo->prepare(
             "INSERT INTO checksheet_submissions
-             (department, `line`, op, machine_name, machine_type, category_key, check_date, checker, photo_path, ip_address)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             (department, `line`, op, machine_name, machine_type, category_key, check_date, checker, photo_path, ip_address, compressor_status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         );
-        $stmt->execute([$dept, $line, $op, $machineName, $machineType, $categoryKey, $checkDate, $checker, $photoPath, $_SERVER['REMOTE_ADDR'] ?? null]);
+        $stmt->execute([$dept, $line, $op, $machineName, $machineType, $categoryKey, $checkDate, $checker, $photoPath, $_SERVER['REMOTE_ADDR'] ?? null, $compressorStatus ?: null]);
         $submissionId = $pdo->lastInsertId();
 
         $stmtDetail = $pdo->prepare(
@@ -1488,6 +1499,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                                 <input type="text" id="inp-mesin" class="form-field" placeholder="— Otomatis terisi —" readonly>
                             </div>
                         </div>
+
+                        <!-- Kompressor ON/OFF: muncul setelah mesin terisi, hanya untuk Power House + Kompressor -->
+                        <div id="compressor-status-wrap" style="display:none;">
+                            <label class="form-label block mb-1.5">
+                                <i class="fas fa-power-off text-slate-300 mr-1"></i> Kondisi Compressor <span class="text-red-400">*</span>
+                            </label>
+                            <div style="display:flex;gap:8px;">
+                                <button type="button" id="btn-comp-on"
+                                    onclick="setCompressorStatus('on')"
+                                    style="flex:1;padding:8px 0;border-radius:10px;border:2px solid #e2e8f0;background:#f8fafc;color:#64748b;font-size:.78rem;font-weight:800;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:6px;">
+                                    <i class="fas fa-circle" style="color:#22c55e;font-size:.6rem;"></i> ON
+                                </button>
+                                <button type="button" id="btn-comp-off"
+                                    onclick="setCompressorStatus('off')"
+                                    style="flex:1;padding:8px 0;border-radius:10px;border:2px solid #e2e8f0;background:#f8fafc;color:#64748b;font-size:.78rem;font-weight:800;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:6px;">
+                                    <i class="fas fa-circle" style="color:#ef4444;font-size:.6rem;"></i> OFF
+                                </button>
+                            </div>
+                            <input type="hidden" id="inp-compressor-status" value="">
+                        </div>
                     </div>
 
                 </div>
@@ -1548,6 +1579,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                                 <i class="fas fa-clipboard-list"></i>
                                 <p class="font-bold text-sm">Pilih Department, Checker, Line, dan OP</p>
                                 <p class="text-xs mt-1">Checklist akan muncul otomatis setelah memilih mesin</p>
+                            </div>
+
+                            <!-- Banner: kompressor OFF -->
+                            <div id="kompressor-off-banner" style="display:none;" class="empty-state">
+                                <div style="background:#fef3c7;border:2px solid #fcd34d;border-radius:16px;padding:32px 40px;text-align:center;max-width:420px;">
+                                    <i class="fas fa-power-off" style="font-size:2.4rem;color:#f59e0b;margin-bottom:12px;display:block;"></i>
+                                    <p class="font-bold text-sm" style="color:#92400e;">Kompressor dalam kondisi OFF</p>
+                                    <p class="text-xs mt-2" style="color:#78350f;">Checklist tidak diperlukan. Ambil foto kondisi mesin lalu submit.</p>
+                                </div>
                             </div>
 
                             <!-- Banner: mesin sudah diisi hari ini -->
@@ -1800,14 +1840,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             clearTable();
             if (!dept || !line || !op) return;
 
-            // PERBAIKAN LOGIKA POINT 3: Cek daftar semua mesin terlebih dahulu
             fetch(`${BASE}?ajax=machine_list&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}&op=${encodeURIComponent(op)}`)
                 .then(r => r.json())
                 .then(machines => {
                     const container = document.getElementById('machine-field-container');
 
                     if (op === '-' && machines.length > 1) {
-                        // JIKA KONDISI KHUSUS (Banyak mesin di satu OP bernama '-'): Ubah jadi dropdown select bawaan CSS asli Anda
                         isMachineDropdownActive = true;
                         let selectHtml = `<select id="sel-mesin" class="form-field" onchange="onMachineSelectChange()">
                                             <option value="">— Pilih Mesin —</option>`;
@@ -1816,9 +1854,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                         });
                         selectHtml += `</select>`;
                         container.innerHTML = selectHtml;
-                        document.getElementById('inp-type').value = ''; // Kosongkan dulu type sampai dipilih
+                        document.getElementById('inp-type').value = '';
+                        // Untuk kompressor, tampilkan ON/OFF wrap setelah dropdown mesin muncul
+                        // (checklist baru muncul setelah user pilih mesin DAN pilih ON/OFF)
+                        checkCompressorStatus();
                     } else {
-                        // KONDISI SEPERTI BIASA / NORMAL
                         isMachineDropdownActive = false;
                         container.innerHTML = `<input type="text" id="inp-mesin" class="form-field" placeholder="— Otomatis terisi —" readonly>`;
 
@@ -1826,8 +1866,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                             document.getElementById('inp-mesin').value = machines[0].machine_name || '';
                             document.getElementById('inp-type').value = machines[0].machine_type || '';
 
-                            // Eksekusi pemanggilan checklist items
-                            executeFetchChecklist(machines[0].machine_type, dept, line);
+                            // Jika kompressor: tampilkan ON/OFF, jangan load checklist dulu
+                            if (isKompressorLine()) {
+                                checkCompressorStatus();
+                            } else {
+                                executeFetchChecklist(machines[0].machine_type, dept, line);
+                            }
                         }
                     }
                 });
@@ -1840,9 +1884,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             const dept = document.getElementById('sel-dept').value;
             const line = document.getElementById('sel-line').value;
             clearTable();
+            resetCompressorStatus();
 
             if (!selMachine || !selMachine.value) {
                 typeInput.value = '';
+                checkCompressorStatus(); // sembunyikan jika belum ada mesin
                 return;
             }
 
@@ -1850,7 +1896,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             const machineType = activeOption.getAttribute('data-type') || '';
             typeInput.value = machineType;
 
-            executeFetchChecklist(machineType, dept, line);
+            // Jika kompressor: tampilkan ON/OFF dulu, jangan load checklist
+            if (isKompressorLine()) {
+                checkCompressorStatus();
+            } else {
+                executeFetchChecklist(machineType, dept, line);
+            }
         }
 
         // Fungsi split untuk murni menarik data checklist item dari database
@@ -2106,6 +2157,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         function checkAllResultsFilled() {
+            const kompressorOff = isKompressorLine() &&
+                document.getElementById('inp-compressor-status').value === 'off';
+
+            // Foto wajib sudah di-capture (tersimpan di memori browser)
+            const fotoReady = capturedPhotoBlob !== null;
+
+            if (kompressorOff) {
+                // Kompressor OFF: hanya butuh foto, tidak perlu checklist
+                setSubmitEnabled(fotoReady);
+                return;
+            }
+
             if (!currentItems.length) {
                 setSubmitEnabled(false);
                 return;
@@ -2130,8 +2193,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 return noteEl && noteEl.value.trim() !== '';
             });
 
-            // Foto wajib sudah di-capture (tersimpan di memori browser)
-            const fotoReady = capturedPhotoBlob !== null;
+            // Jika Power House Kompressor tapi statusnya ON → wajib semua item diisi
+            if (isKompressorLine() && document.getElementById('inp-compressor-status').value === '') {
+                setSubmitEnabled(false);
+                return;
+            }
+
             setSubmitEnabled(allFilled && allNotesFilled && fotoReady);
         }
 
@@ -2206,6 +2273,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             fd.append('check_date', tanggal);
             fd.append('checker', checker);
             fd.append('items', JSON.stringify(itemsPayload));
+            fd.append('compressor_status', document.getElementById('inp-compressor-status')?.value || '');
             // Kirim foto bersamaan dengan submit — seperti form_maintenance.php
             fd.append('photo', capturedPhotoBlob, 'checksheet_photo.jpg');
 
@@ -2230,7 +2298,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                 });
         }
 
-        // ── Reset ─────────────────────────────────────────────────────────────────
+        // ── Kompressor ON/OFF ─────────────────────────────────────────────────────
+        function isKompressorLine() {
+            const dept = document.getElementById('sel-dept').value;
+            const line = document.getElementById('sel-line').value;
+            return dept.toUpperCase() === 'POWER HOUSE' && line.toUpperCase().includes('KOMPRESSOR');
+        }
+
+        function checkCompressorStatus() {
+            const wrap = document.getElementById('compressor-status-wrap');
+            // Cek apakah mesin sudah terisi
+            const mesinVal = isMachineDropdownActive ?
+                (document.getElementById('sel-mesin')?.value || '') :
+                (document.getElementById('inp-mesin')?.value || '');
+            if (isKompressorLine() && mesinVal) {
+                wrap.style.display = 'block';
+            } else {
+                wrap.style.display = 'none';
+                resetCompressorStatus();
+            }
+        }
+
+        function resetCompressorStatus() {
+            document.getElementById('inp-compressor-status').value = '';
+            document.getElementById('btn-comp-on').style.background = '#f8fafc';
+            document.getElementById('btn-comp-on').style.borderColor = '#e2e8f0';
+            document.getElementById('btn-comp-on').style.color = '#64748b';
+            document.getElementById('btn-comp-off').style.background = '#f8fafc';
+            document.getElementById('btn-comp-off').style.borderColor = '#e2e8f0';
+            document.getElementById('btn-comp-off').style.color = '#64748b';
+        }
+
+        function setCompressorStatus(val) {
+            document.getElementById('inp-compressor-status').value = val;
+            const onBtn = document.getElementById('btn-comp-on');
+            const offBtn = document.getElementById('btn-comp-off');
+            if (val === 'on') {
+                onBtn.style.background = '#dcfce7';
+                onBtn.style.borderColor = '#86efac';
+                onBtn.style.color = '#15803d';
+                offBtn.style.background = '#f8fafc';
+                offBtn.style.borderColor = '#e2e8f0';
+                offBtn.style.color = '#64748b';
+                // ON → load checklist seperti biasa
+                clearTable();
+                const dept = document.getElementById('sel-dept').value;
+                const line = document.getElementById('sel-line').value;
+                const type = document.getElementById('inp-type').value;
+                if (type) executeFetchChecklist(type, dept, line);
+            } else {
+                offBtn.style.background = '#fee2e2';
+                offBtn.style.borderColor = '#fca5a5';
+                offBtn.style.color = '#dc2626';
+                onBtn.style.background = '#f8fafc';
+                onBtn.style.borderColor = '#e2e8f0';
+                onBtn.style.color = '#64748b';
+                // OFF → sembunyikan tabel, tampilkan banner, aktifkan submit setelah foto
+                clearTableKeepFoto();
+                checkAllResultsFilled();
+            }
+        }
+
+        // clearTable tapi foto strip tetap muncul (untuk submit kompressor OFF)
+        function clearTableKeepFoto() {
+            document.getElementById('check-table').style.display = 'none';
+            document.getElementById('empty-state').style.display = 'none';
+            document.getElementById('duplicate-warning').style.display = 'none';
+            document.getElementById('check-tbody').innerHTML = '';
+            document.getElementById('row-count').textContent = 'Kompressor OFF — submit langsung';
+            document.getElementById('category-badge').classList.add('hidden');
+            document.getElementById('foto-section').style.display = 'block';
+            currentItems = [];
+            // Tampilkan pesan kompressor off
+            const offBanner = document.getElementById('kompressor-off-banner');
+            if (offBanner) offBanner.style.display = 'flex';
+        }
+
+
         function resetForm() {
             document.getElementById('sel-dept').value = '';
             document.getElementById('sel-checker').value = '';
@@ -2250,6 +2394,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             clearMachine();
             clearTable();
             resetPhotoState();
+            resetCompressorStatus();
+            document.getElementById('compressor-status-wrap').style.display = 'none';
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────────
@@ -2258,12 +2404,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             document.getElementById('machine-field-container').innerHTML =
                 `<input type="text" id="inp-mesin" class="form-field" placeholder="— Otomatis terisi —" readonly>`;
             document.getElementById('inp-type').value = '';
+            // Sembunyikan dan reset kompressor wrap
+            document.getElementById('compressor-status-wrap').style.display = 'none';
+            resetCompressorStatus();
         }
 
         function clearTable() {
             document.getElementById('check-table').style.display = 'none';
             document.getElementById('empty-state').style.display = 'flex';
             document.getElementById('duplicate-warning').style.display = 'none';
+            const offBanner = document.getElementById('kompressor-off-banner');
+            if (offBanner) offBanner.style.display = 'none';
             document.getElementById('check-tbody').innerHTML = '';
             document.getElementById('row-count').textContent = '';
             document.getElementById('category-badge').classList.add('hidden');
