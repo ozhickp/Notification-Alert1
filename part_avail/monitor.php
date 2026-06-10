@@ -3,7 +3,7 @@ include 'config.php';
 
 // ── Active section & sub-tab ───────────────────────────────────────────────────
 $activeSection = $_GET['section'] ?? 'schedule';
-if (!in_array($activeSection, ['schedule', 'parts', 'history'])) $activeSection = 'schedule';
+if (!in_array($activeSection, ['schedule', 'parts'])) $activeSection = 'schedule';
 
 $activeTab = ($_GET['tab'] ?? 'predictive') === 'preventive' ? 'preventive' : 'predictive';
 
@@ -640,7 +640,7 @@ function partOrderBadge(string $v): string
     <div id="app-layout">
 
         <!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
-        <nav id="sidebar">
+        <nav id="sidebar" class="collapsed">
             <!-- Logo -->
             <div id="sidebar-logo">
                 <div class="logo-icon"><i class="fas fa-display"></i></div>
@@ -664,17 +664,12 @@ function partOrderBadge(string $v): string
                     <span class="np-icon"><i class="fas fa-boxes-stacked"></i></span>
                     <span class="np-label">Part Availability</span>
                 </button>
-                <button onclick="switchSection('history')" id="navHistory"
-                    class="nav-pill <?= $activeSection === 'history' ? 'active-history' : '' ?>">
-                    <span class="np-icon"><i class="fas fa-history"></i></span>
-                    <span class="np-label">History</span>
-                </button>
             </div>
 
             <!-- Toggle btn -->
             <div id="sidebar-footer">
                 <button id="sidebarToggle" title="Toggle sidebar">
-                    <i class="fas fa-chevron-left" id="sidebarToggleIcon"></i>
+                    <i class="fas fa-chevron-right" id="sidebarToggleIcon"></i>
                 </button>
             </div>
         </nav>
@@ -1281,17 +1276,26 @@ function partOrderBadge(string $v): string
         //  Sidebar toggle
         // ══════════════════════════════════════════════════════════════
         const sidebar = document.getElementById('sidebar');
-        const toggleBtn = document.getElementById('sidebarToggle');
-        const toggleIcon = document.getElementById('sidebarToggleIcon');
-        let sidebarOpen = true;
 
-        toggleBtn.addEventListener('click', () => {
-            sidebarOpen = !sidebarOpen;
-            sidebar.classList.toggle('collapsed', !sidebarOpen);
-            document.body.classList.toggle('sidebar-collapsed', !sidebarOpen);
-            toggleIcon.classList.toggle('fa-chevron-left', sidebarOpen);
-            toggleIcon.classList.toggle('fa-chevron-right', !sidebarOpen);
-        });
+        (function() {
+            const icon = document.getElementById('sidebarToggleIcon');
+
+            function applyState(collapsed) {
+                sidebar.classList.toggle('collapsed', collapsed);
+                document.body.classList.toggle('sidebar-collapsed', collapsed);
+                icon.className = collapsed ? 'fas fa-chevron-right' : 'fas fa-chevron-left';
+            }
+
+            // Init: baca sessionStorage, default = collapsed
+            const saved = sessionStorage.getItem('monitor_sidebar');
+            applyState(saved !== 'expanded');
+
+            document.getElementById('sidebarToggle').addEventListener('click', () => {
+                const isCollapsed = !sidebar.classList.contains('collapsed');
+                applyState(isCollapsed);
+                sessionStorage.setItem('monitor_sidebar', isCollapsed ? 'collapsed' : 'expanded');
+            });
+        })();
 
         // ══════════════════════════════════════════════════════════════
         //  Section switching
@@ -1306,11 +1310,6 @@ function partOrderBadge(string $v): string
                 nav: 'navParts',
                 el: 'sectionParts',
                 cls: 'active-parts'
-            },
-            history: {
-                nav: 'navHistory',
-                el: 'sectionHistory',
-                cls: 'active-history'
             },
         };
         let _activeSection = '<?= $activeSection ?>';
@@ -1401,7 +1400,7 @@ function partOrderBadge(string $v): string
         //  - Section tanpa tab (parts): scroll down → up → ... (loop)
         //  - Berhenti saat kursor gerak, resume 2 detik setelah diam
         // ══════════════════════════════════════════════════════════════
-        const SCROLL_SPEED = 1.5; // px per frame
+        const SCROLL_SPEED = 2; // px per frame
         const SCROLL_PAUSE = 2000; // ms jeda di atas/bawah sebelum balik / ganti tab
         const RESUME_DELAY = 2000; // ms tunggu setelah kursor diam
 
@@ -1432,24 +1431,17 @@ function partOrderBadge(string $v): string
                 const tabEl = _schedTab === 'predictive' ?
                     document.getElementById('schedPredTab') :
                     document.getElementById('schedPrevTab');
-                // Cari .table-scroll di dalam tab aktif
                 return tabEl ? tabEl.querySelector('.table-scroll') : null;
             }
             if (_activeSection === 'parts') {
                 return document.querySelector('#sectionParts .table-scroll');
-            }
-            if (_activeSection === 'history') {
-                const tabEl = _histTab === 'predictive' ?
-                    document.getElementById('histPredTab') :
-                    document.getElementById('histPrevTab');
-                return tabEl ? tabEl.querySelector('.table-scroll') : null;
             }
             return null;
         }
 
         // Cek apakah section aktif punya 2 tab
         function sectionHasTabs() {
-            return _activeSection === 'schedule' || _activeSection === 'history';
+            return _activeSection === 'schedule';
         }
 
         // Ganti ke tab berikutnya dalam section
@@ -1457,11 +1449,8 @@ function partOrderBadge(string $v): string
             if (_activeSection === 'schedule') {
                 const next = _schedTab === 'predictive' ? 'preventive' : 'predictive';
                 switchSchedTab(next);
-            } else if (_activeSection === 'history') {
-                const next = _histTab === 'predictive' ? 'preventive' : 'predictive';
-                switchHistTab(next);
             }
-            scrollDir = 1; // mulai scroll ke bawah lagi setelah ganti tab
+            scrollDir = 1;
         }
 
         function resetScrollState() {
