@@ -87,7 +87,7 @@ foreach ($submissions as $sub) {
     $infoRow = $startRow;
 
     // Baris info mesin
-    $sheet->mergeCells("A{$infoRow}:L{$infoRow}");
+    $sheet->mergeCells("A{$infoRow}:M{$infoRow}");
     $infoText = sprintf(
         "Department: %s  |  Line: %s  |  OP: %s  |  Mesin: %s  |  Type: %s  |  Checker: %s  |  Submitted: %s",
         $sub['department'],
@@ -189,7 +189,7 @@ foreach ($submissions as $sub) {
 
     $sheet->mergeCells("A{$startRow}:F{$startRow}");
     $sheet->setCellValue("A{$startRow}", "Summary: {$total} item — OK: {$okCount}  Problem: {$xCount}  Repair: {$rCount}");
-    $sheet->getStyle("A{$startRow}:L{$startRow}")->applyFromArray([
+    $sheet->getStyle("A{$startRow}:M{$startRow}")->applyFromArray([
         'font'      => ['bold' => true, 'italic' => true, 'size' => 8, 'color' => ['rgb' => '475569']],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'F8FAFC']],
         'alignment' => ['vertical' => Alignment::VERTICAL_CENTER],

@@ -106,9 +106,26 @@ $resultLabel = [
 
 $row1 = 5;
 $no   = 1;
-$grandTotal = ['items' => 0, 'ok' => 0, 'x' => 0, 'r' => 0, 'ro' => 0];
+$grandTotal  = ['items' => 0, 'ok' => 0, 'x' => 0, 'r' => 0, 'ro' => 0];
+$prevDate    = '';
 
 foreach ($submissions as $sub) {
+    // ── Baris pemisah antar tanggal ──
+    $curDate = substr($sub['check_date'], 0, 10);
+    if ($curDate !== $prevDate) {
+        // Baris kosong dengan background abu muda sebagai divider
+        $sheet1->mergeCells("A{$row1}:O{$row1}");
+        $sheet1->setCellValue("A{$row1}", "— " . date('d F Y', strtotime($curDate)) . " —");
+        $sheet1->getStyle("A{$row1}:O{$row1}")->applyFromArray([
+            'font'      => ['bold' => true, 'size' => 9, 'color' => ['rgb' => '64748B'], 'italic' => true],
+            'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'F1F5F9']],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
+            'borders'   => ['bottom' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'CBD5E1']]],
+        ]);
+        $sheet1->getRowDimension($row1)->setRowHeight(14);
+        $row1++;
+    }
+    $prevDate = $curDate;
     $stmtDet = $pdo->prepare("
         SELECT result FROM checksheet_submission_details WHERE submission_id = ?
     ");
