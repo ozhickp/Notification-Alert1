@@ -10,25 +10,36 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     @ini_set('display_errors', 0);
     header('Content-Type: application/json');
 
-    $mode  = $_GET['mode']  ?? 'daily';     // daily | monthly
-    $value = $_GET['value'] ?? '';          // YYYY-MM-DD | YYYY-MM
-    $page  = max(1, (int)($_GET['page'] ?? 1));
-    $limit = 20;
+    $mode   = $_GET['mode']   ?? 'daily';     // daily | monthly
+    $value  = $_GET['value']  ?? '';          // YYYY-MM-DD | YYYY-MM
+    $page   = max(1, (int)($_GET['page'] ?? 1));
+    $limit  = max(20, (int)($_GET['limit'] ?? 20)); // Limit dinamis pilihan user
     $offset = ($page - 1) * $limit;
+    $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
     if ($value === '') {
         echo json_encode(['rows' => [], 'total' => 0]);
         exit;
     }
 
+    // Filter tanggal/bulan dasar
     if ($mode === 'daily') {
         $where = "WHERE DATE(s.check_date) = ?";
     } else {
         $where = "WHERE DATE_FORMAT(s.check_date, '%Y-%m') = ?";
     }
+    $params = [$value];
 
+    // INTEGRASI SERVER-SIDE SEARCH: Tambah kondisi pencarian global jika parameter search diisi
+    if ($search !== '') {
+        $where .= " AND (s.machine_name LIKE ? OR s.department LIKE ? OR s.line LIKE ? OR s.op LIKE ? OR s.checker LIKE ?)";
+        $searchParam = "%{$search}%";
+        $params = array_merge($params, [$searchParam, $searchParam, $searchParam, $searchParam, $searchParam]);
+    }
+
+    // Hitung total records yang sesuai dengan filter tanggal + keyword search
     $countStmt = $pdo->prepare("SELECT COUNT(*) FROM checksheet_submissions s $where");
-    $countStmt->execute([$value]);
+    $countStmt->execute($params);
     $total = (int)$countStmt->fetchColumn();
 
     $stmt = $pdo->prepare("
@@ -48,7 +59,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
         ORDER BY s.submitted_at DESC
         LIMIT $limit OFFSET $offset
     ");
-    $stmt->execute([$value]);
+    $stmt->execute($params);
     $rows = $stmt->fetchAll();
 
     echo json_encode(['rows' => $rows, 'total' => $total, 'limit' => $limit]);
@@ -152,8 +163,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     $sub = $subStmt->fetch();
 
     // Hitung last_check_date yang benar untuk item periodic (weekly/monthly):
-    // Ambil tanggal submit PERTAMA (tertua) dalam periode yang aktif per item,
-    // agar Last/Next tidak bergeser karena auto-V di hari berikutnya.
     $periodicItemIds = [];
     foreach ($items as $it) {
         $iv = strtolower(trim($it['interval'] ?? ''));
@@ -272,7 +281,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
     if ($mode === 'daily') {
         $whereSub = "WHERE DATE(s.check_date) = ?";
-        $whereMl  = "WHERE DATE(?) = DATE(?)"; // dummy, machine_list tidak pakai filter tanggal
     } else {
         $whereSub = "WHERE DATE_FORMAT(s.check_date, '%Y-%m') = ?";
     }
@@ -315,7 +323,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             // Ambil semua nama mesin + op di line ini
             $stmtMachines = $pdo->prepare("SELECT DISTINCT machine_name, op FROM machine_list WHERE department = ? AND `line` = ? ORDER BY CASE WHEN op = '' OR op IS NULL THEN 1 ELSE 0 END, CAST(REGEXP_REPLACE(op, '[^0-9]', '') AS UNSIGNED), op, machine_name");
             $stmtMachines->execute([$dept, $line]);
-            $allMachines = $stmtMachines->fetchAll(); // array of ['machine_name'=>..., 'op'=>...]
+            $allMachines = $stmtMachines->fetchAll();
 
             if (!isset($depts[$dept])) {
                 $depts[$dept] = ['name' => $dept, 'lines' => [], 'total' => 0, 'filled' => 0];
@@ -597,7 +605,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             text-transform: uppercase;
             padding: 10px 14px;
             position: sticky;
-            /* Sticky head agar judul kolom tidak ikut ter-scroll */
             top: 0;
             z-index: 10;
         }
@@ -1247,7 +1254,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             </div>
 
             <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-0">
-                <!-- Tab buttons -->
                 <div class="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
                     <div class="flex gap-1 bg-slate-100 rounded-xl p-1">
                         <button class="tab-btn active" id="tab-btn-history" onclick="switchTab('history')">
@@ -1257,12 +1263,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                             <i class="fas fa-chart-pie mr-1.5"></i>Completion Rate
                         </button>
                     </div>
-                    <!-- Search box — hanya muncul di tab history -->
+
                     <div class="relative flex-1 tab-history-only" style="max-width:280px;">
                         <i class="fas fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" style="font-size:10px;"></i>
                         <input type="text" id="inp-search"
                             placeholder="Cari mesin, dept, line, checker…"
-                            oninput="filterTable()"
+                            onkeydown="if(event.key === 'Enter') handleSearchClick()"
                             class="form-field pl-7 pr-7 text-xs"
                             style="height:32px;padding-top:0;padding-bottom:0;">
                         <button id="btn-clear-search" onclick="clearSearch()" style="display:none;"
@@ -1270,13 +1276,24 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                             <i class="fas fa-times text-slate-500" style="font-size:8px;"></i>
                         </button>
                     </div>
+
+                    <div class="flex items-center gap-1.5 tab-history-only ml-2">
+                        <span class="text-[11px] text-slate-400 font-medium">Show:</span>
+                        <select id="inp-limit" onchange="changeLimit()" class="form-field text-xs cursor-pointer bg-slate-50" style="height:32px; padding-top:0; padding-bottom:0; min-width:70px;">
+                            <option value="20" selected>20</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                            <option value="500">500</option>
+                        </select>
+                    </div>
+
                     <div class="flex-1 tab-history-only"></div>
                     <span id="result-label" class="text-[11px] text-slate-400 font-medium tab-history-only"></span>
                     <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-600 tab-history-only"></span>
                     <span id="showing-label" class="text-[11px] text-slate-400 font-medium flex-shrink-0 tab-history-only"></span>
                 </div>
 
-                <!-- ── Tab: Riwayat Submission ── -->
                 <div id="tab-history" class="flex flex-col flex-1 min-h-0">
                     <div class="table-scroll-container flex-1 min-h-0">
                         <table class="hist-table w-full" id="hist-table" style="display:none;">
@@ -1327,26 +1344,20 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     </div>
                 </div>
 
-                <!-- ── Tab: Completion Rate ── -->
                 <div id="tab-completion" class="flex flex-col flex-1 min-h-0" style="display:none;">
                     <div class="flex-1 overflow-y-auto p-5" id="completion-body">
-                        <!-- Empty state -->
                         <div id="completion-empty" class="flex flex-col items-center justify-center py-16 text-slate-400">
                             <i class="fas fa-chart-pie text-5xl mb-3 opacity-30"></i>
                             <p class="font-bold text-sm">Pilih tanggal / bulan lalu klik Cari</p>
                             <p class="text-xs mt-1">Data completion rate akan tampil di sini</p>
                         </div>
-                        <!-- Loading -->
                         <div id="completion-loading" style="display:none;" class="space-y-3">
                             <?php for ($i = 0; $i < 4; $i++): ?>
                                 <div class="skeleton h-14 rounded-xl w-full"></div>
                             <?php endfor; ?>
                         </div>
-                        <!-- Content -->
                         <div id="completion-content" style="display:none;">
-                            <!-- Summary bar -->
                             <div id="completion-summary" class="mb-5 p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap gap-4 items-center"></div>
-                            <!-- Dept cards -->
                             <div id="completion-dept-list" class="space-y-3"></div>
                         </div>
                     </div>
@@ -1355,12 +1366,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         </div>
     </div>
 
-    <!-- ── Modal: View Checker ──────────────────────────────────────────────── -->
     <div id="checker-modal-overlay" onclick="closeCheckerModal(event)"
         style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);z-index:200;align-items:center;justify-content:center;">
         <div id="checker-modal-box"
             style="background:#fff;border-radius:18px;width:92%;max-width:860px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.25);animation:popIn .25s cubic-bezier(.34,1.56,.64,1);">
-            <!-- Header -->
             <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
                 <div>
                     <div class="text-sm font-bold text-slate-800 flex items-center gap-2">
@@ -1374,7 +1383,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 </button>
             </div>
 
-            <!-- Search inside modal -->
             <div class="px-5 py-3 border-b border-slate-100 flex-shrink-0">
                 <div class="relative">
                     <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
@@ -1384,7 +1392,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 </div>
             </div>
 
-            <!-- Table -->
             <div class="overflow-auto flex-1" style="min-height:0;">
                 <table class="w-full" id="checker-summary-table" style="display:none;">
                     <thead>
@@ -1402,7 +1409,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     <tbody id="checker-summary-tbody"></tbody>
                 </table>
 
-                <!-- Loading skeleton -->
                 <div id="checker-modal-loading" style="display:none;" class="p-6 space-y-3">
                     <?php for ($i = 0; $i < 5; $i++): ?>
                         <div class="flex gap-3 items-center">
@@ -1417,7 +1423,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     <?php endfor; ?>
                 </div>
 
-                <!-- Empty state -->
                 <div id="checker-modal-empty" style="display:none;" class="flex flex-col items-center justify-center py-14 text-slate-400">
                     <i class="fas fa-user-slash text-4xl mb-3 opacity-30"></i>
                     <p class="font-bold text-sm">Tidak ada data checker</p>
@@ -1425,7 +1430,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 </div>
             </div>
 
-            <!-- Footer -->
             <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-between flex-shrink-0">
                 <span id="checker-modal-summary" class="text-[11px] text-slate-500 font-medium"></span>
                 <button onclick="closeCheckerModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
@@ -1471,7 +1475,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 </div>
             </div>
 
-            <!-- Foto kondisi mesin -->
             <div id="modal-photo-section">
                 <div class="photo-label"><i class="fas fa-camera"></i> Foto Kondisi Mesin</div>
                 <div id="modal-photo-thumb-wrap">
@@ -1494,7 +1497,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         </div>
     </div>
 
-    <!-- Photo Lightbox -->
     <div id="photo-lightbox" onclick="if(event.target===this)closePhotoLightbox()">
         <button id="photo-lightbox-close" onclick="closePhotoLightbox()"><i class="fas fa-times"></i></button>
         <img id="photo-lightbox-img" src="" alt="Foto Mesin">
@@ -1507,6 +1509,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         let currentPage = 1;
         let totalRecords = 0;
         let limitPerPage = 20;
+        let searchTimeout = null;
 
         // ── Sidebar ───────────────────────────────────────────────────────────────
         function toggleSidebar() {
@@ -1542,6 +1545,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 icon.className = 'fas fa-chevron-right';
             }
             document.getElementById('inp-date').value = new Date().toISOString().split('T')[0];
+
+            // MODIFIKASI: Input real-time search listener dengan Debounce agar tidak lag
+            document.getElementById('inp-search').addEventListener('input', function() {
+                clearTimeout(searchTimeout);
+                const query = this.value.trim();
+                document.getElementById('btn-clear-search').style.display = query ? 'flex' : 'none';
+
+                searchTimeout = setTimeout(() => {
+                    loadHistory(1); // Reset kembali ke halaman 1 saat mengetik kata kunci
+                }, 400);
+            });
         });
 
         // ── Mode toggle ───────────────────────────────────────────────────────────
@@ -1567,44 +1581,60 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             }
         }
 
+        // ── Change Limit ──────────────────────────────────────────────────────────
+        function changeLimit() {
+            limitPerPage = parseInt(document.getElementById('inp-limit').value) || 20;
+            loadHistory(1);
+        }
+
+        function handleSearchClick() {
+            loadHistory(1);
+        }
+
         // ── Load history ──────────────────────────────────────────────────────────
         function loadHistory(page = 1) {
             const value = document.getElementById('inp-date').value;
+            const searchQuery = document.getElementById('inp-search').value.trim();
+            const limitSelect = document.getElementById('inp-limit').value;
+
             if (!value) {
                 showToast('Pilih tanggal / bulan terlebih dahulu.', 'error');
                 return;
             }
             currentPage = page;
-
-            // Reset search saat load data baru
-            document.getElementById('inp-search').value = '';
-            document.getElementById('btn-clear-search').style.display = 'none';
-            const sl = document.getElementById('search-label');
-            if (sl) sl.style.display = 'none';
+            limitPerPage = parseInt(limitSelect) || 20;
 
             document.getElementById('hist-table').style.display = 'none';
             document.getElementById('hist-empty').style.display = 'none';
             document.getElementById('hist-loading').style.display = 'block';
             document.getElementById('pagination').classList.add('hidden');
 
-            fetch(`history_checksheet.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}`)
+            // MODIFIKASI: Menambahkan parameter &search dan &limit ke endpoint AJAX backend
+            fetch(`history_checksheet.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}`)
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('hist-loading').style.display = 'none';
                     totalRecords = data.total;
-                    limitPerPage = data.limit;
 
                     if (!data.rows || data.rows.length === 0) {
                         document.getElementById('hist-empty').style.display = 'flex';
-                        document.getElementById('hist-empty').innerHTML = `
-                        <i class="fas fa-inbox text-5xl mb-3 opacity-30"></i>
-                        <p class="font-bold text-sm">Tidak ada data untuk periode ini</p>
-                        <p class="text-xs mt-1">Coba pilih tanggal / bulan yang lain</p>`;
+                        if (searchQuery !== '') {
+                            document.getElementById('hist-empty').innerHTML = `
+                            <i class="fas fa-search-minus text-5xl mb-3 opacity-30"></i>
+                            <p class="font-bold text-sm">Tidak ada data yang cocok dengan "${esc(searchQuery)}"</p>
+                            <p class="text-xs mt-1">Coba kata kunci pencarian yang lain</p>`;
+                        } else {
+                            document.getElementById('hist-empty').innerHTML = `
+                            <i class="fas fa-inbox text-5xl mb-3 opacity-30"></i>
+                            <p class="font-bold text-sm">Tidak ada data untuk periode ini</p>
+                            <p class="text-xs mt-1">Coba pilih tanggal / bulan yang lain</p>`;
+                        }
+                        document.getElementById('result-label').textContent = `0 submission ditemukan`;
                         return;
                     }
 
                     renderTable(data.rows, page);
-                    renderPagination(data.total, page, data.limit);
+                    renderPagination(data.total, page, limitPerPage);
                 })
                 .catch(() => {
                     document.getElementById('hist-loading').style.display = 'none';
@@ -1612,7 +1642,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     showToast('Gagal memuat data.', 'error');
                 });
 
-            // Juga load completion rate setiap kali search
             loadCompletionRate();
         }
 
@@ -1620,6 +1649,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         function renderTable(rows, page) {
             const tbody = document.getElementById('hist-tbody');
             tbody.innerHTML = '';
+            const searchQuery = document.getElementById('inp-search').value.trim();
+            const searchLabel = document.getElementById('search-label');
 
             rows.forEach((row, idx) => {
                 const no = (page - 1) * limitPerPage + idx + 1;
@@ -1667,7 +1698,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             });
 
             document.getElementById('hist-table').style.display = 'table';
-            document.getElementById('result-label').textContent = ` ${totalRecords} submission ditemukan`;
+            document.getElementById('result-label').textContent = `Total ${totalRecords} submission`;
+
+            if (searchQuery) {
+                searchLabel.style.display = 'inline-flex';
+                searchLabel.textContent = `Filtered`;
+            } else {
+                searchLabel.style.display = 'none';
+            }
         }
 
         // ── Pagination ────────────────────────────────────────────────────────────
@@ -1695,12 +1733,45 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             prev.onclick = () => loadHistory(currentPg - 1);
             btns.appendChild(prev);
 
-            for (let p = Math.max(1, currentPg - 2); p <= Math.min(totalPages, currentPg + 2); p++) {
+            // Logic windowing agar tombol page tidak overflow jika page sangat banyak (misal totalPages > 20)
+            let startPage = Math.max(1, currentPg - 2);
+            let endPage = Math.min(totalPages, currentPg + 2);
+
+            if (startPage > 1) {
+                const firstBtn = document.createElement('button');
+                firstBtn.className = 'page-btn';
+                firstBtn.textContent = '1';
+                firstBtn.onclick = () => loadHistory(1);
+                btns.appendChild(firstBtn);
+
+                if (startPage > 2) {
+                    const dots = document.createElement('span');
+                    dots.className = 'px-1 text-slate-400 text-xs self-center';
+                    dots.textContent = '...';
+                    btns.appendChild(dots);
+                }
+            }
+
+            for (let p = startPage; p <= endPage; p++) {
                 const btn = document.createElement('button');
                 btn.className = 'page-btn' + (p === currentPg ? ' active' : '');
                 btn.textContent = p;
                 btn.onclick = ((pg) => () => loadHistory(pg))(p);
                 btns.appendChild(btn);
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    const dots = document.createElement('span');
+                    dots.className = 'px-1 text-slate-400 text-xs self-center';
+                    dots.textContent = '...';
+                    btns.appendChild(dots);
+                }
+                const lastBtn = document.createElement('button');
+                lastBtn.className = 'page-btn';
+                lastBtn.textContent = totalPages;
+                lastBtn.onclick = () => loadHistory(totalPages);
+                btns.appendChild(lastBtn);
             }
 
             const next = document.createElement('button');
@@ -1711,13 +1782,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             btns.appendChild(next);
         }
 
-        // ── Modal detail ──────────────────────────────────────────────────────────
-        // PERBAIKAN: Menambahkan parameter op & machine ke dalam fungsi openDetail
+        // ── Modal detail ──
         function openDetail(id, dept, line, op, machine, checker, date) {
             document.getElementById('modal-overlay').classList.add('open');
             document.getElementById('modal-title').textContent = `Detail Submission #${id}`;
-
-            // PERBAIKAN: Menambahkan OP dan Nama Mesin di baris deskripsi subtitle modal
             document.getElementById('modal-subtitle').textContent = `${dept} — ${line} (OP: ${op || '-'}) | Mesin: ${machine} | Checker: ${checker} | ${date}`;
 
             document.getElementById('modal-tbody').innerHTML = '';
@@ -1730,9 +1798,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 .then(data => {
                     document.getElementById('modal-loading').style.display = 'none';
                     const tbody = document.getElementById('modal-tbody');
-                    // Support both old (array) and new (object) response format
                     const items = Array.isArray(data) ? data : (data.items || []);
-                    const checkDate = Array.isArray(data) ? null : (data.check_date || null);
                     const photoPath = Array.isArray(data) ? null : (data.photo_path || null);
 
                     const resultMap = {
@@ -1754,7 +1820,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                         const isMonthly = iv === 'Monthly' || iv === 'Montly';
                         const isPeriodic = isWeekly || isMonthly;
 
-                        // Badge kecil interval di samping nama part
                         const ivBadge = isWeekly ?
                             '<span style="background:#fef9c3;color:#92400e;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:4px;">Weekly</span>' :
                             isMonthly ?
@@ -1763,9 +1828,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
                         let resultCell;
                         if (isPeriodic && item.result !== '-' && item.last_check_date) {
-                            // Item periodic yg sudah diisi → tampilkan Last / Next
-                            // Gunakan last_check_date dari server (tanggal submit PERTAMA dalam periode),
-                            // bukan checkDate submission ini (agar auto-V hari berikutnya tidak menggeser Next).
                             const lastDate = new Date(item.last_check_date + 'T00:00:00');
                             const nextDue = new Date(lastDate);
                             if (isWeekly) nextDue.setDate(nextDue.getDate() + 7);
@@ -1775,7 +1837,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                                 <div><span style="color:#64748b;font-weight:600;">Next:</span> <span style="color:#1d4ed8;font-weight:700;">${fmtDate(nextDue)}</span></div>
                             </div>`;
                         } else {
-                            // Daily atau periodic belum diisi → badge result biasa
                             resultCell = resultMap[item.result] || item.result;
                         }
 
@@ -1789,7 +1850,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                         tbody.appendChild(tr);
                     });
 
-                    // Hitung ok hanya dari item non-periodic
                     const ok = items.filter(i => {
                         const iv = (i.interval || '').trim();
                         return iv !== 'Weekly' && iv !== 'Monthly' && iv !== 'Montly' && i.result === 'V';
@@ -1798,7 +1858,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     document.getElementById('modal-summary').textContent =
                         `${items.length} item total — ${ok} OK, ${pr} Problem`;
 
-                    // Tampilkan foto jika ada
                     if (photoPath) {
                         const thumb = document.getElementById('modal-photo-thumb');
                         const openBtn = document.getElementById('modal-photo-open-btn');
@@ -1824,7 +1883,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             document.getElementById('photo-lightbox').classList.remove('open');
         }
 
-        // ── Export ────────────────────────────────────────────────────────────────
+        // ── Export ──
         function exportData() {
             const value = document.getElementById('inp-date').value;
             if (!value) {
@@ -1837,7 +1896,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             window.open(file, '_blank');
         }
 
-        // ── Helpers ───────────────────────────────────────────────────────────────
+        // ── Helpers ──
         function showToast(msg, type = 'success') {
             const t = document.getElementById('toast');
             t.textContent = msg;
@@ -1850,7 +1909,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             d.textContent = str || '';
             return d.innerHTML;
         }
-        // ── Checker Summary Modal ─────────────────────────────────────────────────
+
+        // ── Checker Summary Modal ──
         function openCheckerSummary() {
             const value = document.getElementById('inp-date').value;
             if (!value) {
@@ -1903,7 +1963,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     if (pct < 60) barColor = '#ef4444';
                     else if (pct < 85) barColor = '#f59e0b';
 
-                    // Buat daftar mesin dengan waktu submit
                     const subs = row.submission_list || [];
                     const machineListHtml = subs.length > 0 ?
                         subs.map((s, i) => {
@@ -2000,63 +2059,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             });
         }
 
-        function closeCheckerModal(e) {
-            if (!e || e.target === document.getElementById('checker-modal-overlay')) {
-                document.getElementById('checker-modal-overlay').style.display = 'none';
-            }
-        }
-
-        // ── Search / Filter ───────────────────────────────────────────────────────
+        // MODIFIKASI: Mengosongkan sisa fungsi filter lama yang membuat konflik pencarian client-side
         function filterTable() {
-            const query = document.getElementById('inp-search').value.trim().toLowerCase();
-            const rows = document.querySelectorAll('#hist-tbody tr');
-            const clearBtn = document.getElementById('btn-clear-search');
-            const searchLabel = document.getElementById('search-label');
-
-            clearBtn.style.display = query ? 'flex' : 'none';
-
-            let visible = 0;
-            rows.forEach(tr => {
-                const text = tr.textContent.toLowerCase();
-                const match = !query || text.includes(query);
-                tr.style.display = match ? '' : 'none';
-                if (match) visible++;
-            });
-
-            // Update label
-            if (query) {
-                searchLabel.style.display = 'inline-flex';
-                searchLabel.textContent = `${visible} cocok`;
-            } else {
-                searchLabel.style.display = 'none';
-            }
-
-            // Tampilkan baris "tidak ada hasil" jika semua tersembunyi
-            let noResultRow = document.getElementById('search-no-result-row');
-            if (visible === 0 && rows.length > 0) {
-                if (!noResultRow) {
-                    noResultRow = document.createElement('tr');
-                    noResultRow.id = 'search-no-result-row';
-                    noResultRow.innerHTML = `
-                        <td colspan="11" class="text-center py-10 text-slate-400">
-                            <i class="fas fa-search-minus text-3xl mb-2 block opacity-30"></i>
-                            <p class="font-bold text-sm">Tidak ada data yang cocok</p>
-                            <p class="text-xs mt-1">Coba kata kunci yang berbeda</p>
-                        </td>`;
-                    document.getElementById('hist-tbody').appendChild(noResultRow);
-                }
-                noResultRow.style.display = '';
-            } else if (noResultRow) {
-                noResultRow.style.display = 'none';
-            }
+            // Logika pencarian dialihkan sepenuhnya ke sisi server (Server-Side Search via loadHistory)
         }
 
         function clearSearch() {
             document.getElementById('inp-search').value = '';
-            filterTable();
+            document.getElementById('btn-clear-search').style.display = 'none';
+            loadHistory(1);
         }
 
-        // ── Tab switching ─────────────────────────────────────────────────────────
+        // ── Tab switching ──
         let currentTab = 'history';
 
         function switchTab(tab) {
@@ -2065,16 +2079,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             document.getElementById('tab-completion').style.display = tab === 'completion' ? 'flex' : 'none';
             document.getElementById('tab-btn-history').classList.toggle('active', tab === 'history');
             document.getElementById('tab-btn-completion').classList.toggle('active', tab === 'completion');
-            // Show/hide history-only elements
             document.querySelectorAll('.tab-history-only').forEach(el => {
                 el.style.display = tab === 'history' ? '' : 'none';
             });
         }
 
-        // Override loadHistory to also trigger completion if already on that tab
-        const _origLoadHistory = loadHistory;
-
-        // ── Load Completion Rate ──────────────────────────────────────────────────
+        // ── Load Completion Rate ──
         function loadCompletionRate() {
             const value = document.getElementById('inp-date').value;
             if (!value) return;
@@ -2138,7 +2148,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         }
 
         function renderCompletion(depts, value, mode) {
-            // Format tanggal
             const bulanId = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
             let labelTanggal = value;
             if (mode === 'daily') {
@@ -2148,7 +2157,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 const d = new Date(value + '-01T00:00:00');
                 labelTanggal = bulanId[d.getMonth()] + ' ' + d.getFullYear();
             }
-            // Summary
             const totalAll = depts.reduce((s, d) => s + d.total, 0);
             const filledAll = depts.reduce((s, d) => s + d.filled, 0);
             const pctAll = totalAll > 0 ? Math.round(filledAll / totalAll * 100) : 0;
@@ -2172,7 +2180,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     <span style="font-size:.72rem;font-weight:700;background:#fee2e2;color:#dc2626;padding:3px 10px;border-radius:8px;">${totalAll - filledAll} belum diisi</span>
                 </div>`;
 
-            // Dept cards
             const listEl = document.getElementById('completion-dept-list');
             listEl.innerHTML = '';
 
@@ -2213,6 +2220,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             const icon = header.querySelector('.fa-chevron-down');
             body.classList.toggle('open');
             if (icon) icon.style.transform = body.classList.contains('open') ? 'rotate(180deg)' : '';
+        }
+
+        function closeCheckerModal(e) {
+            if (!e || e.target === document.getElementById('checker-modal-overlay')) {
+                document.getElementById('checker-modal-overlay').style.display = 'none';
+            }
         }
     </script>
 </body>

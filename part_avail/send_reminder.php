@@ -218,12 +218,10 @@ function processReminderByThreshold(PDO $pdo, ?int $specificId = null): void
   $whereId = $specificId ? "AND s.id = {$specificId}" : '';
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               p.plant_name AS department_name, l.line_name AS line_name,
+               s.department AS department_name, s.line AS line_name,
                s.operation_process AS op_name,
                s.reminder_activity, s.remaining_day
         FROM schedules s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         WHERE s.remaining_day IS NOT NULL AND s.reminder_activity IS NOT NULL
           AND s.remaining_day > 7
           AND s.remaining_day = s.reminder_activity
@@ -297,59 +295,68 @@ function processSevenDayReminders(PDO $pdo): void
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               p.plant_name AS department_name, l.line_name AS line_name,
+               s.department AS department_name, s.line AS line_name,
                s.operation_process AS op_name, s.remaining_day
         FROM schedules s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         WHERE s.remaining_day BETWEEN 1 AND 7 ORDER BY s.remaining_day ASC
     ");
   $stmt->execute();
   $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
   if (empty($tasks)) {
     error_log('[Reminder] Tidak ada jadwal alert 7 hari.');
+    releaseLock($pdo, 'batch-alert7');
     return;
   }
 
-  $nearestDay = (int)$tasks[0]['remaining_day'];
-  $admins     = getAllRecipients($pdo);
-  if (empty($admins)) return;
+  $admins = getAllRecipients($pdo);
+  if (empty($admins)) {
+    releaseLock($pdo, 'batch-alert7');
+    return;
+  }
 
-  $listHtml = '<ul style="color:#334155;">';
+  // Kelompokkan per nilai remaining_day, kirim 1 email per H-N
+  $groups = [];
   foreach ($tasks as $t) {
-    $daysLeft  = $t['remaining_day'];
-    $listHtml .= "<li>"
-      . "<span style='color:#2563eb; font-weight:bold;'>[H-{$daysLeft}]</span> "
-      . "<b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
-      . " — {$t['maintenance_point']}"
-      . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$t['change_date_plan']})</span>"
-      . "</li>";
-  }
-  $listHtml .= '</ul>';
-
-  $badgeLabel = "H-{$nearestDay}";
-  $intro      = "Berikut mesin yang harus dimaintenance dalam <b>{$nearestDay} hari ke depan</b>:";
-  $subject    = "⚠️ ALERT: Maintenance {$nearestDay} Hari Lagi!";
-
-  // [BUGFIX] Hitung email yang benar-benar berhasil terkirim
-  $sent = 0;
-  foreach ($admins as $admin) {
-    $ok = sendMail($admin['email'], $subject, buildEmailBody(
-      $admin['name'],
-      '#dc2626',
-      $badgeLabel,
-      $intro,
-      $listHtml
-    ));
-    if ($ok) $sent++;
+    $groups[(int)$t['remaining_day']][] = $t;
   }
 
-  // [BUGFIX] logSent() hanya dipanggil jika minimal 1 email berhasil
-  if ($sent > 0) {
-    logSent($pdo, 'batch-alert7');
-    error_log('[Reminder] batch-alert7 BERHASIL terkirim ke ' . $sent . ' dari ' . count($admins) . ' penerima.');
-  } else {
-    error_log('[Reminder] batch-alert7 GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
+  $totalSent = 0;
+  foreach ($groups as $daysLeft => $items) {
+    $key = "batch-alert7-h{$daysLeft}";
+    if (alreadySentToday($pdo, $key)) continue;
+
+    $listHtml = '<ul style="color:#334155;">';
+    foreach ($items as $t) {
+      $listHtml .= "<li>"
+        . "<b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
+        . " — {$t['maintenance_point']}"
+        . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$t['change_date_plan']})</span>"
+        . "</li>";
+    }
+    $listHtml .= '</ul>';
+
+    $subject = "⚠️ ALERT: Maintenance H-{$daysLeft} Hari Lagi!";
+    $intro   = "Berikut mesin yang harus dimaintenance dalam <b>{$daysLeft} hari ke depan</b>:";
+
+    $sent = 0;
+    foreach ($admins as $admin) {
+      $ok = sendMail($admin['email'], $subject, buildEmailBody(
+        $admin['name'],
+        '#dc2626',
+        "H-{$daysLeft}",
+        $intro,
+        $listHtml
+      ));
+      if ($ok) $sent++;
+    }
+
+    if ($sent > 0) {
+      logSent($pdo, $key);
+      error_log("[Reminder] {$key} BERHASIL terkirim ke {$sent} dari " . count($admins) . " penerima.");
+      $totalSent += $sent;
+    } else {
+      error_log("[Reminder] {$key} GAGAL — tidak ada email terkirim.");
+    }
   }
 
   releaseLock($pdo, 'batch-alert7');
@@ -365,11 +372,9 @@ function processOverdueReminders(PDO $pdo): void
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               s.remaining_day, p.plant_name AS department_name, l.line_name AS line_name,
+               s.remaining_day, s.department AS department_name, s.line AS line_name,
                s.operation_process AS op_name
         FROM schedules s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         WHERE s.remaining_day <= 0 AND (s.maintenance_status IS NULL OR s.maintenance_status != 'done')
         ORDER BY s.remaining_day ASC
     ");
@@ -429,10 +434,9 @@ function sendNewScheduleAlert(PDO $pdo, int $scheduleId): void
 function sendEditedScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): void
 {
   $stmt = $pdo->prepare("
-        SELECT s.*, p.plant_name AS department_name, l.line_name AS line_name
+        SELECT s.*, s.department AS department_name, s.line AS line_name,
+               s.operation_process AS op_name
         FROM schedules s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         WHERE s.id = ?
     ");
   $stmt->execute([$scheduleId]);
@@ -532,12 +536,10 @@ function processPrevReminderByThreshold(PDO $pdo, ?int $specificId = null): void
   $whereId = $specificId ? "AND s.id = {$specificId}" : '';
   $stmt    = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               p.plant_name AS department_name, l.line_name AS line_name,
+               s.department AS department_name, s.line AS line_name,
                s.operation_process AS op_name,
                s.reminder_activity, s.remaining_day
         FROM schedules_preventive s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         WHERE s.remaining_day IS NOT NULL AND s.reminder_activity IS NOT NULL
           AND s.remaining_day > 7
           AND s.remaining_day = s.reminder_activity
@@ -605,11 +607,9 @@ function processPrevSevenDayReminders(PDO $pdo): void
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               p.plant_name AS department_name, l.line_name AS line_name,
+               s.department AS department_name, s.line AS line_name,
                s.operation_process AS op_name, s.remaining_day
         FROM schedules_preventive s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         WHERE s.remaining_day BETWEEN 1 AND 7
         ORDER BY s.remaining_day ASC
     ");
@@ -621,46 +621,55 @@ function processPrevSevenDayReminders(PDO $pdo): void
     return;
   }
 
-  $nearestDay = (int)$tasks[0]['remaining_day'];
-  $admins     = getAllRecipients($pdo);
+  $admins = getAllRecipients($pdo);
   if (empty($admins)) {
     releaseLock($pdo, 'prev-batch-alert7');
     return;
   }
 
-  $listHtml = '<ul style="color:#334155;">';
+  // Kelompokkan per nilai remaining_day, kirim 1 email per H-N
+  $groups = [];
   foreach ($tasks as $t) {
-    $daysLeft  = $t['remaining_day'];
-    $listHtml .= "<li>"
-      . "<span style='color:#0d9488;font-weight:bold;'>[H-{$daysLeft}]</span> "
-      . "<b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
-      . " — {$t['maintenance_point']}"
-      . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$t['change_date_plan']})</span>"
-      . "</li>";
-  }
-  $listHtml .= '</ul>';
-
-  $subject = "⚠️ [Preventive] ALERT: Maintenance {$nearestDay} Hari Lagi!";
-
-  // [BUGFIX] Hitung email yang benar-benar berhasil terkirim
-  $sent = 0;
-  foreach ($admins as $admin) {
-    $ok = sendMail($admin['email'], $subject, buildEmailBody(
-      $admin['name'],
-      '#0f766e',
-      "H-{$nearestDay}",
-      "Berikut mesin <b>Preventive</b> yang harus dimaintenance dalam <b>{$nearestDay} hari ke depan</b>:",
-      $listHtml
-    ));
-    if ($ok) $sent++;
+    $groups[(int)$t['remaining_day']][] = $t;
   }
 
-  // [BUGFIX] logSent() hanya dipanggil jika minimal 1 email berhasil
-  if ($sent > 0) {
-    logSent($pdo, 'prev-batch-alert7');
-    error_log('[PrevReminder] prev-batch-alert7 BERHASIL terkirim ke ' . $sent . ' dari ' . count($admins) . ' penerima.');
-  } else {
-    error_log('[PrevReminder] prev-batch-alert7 GAGAL — tidak ada email terkirim. Cek cURL/SSL/API key.');
+  $totalSent = 0;
+  foreach ($groups as $daysLeft => $items) {
+    $key = "prev-batch-alert7-h{$daysLeft}";
+    if (alreadySentToday($pdo, $key)) continue;
+
+    $listHtml = '<ul style="color:#334155;">';
+    foreach ($items as $t) {
+      $listHtml .= "<li>"
+        . "<b>{$t['machine_name']}</b> [{$t['department_name']} | {$t['line_name']} | OP {$t['op_name']}]"
+        . " — {$t['maintenance_point']}"
+        . " <span style='color:#dc2626;font-weight:bold;'>(Tgl: {$t['change_date_plan']})</span>"
+        . "</li>";
+    }
+    $listHtml .= '</ul>';
+
+    $subject = "⚠️ [Preventive] ALERT: Maintenance H-{$daysLeft} Hari Lagi!";
+    $intro   = "Berikut mesin <b>Preventive</b> yang harus dimaintenance dalam <b>{$daysLeft} hari ke depan</b>:";
+
+    $sent = 0;
+    foreach ($admins as $admin) {
+      $ok = sendMail($admin['email'], $subject, buildEmailBody(
+        $admin['name'],
+        '#0f766e',
+        "H-{$daysLeft}",
+        $intro,
+        $listHtml
+      ));
+      if ($ok) $sent++;
+    }
+
+    if ($sent > 0) {
+      logSent($pdo, $key);
+      error_log("[PrevReminder] {$key} BERHASIL terkirim ke {$sent} dari " . count($admins) . " penerima.");
+      $totalSent += $sent;
+    } else {
+      error_log("[PrevReminder] {$key} GAGAL — tidak ada email terkirim.");
+    }
   }
 
   releaseLock($pdo, 'prev-batch-alert7');
@@ -676,11 +685,9 @@ function processPrevOverdueReminders(PDO $pdo): void
 
   $stmt = $pdo->prepare("
         SELECT s.id, s.machine_name, s.maintenance_point, s.change_date_plan,
-               s.remaining_day, p.plant_name AS department_name, l.line_name AS line_name,
+               s.remaining_day, s.department AS department_name, s.line AS line_name,
                s.operation_process AS op_name
         FROM schedules_preventive s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         WHERE s.remaining_day <= 0
           AND (s.maintenance_status IS NULL OR s.maintenance_status != 'done')
         ORDER BY s.remaining_day ASC
@@ -746,10 +753,9 @@ function sendNewPrevScheduleAlert(PDO $pdo, int $scheduleId): void
 function sendEditedPrevScheduleAlert(PDO $pdo, int $scheduleId, int $remainingDay): void
 {
   $stmt = $pdo->prepare("
-        SELECT s.*, p.plant_name AS department_name, l.line_name AS line_name
+        SELECT s.*, s.department AS department_name, s.line AS line_name,
+               s.operation_process AS op_name
         FROM schedules_preventive s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         WHERE s.id = ?
     ");
   $stmt->execute([$scheduleId]);
@@ -839,7 +845,7 @@ function sendImportAlert(PDO $pdo, array $queue): void
   $ids      = array_column($queue, 'id');
   $idMap    = array_column($queue, 'remaining_day', 'id');
   $inClause = implode(',', array_map('intval', $ids));
-  $stmt      = $pdo->query("SELECT s.*, p.plant_name AS department_name, l.line_name AS line_name FROM schedules s LEFT JOIN plants p ON p.id = s.department LEFT JOIN line l ON l.id = s.line WHERE s.id IN ({$inClause})");
+  $stmt      = $pdo->query("SELECT s.*, s.department AS department_name, s.line AS line_name, s.operation_process AS op_name FROM schedules s WHERE s.id IN ({$inClause})");
   $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
   $stmt->closeCursor();
 
@@ -992,7 +998,7 @@ function sendPrevImportAlert(PDO $pdo, array $queue): void
   $ids       = array_column($queue, 'id');
   $idMap     = array_column($queue, 'remaining_day', 'id');
   $inClause  = implode(',', array_map('intval', $ids));
-  $stmt      = $pdo->query("SELECT s.*, p.plant_name AS department_name, l.line_name AS line_name FROM schedules_preventive s LEFT JOIN plants p ON p.id = s.department LEFT JOIN line l ON l.id = s.line WHERE s.id IN ({$inClause})");
+  $stmt      = $pdo->query("SELECT s.*, s.department AS department_name, s.line AS line_name, s.operation_process AS op_name FROM schedules_preventive s WHERE s.id IN ({$inClause})");
   $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
   $stmt->closeCursor();
 
