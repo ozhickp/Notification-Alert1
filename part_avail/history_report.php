@@ -1065,6 +1065,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     const startFmt = r.repair_start ? r.repair_start.slice(0, 16) : '—';
                     const finishFmt = r.repair_finish ? r.repair_finish.slice(0, 16) : '—';
 
+                    // Format durasi dari menit → HH:MM:00
+                    let durationFmt = '—';
+                    if (r.duration_minutes !== null && r.duration_minutes !== undefined && r.duration_minutes !== '') {
+                        const dm = parseInt(r.duration_minutes);
+                        if (!isNaN(dm) && dm > 0) {
+                            const hh = String(Math.floor(dm / 60)).padStart(2, '0');
+                            const mm = String(dm % 60).padStart(2, '0');
+                            durationFmt = `${hh}:${mm}:00`;
+                        }
+                    }
+
                     const fields = [
                         ['Tanggal Laporan', r.report_date?.slice(0, 10) ?? '—'],
                         ['Department', r.department],
@@ -1074,6 +1085,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         ['Machine Type', r.machine_type || '—'],
                         ['Repair Start', startFmt],
                         ['Repair Finish', finishFmt],
+                        ['Durasi Perbaikan', durationFmt],
                         ['Reported By', r.reported_by],
                         ['PIC / Teknisi', r.pic],
                         ['Problem / Alarm', r.problem],

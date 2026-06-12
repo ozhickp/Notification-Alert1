@@ -63,20 +63,22 @@ if (isset($_GET['ajax'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
     header('Content-Type: application/json');
 
-    $dept        = trim($_POST['department']   ?? '');
-    $line        = trim($_POST['line']         ?? '');
-    $op          = trim($_POST['op']           ?? '-');
-    $machineName = trim($_POST['machine_name'] ?? '');
-    $machineType = trim($_POST['machine_type'] ?? '');
-    $reportDate  = trim($_POST['report_date']  ?? '');
-    $startDate   = trim($_POST['start_date']   ?? '');
-    $startTime   = trim($_POST['start_time']   ?? '');
-    $finishDate  = trim($_POST['finish_date']  ?? '');
-    $finishTime  = trim($_POST['finish_time']  ?? '');
-    $pic         = trim($_POST['pic']          ?? '');
-    $problem     = trim($_POST['problem']      ?? '');
-    $action      = trim($_POST['action']       ?? '');
-    $reportedBy  = trim($_POST['reported_by']  ?? '');
+    $dept            = trim($_POST['department']      ?? '');
+    $line            = trim($_POST['line']            ?? '');
+    $op              = trim($_POST['op']              ?? '-');
+    $machineName     = trim($_POST['machine_name']    ?? '');
+    $machineType     = trim($_POST['machine_type']    ?? '');
+    $reportDate      = trim($_POST['report_date']     ?? '');
+    $startDate       = trim($_POST['start_date']      ?? '');
+    $startTime       = trim($_POST['start_time']      ?? '');
+    $finishDate      = trim($_POST['finish_date']     ?? '');
+    $finishTime      = trim($_POST['finish_time']     ?? '');
+    $pic             = trim($_POST['pic']             ?? '');
+    $problem         = trim($_POST['problem']         ?? '');
+    $action          = trim($_POST['action']          ?? '');
+    $reportedBy      = trim($_POST['reported_by']     ?? '');
+    $durationMinutes = isset($_POST['duration_minutes']) && $_POST['duration_minutes'] !== ''
+        ? (int)$_POST['duration_minutes'] : null;
 
     if (!$dept || !$line || !$machineName || !$startTime || !$pic || !$problem || !$action) {
         echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib.']);
@@ -90,8 +92,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
         $stmt = $pdo->prepare("
             INSERT INTO e_reports
               (department, `line`, op, machine_name, machine_type, report_date,
-               repair_start, repair_finish, reported_by, pic, problem, action, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+               repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
         $stmt->execute([
             $dept,
@@ -102,6 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             $reportDate,
             $startDatetime,
             $finishDatetime,
+            $durationMinutes,
             $reportedBy,
             $pic,
             $problem,
@@ -656,31 +659,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                         </div>
 
                         <div class="flex-1 overflow-y-auto p-5">
-                            <div class="grid grid-cols-2 gap-x-6 gap-y-4 max-w-3xl">
+                            <div class="grid grid-cols-3 gap-x-5 gap-y-4 max-w-3xl">
 
                                 <!-- Repair Start -->
-                                <div>
+                                <div class="col-span-2">
                                     <label class="form-label block mb-1.5">
                                         <i class="fas fa-play-circle text-slate-300 mr-1"></i> Repair Start <span class="text-red-400">*</span>
                                     </label>
                                     <div class="flex gap-2">
-                                        <input type="text" id="inp-start-date-display" class="form-field" readonly style="cursor:default;flex:1;" tabindex="-1" placeholder="Tanggal otomatis">
-                                        <input type="hidden" id="inp-start-date">
-                                        <input type="time" id="inp-start-time" class="form-field" style="flex:1;">
+                                        <input type="date" id="inp-start-date" class="form-field" style="flex:1;" oninput="calcDuration()">
+                                        <input type="time" id="inp-start-time" class="form-field" style="flex:1;" oninput="calcDuration(); checkAllFieldsFilled();">
                                     </div>
-                                    <div class="text-[10px] text-slate-400 mt-1">Tanggal otomatis · Jam diisi manual</div>
+                                    <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
                                 </div>
 
                                 <!-- Repair Finish -->
-                                <div>
+                                <div class="col-span-2">
                                     <label class="form-label block mb-1.5">
                                         <i class="fas fa-stop-circle text-slate-300 mr-1"></i> Repair Finish
                                     </label>
                                     <div class="flex gap-2">
-                                        <input type="date" id="inp-finish-date" class="form-field" style="flex:1;">
-                                        <input type="time" id="inp-finish-time" class="form-field" style="flex:1;">
+                                        <input type="date" id="inp-finish-date" class="form-field" style="flex:1;" oninput="calcDuration()">
+                                        <input type="time" id="inp-finish-time" class="form-field" style="flex:1;" oninput="calcDuration()">
                                     </div>
                                     <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual (opsional)</div>
+                                </div>
+
+                                <!-- Durasi + Reported By + PIC — 3 kolom dalam 1 baris -->
+                                <div>
+                                    <label class="form-label block mb-1.5">
+                                        <i class="fas fa-clock text-slate-300 mr-1"></i> Durasi
+                                        <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
+                                    </label>
+                                    <input type="text" id="inp-duration-display" class="form-field" readonly
+                                        placeholder="—" style="cursor:default;font-variant-numeric:tabular-nums;">
+                                    <input type="hidden" id="inp-duration-minutes">
+                                    <div class="text-[10px] text-slate-400 mt-1">Dari Start &amp; Finish</div>
                                 </div>
 
                                 <!-- Reported By -->
@@ -783,8 +797,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
         document.getElementById('inp-tanggal').value = todayISO;
         document.getElementById('inp-tanggal-display').value = todayFmt;
-        document.getElementById('inp-start-date').value = todayISO;
-        document.getElementById('inp-start-date-display').value = todayFmt;
         document.getElementById('today-label').textContent = today.toLocaleDateString('id-ID', {
             weekday: 'long',
             year: 'numeric',
@@ -809,17 +821,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             return document.getElementById('sel-dept').value.toUpperCase() === 'POWER HOUSE';
         }
 
+        // ── Duration calculator ───────────────────────────────────────────────────────
+        function calcDuration() {
+            const startDate = document.getElementById('inp-start-date').value;
+            const startTime = document.getElementById('inp-start-time').value;
+            const finishDate = document.getElementById('inp-finish-date').value;
+            const finishTime = document.getElementById('inp-finish-time').value;
+
+            const dispEl = document.getElementById('inp-duration-display');
+            const minEl = document.getElementById('inp-duration-minutes');
+
+            if (!startDate || !startTime || !finishDate || !finishTime) {
+                dispEl.value = '';
+                minEl.value = '';
+                return;
+            }
+
+            const start = new Date(`${startDate}T${startTime}`);
+            const finish = new Date(`${finishDate}T${finishTime}`);
+            const diffMs = finish - start;
+
+            if (diffMs <= 0) {
+                dispEl.value = 'Finish harus setelah Start';
+                minEl.value = '';
+                return;
+            }
+
+            const totalSec = Math.round(diffMs / 1000);
+            const totalMin = Math.round(diffMs / 60000);
+            const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
+            const mm = String(totalMin % 60).padStart(2, '0');
+            dispEl.value = `${hh}:${mm}:00`;
+            minEl.value = totalMin; // simpan dalam menit
+        }
+
         // ── Submit button state ───────────────────────────────────────────────────────
         function checkAllFieldsFilled() {
             const dept = document.getElementById('sel-dept').value;
             const line = document.getElementById('sel-line').value;
             const machine = getCurrentMachineName();
+            const startDate = document.getElementById('inp-start-date').value;
             const startTime = document.getElementById('inp-start-time').value;
             const pic = document.getElementById('inp-pic').value;
             const problem = document.getElementById('inp-problem').value.trim();
             const action = document.getElementById('inp-action').value.trim();
 
-            const ready = !!(dept && line && machine && startTime && pic && problem && action);
+            const ready = !!(dept && line && machine && startDate && startTime && pic && problem && action);
             setSubmitEnabled(ready);
         }
 
@@ -837,7 +884,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
         // Attach listeners ke semua field wajib (kecuali dropdown cascade yang punya handler sendiri)
         document.addEventListener('DOMContentLoaded', () => {
-            ['inp-start-time', 'inp-problem', 'inp-action'].forEach(id => {
+            ['inp-start-date', 'inp-start-time', 'inp-problem', 'inp-action'].forEach(id => {
                 document.getElementById(id).addEventListener('input', checkAllFieldsFilled);
             });
             document.getElementById('inp-pic').addEventListener('change', checkAllFieldsFilled);
@@ -990,6 +1037,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const op = document.getElementById('sel-op').value || '-';
             const machine = getCurrentMachineName();
             const type = document.getElementById('inp-type').value;
+            const startDate = document.getElementById('inp-start-date').value;
             const startTime = document.getElementById('inp-start-time').value;
             const finishDate = document.getElementById('inp-finish-date').value;
             const finishTime = document.getElementById('inp-finish-time').value;
@@ -1012,7 +1060,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             fd.append('machine_name', machine);
             fd.append('machine_type', type);
             fd.append('report_date', todayISO);
-            fd.append('start_date', todayISO);
+            fd.append('start_date', startDate);
             fd.append('start_time', startTime);
             fd.append('finish_date', finishDate);
             fd.append('finish_time', finishTime);
@@ -1020,6 +1068,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             fd.append('pic', pic);
             fd.append('problem', problem);
             fd.append('action', action);
+            fd.append('duration_minutes', document.getElementById('inp-duration-minutes').value);
 
             fetch(BASE, {
                     method: 'POST',
@@ -1050,9 +1099,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             selLine.disabled = selOp.disabled = true;
             clearMachineField();
             document.getElementById('inp-type').value = '';
+            document.getElementById('inp-start-date').value = '';
             document.getElementById('inp-start-time').value = '';
             document.getElementById('inp-finish-date').value = '';
             document.getElementById('inp-finish-time').value = '';
+            document.getElementById('inp-duration-display').value = '';
+            document.getElementById('inp-duration-minutes').value = '';
             document.getElementById('inp-pic').value = '';
             document.getElementById('inp-problem').value = '';
             document.getElementById('inp-action').value = '';
