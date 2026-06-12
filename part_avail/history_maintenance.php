@@ -222,7 +222,7 @@ if (isset($_GET['export'])) {
         #sidebar-logo .logo-icon {
             width: 32px;
             height: 32px;
-            background: linear-gradient(135deg, #d97706, #b45309);
+            background: linear-gradient(135deg, #5f0f40, #7a1a5a);
             border-radius: 9px;
             display: flex;
             align-items: center;
@@ -355,21 +355,21 @@ if (isset($_GET['export'])) {
 
         .nav-pill.active-schedule {
             background: #eff6ff;
-            color: #1d4ed8;
+            color: #5f0f40;
         }
 
         .nav-pill.active-schedule .np-icon {
-            background: #2563eb;
+            background: #5f0f40;
             color: #fff;
         }
 
         .nav-pill.active-history {
-            background: #fffbeb;
-            color: #b45309;
+            background: #f9eef5;
+            color: #5f0f40;
         }
 
         .nav-pill.active-history .np-icon {
-            background: #d97706;
+            background: #5f0f40;
             color: #fff;
         }
 
@@ -478,13 +478,13 @@ if (isset($_GET['export'])) {
                 <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                     <div>
                         <h1 class="text-2xl font-extrabold text-slate-900">
-                            <i class="fas fa-history text-amber-500 mr-2"></i>Maintenance History
+                            <i class="fas fa-history text-[#5f0f40] mr-2"></i>Maintenance History
                         </h1>
                         <p class="text-slate-500 text-sm mt-0.5">Log all completed maintenance reports.</p>
                     </div>
                     <div class="flex items-center gap-3 flex-wrap">
                         <div class="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-xl">
-                            <div class="w-7 h-7 rounded-full bg-amber-500 flex items-center justify-center flex-shrink-0">
+                            <div class="w-7 h-7 rounded-full bg-[#5f0f40] flex items-center justify-center flex-shrink-0">
                                 <i class="fas fa-user text-white text-xs"></i>
                             </div>
                             <span class="text-sm font-bold text-slate-700"><?= htmlspecialchars($displayName) ?></span>
@@ -501,7 +501,7 @@ if (isset($_GET['export'])) {
                     <div class="relative bg-slate-100 rounded-2xl p-1.5 flex gap-1 shadow-inner">
                         <div id="tabIndicator"
                             class="absolute top-1.5 left-1.5 bottom-1.5 rounded-xl transition-all duration-300 ease-in-out shadow-md pointer-events-none"
-                            style="background:<?= $activeTab === 'preventive' ? 'linear-gradient(135deg,#ea580c,#f97316)' : 'linear-gradient(135deg,#f59e0b,#d97706)' ?>;width:calc(50% - 4px);transform:<?= $activeTab === 'preventive' ? 'translateX(calc(100% + 4px))' : 'translateX(0)' ?>;">
+                            style="background:<?= $activeTab === 'preventive' ? 'linear-gradient(135deg, #8b1a6b, #a02580)' : 'linear-gradient(135deg, #5f0f40, #7a1a5a)' ?>;width:calc(50% - 4px);transform:<?= $activeTab === 'preventive' ? 'translateX(calc(100% + 4px))' : 'translateX(0)' ?>;">
                         </div>
                         <button id="tabPredictive" onclick="switchTab('predictive')"
                             class="relative z-10 flex-1 flex items-center justify-center gap-2 py-3.5 px-6 font-bold text-sm rounded-xl transition-all duration-300 <?= $activeTab === 'predictive' ? 'text-white' : 'text-slate-500' ?>">
@@ -527,10 +527,10 @@ if (isset($_GET['export'])) {
                 <!-- ACTION BAR (export + count) — berubah per tab -->
                 <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
                     <div>
-                        <span id="labelPredictive" class="bg-blue-50 border border-blue-100 text-amber-700 font-bold px-4 py-2 rounded-xl text-sm <?= $activeTab === 'preventive' ? 'hidden' : '' ?>">
+                        <span id="labelPredictive" class="bg-[#f9eef5] border border-[#f2d4e8] text-[#5f0f40] font-bold px-4 py-2 rounded-xl text-sm <?= $activeTab === 'preventive' ? 'hidden' : '' ?>">
                             <?= count($historiesPred) ?> laporan predictive
                         </span>
-                        <span id="labelPreventive" class="bg-teal-50 border border-teal-100 text-orange-700 font-bold px-4 py-2 rounded-xl text-sm <?= $activeTab === 'predictive' ? 'hidden' : '' ?>">
+                        <span id="labelPreventive" class="bg-[#f9eef5] border border-[#e8c5da] text-orange-700 font-bold px-4 py-2 rounded-xl text-sm <?= $activeTab === 'predictive' ? 'hidden' : '' ?>">
                             <?= count($historiesPrev) ?> laporan preventive
                         </span>
                     </div>
@@ -550,12 +550,12 @@ if (isset($_GET['export'])) {
                         <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
                         <input type="text" name="search" value="<?= htmlspecialchars($search) ?>"
                             placeholder="Cari mesin, point, department..."
-                            class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#c97aad]">
                     </div>
                     <!-- Filter Department — predictive -->
                     <div id="deptFilterPred" class="<?= $activeTab === 'preventive' ? 'hidden' : '' ?>">
                         <select name="department"
-                            class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[180px]">
+                            class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-[#c97aad] min-w-[180px]">
                             <option value="">Semua Department</option>
                             <?php foreach ($deptListPred as $dep): ?>
                                 <option value="<?= htmlspecialchars($dep) ?>" <?= ($filterDep === $dep && $activeTab === 'predictive') ? 'selected' : '' ?>>
@@ -567,7 +567,7 @@ if (isset($_GET['export'])) {
                     <!-- Filter Department — preventive -->
                     <div id="deptFilterPrev" class="<?= $activeTab === 'predictive' ? 'hidden' : '' ?>">
                         <select name="department_prev"
-                            class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-teal-500 min-w-[180px]">
+                            class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-[#c97aad] min-w-[180px]">
                             <option value="">Semua Department</option>
                             <?php foreach ($deptListPrev as $dep): ?>
                                 <option value="<?= htmlspecialchars($dep) ?>" <?= ($filterDep === $dep && $activeTab === 'preventive') ? 'selected' : '' ?>>
@@ -592,15 +592,15 @@ if (isset($_GET['export'])) {
                     </div>
                     <div id="inputWrapDate" class="<?= $filterMode === 'month' ? 'hidden' : '' ?>">
                         <input type="date" name="date" id="inputDate" value="<?= htmlspecialchars($filterDate) ?>"
-                            class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-[#c97aad]">
                     </div>
                     <div id="inputWrapMonth" class="<?= $filterMode === 'date' ? 'hidden' : '' ?>">
                         <input type="month" name="month" id="inputMonth" value="<?= htmlspecialchars($filterMonth) ?>"
-                            class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-amber-400">
+                            class="bg-slate-50 border border-slate-200 text-slate-600 text-sm rounded-xl py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-[#c97aad]">
                     </div>
                     <!-- Tombol -->
                     <button type="submit"
-                        class="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all">
+                        class="bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all">
                         <i class="fas fa-filter mr-1"></i> Filter
                     </button>
                     <?php if ($search || $filterDep || $filterDate || $filterMonth): ?>
@@ -618,7 +618,7 @@ if (isset($_GET['export'])) {
                     <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                         <div class="overflow-x-auto" style="max-height:600px;overflow-y:auto;">
                             <table class="w-full text-left text-sm border-collapse">
-                                <thead class="bg-slate-800 text-white" style="background:linear-gradient(135deg, #b45309, #f59e0b);position:sticky;top:0;z-index:10;">
+                                <thead class="bg-slate-800 text-white" style="background:linear-gradient(135deg, #5f0f40, #8b1a6b);position:sticky;top:0;z-index:10;">
                                     <tr>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest whitespace-nowrap">No</th>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest whitespace-nowrap">Machine Info</th>
@@ -666,7 +666,7 @@ if (isset($_GET['export'])) {
                                                 </td>
                                                 <td class="px-5 py-3 text-center">
                                                     <button onclick="showDetail(<?= $h['id'] ?>, 'predictive')"
-                                                        class="bg-slate-100 hover:bg-amber-50 hover:text-amber-600 text-slate-500 px-3 py-1.5 rounded-lg text-xs font-bold transition-all">
+                                                        class="bg-slate-100 hover:bg-[#f9eef5] hover:text-[#5f0f40] text-slate-500 px-3 py-1.5 rounded-lg text-xs font-bold transition-all">
                                                         <i class="fas fa-eye mr-1"></i> Detail
                                                     </button>
                                                 </td>
@@ -733,13 +733,13 @@ if (isset($_GET['export'])) {
                                                 <td class="px-5 py-3 text-slate-600 text-sm max-w-[200px]"><?= htmlspecialchars($noteShort) ?></td>
                                                 <td class="px-5 py-3 text-center text-xs text-slate-500 whitespace-nowrap"><?= $reportedAt ?></td>
                                                 <td class="px-5 py-3 text-center">
-                                                    <span class="inline-flex items-center gap-1 bg-teal-50 text-teal-700 border border-teal-100 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wide">
+                                                    <span class="inline-flex items-center gap-1 bg-[#f9eef5] text-[#8b1a6b] border border-[#e8c5da] px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wide">
                                                         <i class="fas fa-check-circle text-[9px]"></i> Done
                                                     </span>
                                                 </td>
                                                 <td class="px-5 py-3 text-center">
                                                     <button onclick="showDetail(<?= $h['id'] ?>, 'preventive')"
-                                                        class="bg-slate-100 hover:bg-teal-50 hover:text-teal-600 text-slate-500 px-3 py-1.5 rounded-lg text-xs font-bold transition-all">
+                                                        class="bg-slate-100 hover:bg-[#f9eef5] hover:text-[#8b1a6b] text-slate-500 px-3 py-1.5 rounded-lg text-xs font-bold transition-all">
                                                         <i class="fas fa-eye mr-1"></i> Detail
                                                     </button>
                                                 </td>
@@ -762,11 +762,11 @@ if (isset($_GET['export'])) {
             <!-- ═══════════════════════ MODAL DETAIL ═══════════════════════ -->
             <div id="detailModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
                 <div class="bg-white w-full max-w-xl rounded-3xl shadow-2xl overflow-hidden">
-                    <div id="detailModalHeader" class="bg-gradient-to-r from-amber-600 to-amber-700 px-7 py-5 flex justify-between items-center">
+                    <div id="detailModalHeader" class="bg-gradient-to-r from-[#5f0f40] to-[#7a1a5a] px-7 py-5 flex justify-between items-center">
                         <div>
                             <p id="detailModalType" class="text-white/60 text-[10px] font-black uppercase tracking-widest mb-0.5">Predictive Maintenance</p>
                             <h3 class="text-base font-bold text-white"><i class="fas fa-clipboard-check mr-2"></i>Detail Maintenance Report</h3>
-                            <p class="text-amber-100 text-xs mt-0.5" id="detailMachine">—</p>
+                            <p class="text-[#f2d4e8] text-xs mt-0.5" id="detailMachine">—</p>
                         </div>
                         <button onclick="hideDetail()" class="text-white/60 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition">
                             <i class="fas fa-times"></i>
@@ -801,7 +801,7 @@ if (isset($_GET['export'])) {
                             <label class="block text-xs font-black text-slate-500 uppercase tracking-wide mb-2">Tipe Maintenance</label>
                             <div class="flex gap-2">
                                 <button id="exportTypePred" onclick="setExportType('predictive')"
-                                    class="flex-1 py-2.5 rounded-xl text-sm font-bold border-2 border-amber-500 bg-amber-500 text-white transition-all">
+                                    class="flex-1 py-2.5 rounded-xl text-sm font-bold border-2 border-[#5f0f40] bg-[#5f0f40] text-white transition-all">
                                     <i class="fas fa-chart-line mr-1"></i> Predictive
                                 </button>
                                 <button id="exportTypePrev" onclick="setExportType('preventive')"
@@ -884,8 +884,8 @@ if (isset($_GET['export'])) {
                     const indicator = document.getElementById('tabIndicator');
                     indicator.style.transform = isPred ? 'translateX(0)' : 'translateX(calc(100% + 4px))';
                     indicator.style.background = isPred ?
-                        'linear-gradient(135deg,#f59e0b,#d97706)' :
-                        'linear-gradient(135deg,#ea580c,#f97316)';
+                        'linear-gradient(135deg, #5f0f40, #7a1a5a)' :
+                        'linear-gradient(135deg, #8b1a6b, #a02580)';
 
                     document.getElementById('tabPredictive').style.color = isPred ? '#fff' : '#64748b';
                     document.getElementById('tabPreventive').style.color = !isPred ? '#fff' : '#64748b';
@@ -927,10 +927,10 @@ if (isset($_GET['export'])) {
                     const isPred = type === 'predictive';
                     document.getElementById('exportTypePred').className =
                         'flex-1 py-2.5 rounded-xl text-sm font-bold border-2 transition-all ' +
-                        (isPred ? 'border-amber-500 bg-amber-500 text-white' : 'border-slate-200 bg-white text-slate-500');
+                        (isPred ? 'border-[#5f0f40] bg-[#5f0f40] text-white' : 'border-slate-200 bg-white text-slate-500');
                     document.getElementById('exportTypePrev').className =
                         'flex-1 py-2.5 rounded-xl text-sm font-bold border-2 transition-all ' +
-                        (!isPred ? 'border-teal-500 bg-teal-500 text-white' : 'border-slate-200 bg-white text-slate-500');
+                        (!isPred ? 'border-[#8b1a6b] bg-[#8b1a6b] text-white' : 'border-slate-200 bg-white text-slate-500');
                 }
 
                 function setPeriodTab(period) {
@@ -989,10 +989,10 @@ if (isset($_GET['export'])) {
                     const typeLabel = document.getElementById('detailModalType');
                     if (type === 'preventive') {
                         header.className = 'px-7 py-5 flex justify-between items-center';
-                        header.style.background = 'linear-gradient(135deg,#ea580c,#f97316)';
+                        header.style.background = 'linear-gradient(135deg, #8b1a6b, #a02580)';
                         typeLabel.textContent = 'Preventive Maintenance';
                     } else {
-                        header.className = 'bg-gradient-to-r from-amber-600 to-amber-700 px-7 py-5 flex justify-between items-center';
+                        header.className = 'bg-gradient-to-r from-[#5f0f40] to-[#7a1a5a] px-7 py-5 flex justify-between items-center';
                         header.style.background = '';
                         typeLabel.textContent = 'Predictive Maintenance';
                     }
@@ -1027,8 +1027,8 @@ if (isset($_GET['export'])) {
             </div>`;
 
                     const badgeColor = type === 'preventive' ?
-                        'bg-teal-50 text-teal-700 border-teal-100' :
-                        'bg-emerald-50 text-emerald-700 border-emerald-100';
+                        'bg-[#f9eef5] text-[#8b1a6b] border-[#e8c5da]' :
+                        'bg-[#f0fdf4] text-emerald-700 border-emerald-100';
                     const photoHtml = d.photo_path ?
                         `<div class="mt-2"><a href="${d.photo_path}" target="_blank" class="inline-block rounded-xl overflow-hidden border border-slate-200 hover:opacity-90 transition"><img src="${d.photo_path}" alt="Foto" class="max-h-48 object-contain w-full"></a></div>` : '';
 
@@ -1048,7 +1048,7 @@ if (isset($_GET['export'])) {
                 ${row('Reported By', fmt(d.reported_by_name || ('User #' + d.reported_by)))}
                 ${row('Reported At', fmtDT(d.reported_at))}
                 ${row('Status', `<span class="${badgeColor} border px-3 py-0.5 rounded-full text-[10px] font-black uppercase">✓ Done</span>`)}
-                ${d.photo_path ? row('Foto', `<a href="${d.photo_path}" target="_blank" class="text-amber-600 font-bold text-xs hover:underline"><i class="fas fa-image mr-1"></i>Lihat Foto</a>` + photoHtml) : ''}
+                ${d.photo_path ? row('Foto', `<a href="${d.photo_path}" target="_blank" class="text-[#5f0f40] font-bold text-xs hover:underline"><i class="fas fa-image mr-1"></i>Lihat Foto</a>` + photoHtml) : ''}
             </div>`;
                 }
 

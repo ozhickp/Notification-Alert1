@@ -782,7 +782,7 @@ HTML;
             <div>
                 <label class="block text-xs font-black text-slate-500 uppercase mb-2">Department</label>
                 <select name="department" id="{$prefix}_dept_select" onchange="handleDeptChange('{$prefix}')"
-                    class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-blue-100 outline-none transition" required>
+                    class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition" required>
                     <option value="">-- Choose Department --</option>
                     $plantsOpts
                 </select>
@@ -822,7 +822,7 @@ HTML;
             <div>
                 <label class="block text-xs font-black text-slate-500 uppercase mb-2">Unit Name</label>
                 <input type="text" name="name_unit" id="{$prefix}_name_unit"
-                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-blue-100 outline-none"
+                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none"
                     placeholder="Example: Spindle Unit">
             </div>
         </div>
@@ -830,7 +830,7 @@ HTML;
         <div class="mb-6">
             <label class="block text-xs font-black text-slate-500 uppercase mb-2">Maintenance Point</label>
             <input type="text" name="maintenance_point" id="{$prefix}_maintenance_point"
-                class="w-full border border-slate-200 rounded-xl px-6 py-4 text-lg font-medium focus:ring-4 focus:ring-blue-100 outline-none"
+                class="w-full border border-slate-200 rounded-xl px-6 py-4 text-lg font-medium focus:ring-4 focus:ring-[#f2d4e8] outline-none"
                 placeholder="What will you do" required>
         </div>
 
@@ -839,31 +839,31 @@ HTML;
                 <label class="block text-xs font-black text-slate-500 uppercase mb-2">Use Date (Last Change)</label>
                 <input type="date" name="use_date" id="{$prefix}_use_date"
                     onchange="checkAutoCalculate('{$prefix}')"
-                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-blue-100 outline-none transition">
+                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition">
             </div>
             <div>
                 <label class="block text-xs font-black text-slate-500 uppercase mb-2">Interval (Month)</label>
                 <input type="number" name="interval_month" id="{$prefix}_interval_month"
                     onchange="checkAutoCalculate('{$prefix}')"
-                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-blue-100 outline-none transition">
+                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition">
             </div>
         </div>
 
-        <div class="bg-blue-50 border border-blue-100 p-6 rounded-2xl mb-8">
+        <div class="bg-[#f9eef5] border border-[#f2d4e8] p-6 rounded-2xl mb-8">
             <div class="flex items-center gap-3 mb-4">
-                <input type="checkbox" id="{$prefix}_auto_calc" onchange="checkAutoCalculate('{$prefix}')" class="w-5 h-5 rounded accent-blue-600">
-                <label for="{$prefix}_auto_calc" class="text-sm font-bold text-blue-900 cursor-pointer italic">Based on Interval and Last Change</label>
+                <input type="checkbox" id="{$prefix}_auto_calc" onchange="checkAutoCalculate('{$prefix}')" class="w-5 h-5 rounded accent-[#5f0f40]">
+                <label for="{$prefix}_auto_calc" class="text-sm font-bold text-[#3d0929] cursor-pointer italic">Based on Interval and Last Change</label>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                    <label class="block text-xs font-black text-blue-700 uppercase mb-2">Change Date Plan</label>
+                    <label class="block text-xs font-black text-[#5f0f40] uppercase mb-2">Change Date Plan</label>
                     <input type="date" name="change_date_plan" id="{$prefix}_change_date_plan"
-                        class="w-full bg-white border border-blue-200 rounded-xl px-4 py-3 font-bold" required>
+                        class="w-full bg-white border border-[#c97aad] rounded-xl px-4 py-3 font-bold" required>
                 </div>
                 <div>
-                    <label class="block text-xs font-black text-blue-700 uppercase mb-2">Reminder Activity and Reminder Part (Days)</label>
+                    <label class="block text-xs font-black text-[#5f0f40] uppercase mb-2">Reminder Activity and Reminder Part (Days)</label>
                     <input type="number" name="reminder_activity" id="{$prefix}_reminder_activity"
-                        class="w-full bg-white border border-blue-200 rounded-xl px-4 py-3" placeholder="Only Number">
+                        class="w-full bg-white border border-[#c97aad] rounded-xl px-4 py-3" placeholder="Only Number">
                 </div>
             </div>
         </div>
@@ -967,9 +967,9 @@ HTML;
         }
 
         .ps-open {
-            background: #dbeafe;
-            color: #1e40af;
-            border-color: #93c5fd;
+            background: #f9eef5;
+            color: #5f0f40;
+            border-color: #c97aad;
         }
 
         /* .ps-finish {
@@ -994,9 +994,9 @@ HTML;
 
         /* Maint status */
         .ms-soon {
-            background: #dbeafe;
-            color: #1e40af;
-            border-color: #93c5fd;
+            background: #f9eef5;
+            color: #5f0f40;
+            border-color: #c97aad;
         }
 
         .ms-done {
@@ -1008,8 +1008,8 @@ HTML;
         /* Tab active/inactive */
         .tab-active {
             background: #fff;
-            color: #2563eb;
-            border-color: #3b82f6;
+            color: #5f0f40;
+            border-color: #c97aad;
             border-bottom-color: #fff;
         }
 
@@ -1063,7 +1063,7 @@ HTML;
         #sidebar-logo .logo-icon {
             width: 32px;
             height: 32px;
-            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            background: linear-gradient(135deg, #5f0f40, #7a1a5a);
             border-radius: 9px;
             display: flex;
             align-items: center;
@@ -1195,22 +1195,22 @@ HTML;
         }
 
         .nav-pill.active-schedule {
-            background: #eff6ff;
-            color: #1d4ed8;
+            background: #f9eef5;
+            color: #5f0f40;
         }
 
         .nav-pill.active-schedule .np-icon {
-            background: #2563eb;
+            background: #5f0f40;
             color: #fff;
         }
 
         .nav-pill.active-history {
-            background: #fffbeb;
-            color: #b45309;
+            background: #f9eef5;
+            color: #5f0f40;
         }
 
         .nav-pill.active-history .np-icon {
-            background: #d97706;
+            background: #5f0f40;
             color: #fff;
         }
 
@@ -1324,7 +1324,7 @@ HTML;
                     </div>
                     <div class="flex items-center gap-3 flex-wrap">
                         <div class="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-xl">
-                            <div class="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                            <div class="w-7 h-7 rounded-full bg-[#5f0f40] flex items-center justify-center flex-shrink-0">
                                 <i class="fas fa-user text-white text-xs"></i>
                             </div>
                             <span class="text-sm font-bold text-slate-700"><?= htmlspecialchars($displayName) ?></span>
@@ -1341,7 +1341,7 @@ HTML;
                     <div class="relative bg-slate-100 rounded-2xl p-1.5 flex gap-1 shadow-inner">
                         <div id="tabIndicator"
                             class="absolute top-1.5 left-1.5 bottom-1.5 rounded-xl transition-all duration-300 ease-in-out shadow-md pointer-events-none"
-                            style="background:linear-gradient(135deg,#2563eb,#1d4ed8);width:calc(50% - 4px);transform:translateX(0);">
+                            style="background:linear-gradient(135deg, #5f0f40, #7a1a5a);width:calc(50% - 4px);transform:translateX(0);">
                         </div>
                         <button id="tabPredictive" onclick="switchTab('predictive')"
                             class="relative z-10 flex-1 flex items-center justify-center gap-2 py-3.5 px-6 font-bold text-sm rounded-xl transition-all duration-300 text-white">
@@ -1383,20 +1383,20 @@ HTML;
                     $todayCount = count($todaySchedArr);
                     ?>
                     <div id="predTodayCard"
-                        class="bg-white rounded-3xl border border-blue-200 shadow-sm mb-5 overflow-hidden cursor-pointer select-none transition-all duration-200 hover:shadow-md hover:border-blue-400"
+                        class="bg-white rounded-3xl border border-[#c97aad] shadow-sm mb-5 overflow-hidden cursor-pointer select-none transition-all duration-200 hover:shadow-md hover:border-[#9a3578]"
                         onclick="openTodayModal('pred')"
                         title="Klik untuk lihat semua jadwal hari ini">
 
                         <!-- Header -->
-                        <div class="flex items-center justify-between px-5 pt-5 pb-3 border-b border-blue-50">
-                            <p class="text-xs font-black text-blue-400 uppercase tracking-widest flex items-center gap-2">
+                        <div class="flex items-center justify-between px-5 pt-5 pb-3 border-b border-[#f2d4e8]">
+                            <p class="text-xs font-black text-[#c97aad] uppercase tracking-widest flex items-center gap-2">
                                 <i class="fas fa-calendar-day"></i> Today's Schedule — <?= date('d M Y') ?>
                             </p>
                             <div class="flex items-center gap-2">
                                 <?php if ($todayCount > 0): ?>
-                                    <span class="bg-blue-600 text-white text-xs font-black px-2.5 py-0.5 rounded-full"><?= $todayCount ?> jadwal</span>
+                                    <span class="bg-[#5f0f40] text-white text-xs font-black px-2.5 py-0.5 rounded-full"><?= $todayCount ?> jadwal</span>
                                 <?php endif; ?>
-                                <span class="text-blue-300 text-xs font-bold flex items-center gap-1 italic">
+                                <span class="text-[#d9a3c8] text-xs font-bold flex items-center gap-1 italic">
                                     <i class="fas fa-expand-alt"></i> Klik untuk lihat semua
                                 </span>
                             </div>
@@ -1409,25 +1409,25 @@ HTML;
                             <?php else: ?>
                                 <div class="flex items-center gap-4">
                                     <!-- Index bubble -->
-                                    <div id="predTickerIdx" class="flex-shrink-0 w-11 h-11 rounded-full bg-blue-600 text-white flex items-center justify-center text-base font-black shadow">1</div>
+                                    <div id="predTickerIdx" class="flex-shrink-0 w-11 h-11 rounded-full bg-[#5f0f40] text-white flex items-center justify-center text-base font-black shadow">1</div>
                                     <!-- Text content -->
                                     <div class="flex-1 min-w-0 relative" style="height:68px;">
                                         <?php foreach ($todaySchedArr as $i => $td): ?>
                                             <div class="pred-ticker-item absolute inset-0 flex flex-col justify-center transition-all duration-500"
                                                 style="opacity:<?= $i === 0 ? '1' : '0' ?>;transform:translateY(<?= $i === 0 ? '0' : '8px' ?>);">
                                                 <p class="font-black text-slate-800 text-base leading-tight truncate"><?= htmlspecialchars($td['machine_name']) ?></p>
-                                                <p class="text-blue-600 text-sm font-semibold truncate mt-1"><?= htmlspecialchars($td['maintenance_point']) ?></p>
+                                                <p class="text-[#5f0f40] text-sm font-semibold truncate mt-1"><?= htmlspecialchars($td['maintenance_point']) ?></p>
                                                 <p class="text-slate-400 text-xs mt-0.5 truncate"><?= htmlspecialchars($td['department']) ?><?= $td['department'] && $td['line'] ? ' · ' : '' ?><?= htmlspecialchars($td['line']) ?><?= $td['line'] && $td['operation_process'] ? ' · ' : '' ?><?= htmlspecialchars($td['operation_process']) ?></p>
                                             </div>
                                         <?php endforeach; ?>
                                     </div>
                                     <!-- Right side: interval + dots -->
                                     <div class="flex-shrink-0 flex flex-col items-end gap-2">
-                                        <span id="predTickerInterval" class="bg-blue-50 border border-blue-200 text-blue-700 text-xs font-bold px-3 py-1 rounded-lg"><?= (int)($todaySchedArr[0]['interval_month'] ?? 0) ?> mo</span>
+                                        <span id="predTickerInterval" class="bg-[#f9eef5] border border-[#c97aad] text-[#5f0f40] text-xs font-bold px-3 py-1 rounded-lg"><?= (int)($todaySchedArr[0]['interval_month'] ?? 0) ?> mo</span>
                                         <?php if ($todayCount > 1): ?>
                                             <div class="flex gap-1" id="predDots">
                                                 <?php for ($i = 0; $i < min($todayCount, 8); $i++): ?>
-                                                    <span class="pred-dot block rounded-full transition-all duration-300" style="height:7px;width:<?= $i === 0 ? '16' : '7' ?>px;background:<?= $i === 0 ? '#2563eb' : '#bfdbfe' ?>;"></span>
+                                                    <span class="pred-dot block rounded-full transition-all duration-300" style="height:7px;width:<?= $i === 0 ? '16' : '7' ?>px;background:<?= $i === 0 ? '#5f0f40' : '#f2d4e8' ?>;"></span>
                                                 <?php endfor; ?>
                                             </div>
                                         <?php endif; ?>
@@ -1475,12 +1475,12 @@ HTML;
                             <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
                             <input type="text" id="searchInput" placeholder="Search machine, maintenance point, line..."
                                 oninput="applyFilters()"
-                                class="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none transition shadow-sm text-sm">
+                                class="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-[#f2d4e8] outline-none transition shadow-sm text-sm">
                         </div>
                         <div class="relative">
                             <i class="fas fa-filter absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
                             <select id="filterLine" onchange="applyFilters()"
-                                class="pl-11 pr-10 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none transition shadow-sm text-sm appearance-none font-medium min-w-[180px]">
+                                class="pl-11 pr-10 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-[#f2d4e8] outline-none transition shadow-sm text-sm appearance-none font-medium min-w-[180px]">
                                 <option value="">All Line</option>
                                 <?php foreach ($uniqueLines as $ln): ?>
                                     <option value="<?= htmlspecialchars($ln) ?>"><?= htmlspecialchars($ln) ?></option>
@@ -1496,11 +1496,11 @@ HTML;
                         <!-- Predictive Action Buttons -->
                         <div id="predictiveActions" class="flex items-center gap-2 w-full lg:w-auto">
                             <button onclick="showAddModal()"
-                                class="flex-1 lg:flex-none bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+                                class="flex-1 lg:flex-none bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
                                 <i class="fas fa-plus"></i> Add
                             </button>
                             <button onclick="showImportModal()"
-                                class="flex-1 lg:flex-none bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+                                class="flex-1 lg:flex-none bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
                                 <i class="fas fa-file-excel"></i> Import
                             </button>
                             <button onclick="showAddMachineModal()"
@@ -1514,7 +1514,7 @@ HTML;
                     <div class="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
                         <div style="max-height:540px;overflow-y:auto;overflow-x:auto;">
                             <table class="w-full text-left border-collapse" id="schedTable">
-                                <thead class="bg-slate-800 text-white" style="background:linear-gradient(135deg, #1e40af, #2563eb);position:sticky;top:0;z-index:10;">
+                                <thead class="bg-slate-800 text-white" style="background:linear-gradient(135deg, #5f0f40, #7a1a5a);position:sticky;top:0;z-index:10;">
                                     <tr>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest whitespace-nowrap">Machine Information</th>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest whitespace-nowrap">Maintenance Point</th>
@@ -1598,7 +1598,7 @@ HTML;
                                             <td class="px-5 py-3 text-center">
                                                 <div class="flex items-center justify-center gap-1.5">
                                                     <button onclick="showEditModal(<?= $row['id'] ?>)"
-                                                        class="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition" title="Edit">
+                                                        class="bg-[#7a1a5a] text-white p-2 rounded-lg hover:bg-[#5f0f40] transition" title="Edit">
                                                         <i class="fas fa-edit text-xs"></i>
                                                     </button>
                                                     <?php if ($canReport): ?>
@@ -1647,20 +1647,20 @@ HTML;
                     $prevTodayCount = count($prevTodayArr);
                     ?>
                     <div id="prevTodayCard"
-                        class="bg-white rounded-3xl border border-teal-200 shadow-sm mb-5 overflow-hidden cursor-pointer select-none transition-all duration-200 hover:shadow-md hover:border-teal-400"
+                        class="bg-white rounded-3xl border border-[#e8c5da] shadow-sm mb-5 overflow-hidden cursor-pointer select-none transition-all duration-200 hover:shadow-md hover:border-[#c97aad]"
                         onclick="openTodayModal('prev')"
                         title="Klik untuk lihat semua jadwal hari ini">
 
                         <!-- Header -->
-                        <div class="flex items-center justify-between px-5 pt-5 pb-3 border-b border-teal-50">
-                            <p class="text-xs font-black text-teal-500 uppercase tracking-widest flex items-center gap-2">
+                        <div class="flex items-center justify-between px-5 pt-5 pb-3 border-b border-[#f9eef5]">
+                            <p class="text-xs font-black text-[#8b1a6b] uppercase tracking-widest flex items-center gap-2">
                                 <i class="fas fa-calendar-day"></i> Today's Schedule — <?= date('d M Y') ?>
                             </p>
                             <div class="flex items-center gap-2">
                                 <?php if ($prevTodayCount > 0): ?>
-                                    <span class="bg-teal-600 text-white text-xs font-black px-2.5 py-0.5 rounded-full"><?= $prevTodayCount ?> jadwal</span>
+                                    <span class="bg-[#8b1a6b] text-white text-xs font-black px-2.5 py-0.5 rounded-full"><?= $prevTodayCount ?> jadwal</span>
                                 <?php endif; ?>
-                                <span class="text-teal-300 text-xs font-bold flex items-center gap-1 italic">
+                                <span class="text-[#d9a3c8] text-xs font-bold flex items-center gap-1 italic">
                                     <i class="fas fa-expand-alt"></i> Klik untuk lihat semua
                                 </span>
                             </div>
@@ -1673,25 +1673,25 @@ HTML;
                             <?php else: ?>
                                 <div class="flex items-center gap-4">
                                     <!-- Index bubble -->
-                                    <div id="prevTickerIdx" class="flex-shrink-0 w-11 h-11 rounded-full bg-teal-600 text-white flex items-center justify-center text-base font-black shadow">1</div>
+                                    <div id="prevTickerIdx" class="flex-shrink-0 w-11 h-11 rounded-full bg-[#8b1a6b] text-white flex items-center justify-center text-base font-black shadow">1</div>
                                     <!-- Text content -->
                                     <div class="flex-1 min-w-0 relative" style="height:68px;">
                                         <?php foreach ($prevTodayArr as $i => $td): ?>
                                             <div class="prev-ticker-item absolute inset-0 flex flex-col justify-center transition-all duration-500"
                                                 style="opacity:<?= $i === 0 ? '1' : '0' ?>;transform:translateY(<?= $i === 0 ? '0' : '8px' ?>);">
                                                 <p class="font-black text-slate-800 text-base leading-tight truncate"><?= htmlspecialchars($td['machine_name']) ?></p>
-                                                <p class="text-teal-600 text-sm font-semibold truncate mt-1"><?= htmlspecialchars($td['maintenance_point']) ?></p>
+                                                <p class="text-[#8b1a6b] text-sm font-semibold truncate mt-1"><?= htmlspecialchars($td['maintenance_point']) ?></p>
                                                 <p class="text-slate-400 text-xs mt-0.5 truncate"><?= htmlspecialchars($td['department']) ?><?= $td['department'] && $td['line'] ? ' · ' : '' ?><?= htmlspecialchars($td['line']) ?><?= $td['line'] && $td['operation_process'] ? ' · ' : '' ?><?= htmlspecialchars($td['operation_process']) ?></p>
                                             </div>
                                         <?php endforeach; ?>
                                     </div>
                                     <!-- Right side: interval + dots -->
                                     <div class="flex-shrink-0 flex flex-col items-end gap-2">
-                                        <span id="prevTickerInterval" class="bg-teal-50 border border-teal-200 text-teal-700 text-xs font-bold px-3 py-1 rounded-lg"><?= (int)($prevTodayArr[0]['interval_month'] ?? 0) ?> mo</span>
+                                        <span id="prevTickerInterval" class="bg-[#f9eef5] border border-[#e8c5da] text-[#8b1a6b] text-xs font-bold px-3 py-1 rounded-lg"><?= (int)($prevTodayArr[0]['interval_month'] ?? 0) ?> mo</span>
                                         <?php if ($prevTodayCount > 1): ?>
                                             <div class="flex gap-1" id="prevDots">
                                                 <?php for ($i = 0; $i < min($prevTodayCount, 8); $i++): ?>
-                                                    <span class="prev-dot block rounded-full transition-all duration-300" style="height:7px;width:<?= $i === 0 ? '16' : '7' ?>px;background:<?= $i === 0 ? '#0d9488' : '#99f6e4' ?>;"></span>
+                                                    <span class="prev-dot block rounded-full transition-all duration-300" style="height:7px;width:<?= $i === 0 ? '16' : '7' ?>px;background:<?= $i === 0 ? '#8b1a6b' : '#99f6e4' ?>;"></span>
                                                 <?php endfor; ?>
                                             </div>
                                         <?php endif; ?>
@@ -1741,12 +1741,12 @@ HTML;
                             <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
                             <input type="text" id="prevSearchInput" placeholder="Search machine, maintenance point, line..."
                                 oninput="applyPrevFilters()"
-                                class="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-teal-100 outline-none transition shadow-sm text-sm">
+                                class="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-[#f2d4e8] outline-none transition shadow-sm text-sm">
                         </div>
                         <div class="relative">
                             <i class="fas fa-filter absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
                             <select id="prevFilterLine" onchange="applyPrevFilters()"
-                                class="pl-11 pr-10 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-teal-100 outline-none transition shadow-sm text-sm appearance-none font-medium min-w-[180px]">
+                                class="pl-11 pr-10 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-[#f2d4e8] outline-none transition shadow-sm text-sm appearance-none font-medium min-w-[180px]">
                                 <option value="">All Line</option>
                                 <?php foreach ($prevUniqueLines as $ln): ?>
                                     <option value="<?= htmlspecialchars($ln) ?>"><?= htmlspecialchars($ln) ?></option>
@@ -1842,7 +1842,7 @@ HTML;
                                                 <td class="px-5 py-3 text-center">
                                                     <div class="flex items-center justify-center gap-1.5">
                                                         <button onclick="showPrevEditModal(<?= $row['id'] ?>)"
-                                                            class="bg-teal-500 text-white p-2 rounded-lg hover:bg-teal-600 transition" title="Edit">
+                                                            class="bg-[#8b1a6b] text-white p-2 rounded-lg hover:bg-[#8b1a6b] transition" title="Edit">
                                                             <i class="fas fa-edit text-xs"></i>
                                                         </button>
                                                         <?php if ($canReport): ?>
@@ -1879,7 +1879,7 @@ HTML;
             <!-- ========================= MODAL TAMBAH ========================= -->
             <div id="addModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
                 <div class="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden">
-                    <div class="bg-slate-800 px-8 py-6 flex justify-between items-center" style="background:linear-gradient(135deg, #1e40af, #2563eb);">
+                    <div class="bg-slate-800 px-8 py-6 flex justify-between items-center" style="background:linear-gradient(135deg, #5f0f40, #7a1a5a);">
                         <h3 class="text-xl font-bold text-white">Add Predictive Maintenance Schedule</h3>
                         <button onclick="hideModal('addModal')" class="text-slate-400 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
                     </div>
@@ -1890,7 +1890,7 @@ HTML;
                         <?php echo renderFormFields('add', $plants); ?>
                         <div class="flex justify-end gap-3">
                             <button type="button" onclick="hideModal('addModal')" class="px-8 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition">Cancel</button>
-                            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-10 py-3 rounded-xl font-black shadow-lg shadow-blue-200 transition-all">Save</button>
+                            <button type="submit" class="bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-10 py-3 rounded-xl font-black shadow-lg shadow-[#c97aad] transition-all">Save</button>
                         </div>
                     </form>
                 </div>
@@ -1899,9 +1899,9 @@ HTML;
             <!-- ========================= MODAL EDIT ========================= -->
             <div id="editModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
                 <div class="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden">
-                    <div class="bg-blue-600 px-8 py-6 flex justify-between items-center">
+                    <div class="bg-[#5f0f40] px-8 py-6 flex justify-between items-center">
                         <h3 class="text-xl font-bold text-white"><i class="fas fa-edit mr-2"></i>Edit Jadwal Predictive</h3>
-                        <button onclick="hideModal('editModal')" class="text-blue-200 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
+                        <button onclick="hideModal('editModal')" class="text-[#e8c5da] hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
                     </div>
                     <form id="editForm" class="p-8 max-h-[85vh] overflow-y-auto">
                         <input type="hidden" name="action" value="edit">
@@ -1943,7 +1943,7 @@ HTML;
                         </div>
                         <div class="flex justify-end gap-3">
                             <button type="button" onclick="hideModal('editModal')" class="px-8 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition">Batal</button>
-                            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-10 py-3 rounded-xl font-black shadow-lg shadow-blue-200 transition-all">Update Data</button>
+                            <button type="submit" class="bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-10 py-3 rounded-xl font-black shadow-lg shadow-[#c97aad] transition-all">Update Data</button>
                         </div>
                     </form>
                 </div>
@@ -1952,7 +1952,7 @@ HTML;
             <!-- ========================= MODAL IMPORT EXCEL ========================= -->
             <div id="importModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
                 <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
-                    <div class="bg-blue-700 px-6 py-4 flex justify-between items-center">
+                    <div class="bg-[#4a0b31] px-6 py-4 flex justify-between items-center">
                         <h3 class="text-base font-bold text-white"><i class="fas fa-file-excel mr-2"></i>Import data from excel</h3>
                         <button onclick="hideModal('importModal')" class="text-green-200 hover:text-white transition"><i class="fas fa-times text-lg"></i></button>
                     </div>
@@ -1996,7 +1996,7 @@ HTML;
                             <button type="button" onclick="hideModal('importModal')"
                                 class="px-6 py-2.5 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
                             <button id="btnStartImport" onclick="startImport()" disabled
-                                class="bg-blue-600 text-white px-8 py-2.5 rounded-xl font-black shadow-lg transition-all opacity-50 cursor-not-allowed flex items-center gap-2 text-sm">
+                                class="bg-[#5f0f40] text-white px-8 py-2.5 rounded-xl font-black shadow-lg transition-all opacity-50 cursor-not-allowed flex items-center gap-2 text-sm">
                                 <i class="fas fa-upload"></i> Import Sekarang
                             </button>
                         </div>
@@ -2053,7 +2053,7 @@ HTML;
             <!-- MODAL: FORM REPORT -->
             <div id="reportModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
                 <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden">
-                    <div class="bg-gradient-to-r from-blue-600 to-indigo-600 px-5 py-3  flex justify-between items-center">
+                    <div class="bg-gradient-to-r from-[#5f0f40] to-[#7a1a5a] px-5 py-3  flex justify-between items-center">
                         <div>
                             <h3 class="text-base font-bold text-white"><i class="fas fa-clipboard-check mr-2"></i>Form Report Predictive Maintenance</h3>
                             <p class="text-emerald-100 text-xs mt-0.5" id="reportModalMachine">—</p>
@@ -2111,7 +2111,7 @@ HTML;
                         <div class="flex justify-end gap-3">
                             <button type="button" onclick="hideModal('reportModal')" class="px-6 py-2 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
                             <button type="button" id="btnSubmitReport" onclick="submitReport()"
-                                class="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2 rounded-xl font-black shadow-lg transition text-sm">
+                                class="bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-8 py-2 rounded-xl font-black shadow-lg transition text-sm">
                                 <i class="fas fa-paper-plane mr-1"></i> Submit Report
                             </button>
                         </div>
@@ -2174,7 +2174,7 @@ HTML;
                     const indicator = document.getElementById('tabIndicator');
                     indicator.style.transform = isPred ? 'translateX(0)' : 'translateX(calc(100% + 4px))';
                     indicator.style.background = isPred ?
-                        'linear-gradient(135deg,#2563eb,#1d4ed8)' :
+                        'linear-gradient(135deg, #5f0f40, #7a1a5a)' :
                         'linear-gradient(135deg,#4338ca,#4f46e5)';
                     // Text colors
                     document.getElementById('tabPredictive').style.color = isPred ? '#fff' : '#64748b';
@@ -2285,13 +2285,13 @@ HTML;
                             showAlert('reportAlert', 'error', '❌ ' + (r.message || 'Gagal'));
                             btn.disabled = false;
                             btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> Submit Report';
-                            btn.className = 'bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm';
+                            btn.className = 'bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm';
                         }
                     } catch (e) {
                         showAlert('reportAlert', 'error', '❌ Gagal: ' + e.message);
                         btn.disabled = false;
                         btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> Submit Report';
-                        btn.className = 'bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm';
+                        btn.className = 'bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm';
                     }
                 }
 
@@ -2440,7 +2440,7 @@ HTML;
                 function setDropdownEnabled(el, enabled) {
                     el.disabled = !enabled;
                     el.className = enabled ?
-                        'w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-blue-100 outline-none transition cursor-pointer' :
+                        'w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition cursor-pointer' :
                         'w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-3 outline-none cursor-not-allowed';
                 }
 
@@ -2642,7 +2642,7 @@ HTML;
                 function openPrevStatusModal(status) {
                     const cfg = STATUS_CFG[status] || {};
                     const items = PREV_BY_STATUS[status] || [];
-                    document.getElementById('prevStatusModalHeader').style.background = cfg.bg || '#0f766e';
+                    document.getElementById('prevStatusModalHeader').style.background = cfg.bg || '#7a1355';
                     document.getElementById('prevStatusModalTitle').textContent = (cfg.label || status) + ' — ' + items.length + ' jadwal';
                     document.getElementById('prevStatusModalCount').textContent = items.length + ' jadwal ditemukan';
                     const tbody = document.getElementById('prevStatusModalBody');
@@ -2710,7 +2710,7 @@ HTML;
                     // Tombol selalu aktif (tidak ada kolom part_order/part_availability di preventive)
                     const btn = document.getElementById('btnSubmitPrevReport');
                     btn.disabled = false;
-                    btn.style.background = '#0f766e';
+                    btn.style.background = '#7a1355';
                     btn.style.cursor = 'pointer';
                     showModal('prevReportModal');
                 }
@@ -2770,7 +2770,7 @@ HTML;
                             al.classList.remove('hidden');
                             btn.disabled = false;
                             btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> Submit Report';
-                            btn.style.background = '#0f766e';
+                            btn.style.background = '#7a1355';
                             btn.style.cursor = 'pointer';
                         }
                     } catch (err) {
@@ -2780,7 +2780,7 @@ HTML;
                         al.classList.remove('hidden');
                         btn.disabled = false;
                         btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> Submit Report';
-                        btn.style.background = '#0f766e';
+                        btn.style.background = '#7a1355';
                         btn.style.cursor = 'pointer';
                     }
                 }
@@ -2803,7 +2803,7 @@ HTML;
                     if (btn) {
                         btn.disabled = true;
                         btn.classList.add('opacity-50', 'cursor-not-allowed');
-                        btn.classList.remove('hover:bg-teal-800');
+                        btn.classList.remove('hover:bg-[#5f0f40]');
                     }
                     showModal('prevImportModal');
                 }
@@ -2825,7 +2825,7 @@ HTML;
                     const btn = document.getElementById('btnStartPrevImport');
                     btn.disabled = false;
                     btn.classList.remove('opacity-50', 'cursor-not-allowed');
-                    btn.classList.add('hover:bg-teal-800');
+                    btn.classList.add('hover:bg-[#5f0f40]');
                 }
 
                 function handlePrevFileSelect(e) {
@@ -2881,7 +2881,7 @@ HTML;
     ========================================================== -->
             <div id="prevAddModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
                 <div class="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden">
-                    <div class="px-8 py-6 flex justify-between items-center" style="background:linear-gradient(135deg, #1e40af, #2563eb);">
+                    <div class="px-8 py-6 flex justify-between items-center" style="background:linear-gradient(135deg, #5f0f40, #7a1a5a);">
                         <h3 class="text-xl font-bold text-white"><i class="fas fa-shield-halved mr-2"></i>Add Preventive Maintenance Schedule</h3>
                         <button onclick="hideModal('prevAddModal')" class="text-white/60 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
                     </div>
@@ -2892,7 +2892,7 @@ HTML;
                         <?php echo renderFormFields('prev_add', $plants); ?>
                         <div class="flex justify-end gap-3 mt-2">
                             <button type="button" onclick="hideModal('prevAddModal')" class="px-8 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition">Cancel</button>
-                            <button type="submit" class="text-white px-10 py-3 rounded-xl font-black shadow-lg transition-all" style="background:#0f766e;">Save</button>
+                            <button type="submit" class="text-white px-10 py-3 rounded-xl font-black shadow-lg transition-all" style="background:#7a1355;">Save</button>
                         </div>
                     </form>
                 </div>
@@ -2916,15 +2916,15 @@ HTML;
                         <input type="hidden" name="line_name" id="prev_edit_line_name_val">
                         <?php echo renderFormFields('prev_edit', $plants); ?>
                         <div class="mb-6 border-t pt-6">
-                            <div class="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 text-sm text-teal-700 font-medium">
+                            <div class="bg-[#f9eef5] border border-[#e8c5da] rounded-xl px-4 py-3 text-sm text-[#8b1a6b] font-medium">
                                 <i class="fas fa-info-circle mr-2"></i>
                                 <strong>Maintenance Status</strong> dikelola otomatis oleh sistem:
-                                <span class="block mt-1 text-xs text-teal-600">• Jauh dari reminder → <strong>DONE</strong> &nbsp;|&nbsp; Masuk window reminder → <strong>SOON</strong> &nbsp;|&nbsp; Setelah submit report → <strong>DONE</strong></span>
+                                <span class="block mt-1 text-xs text-[#8b1a6b]">• Jauh dari reminder → <strong>DONE</strong> &nbsp;|&nbsp; Masuk window reminder → <strong>SOON</strong> &nbsp;|&nbsp; Setelah submit report → <strong>DONE</strong></span>
                             </div>
                         </div>
                         <div class="flex justify-end gap-3">
                             <button type="button" onclick="hideModal('prevEditModal')" class="px-8 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition">Batal</button>
-                            <button type="submit" class="bg-teal-600 hover:bg-teal-700 text-white px-10 py-3 rounded-xl font-black shadow-lg transition-all">Update Data</button>
+                            <button type="submit" class="bg-[#8b1a6b] hover:bg-[#7a1355] text-white px-10 py-3 rounded-xl font-black shadow-lg transition-all">Update Data</button>
                         </div>
                     </form>
                 </div>
@@ -2957,7 +2957,7 @@ HTML;
                     </div>
                     <div class="px-7 py-4 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
                         <span id="prevStatusModalCount" class="text-xs text-slate-400 font-medium"></span>
-                        <button onclick="hideModal('prevStatusModal')" class="px-5 py-2 bg-teal-700 text-white rounded-xl font-bold text-sm hover:bg-teal-800 transition">Tutup</button>
+                        <button onclick="hideModal('prevStatusModal')" class="px-5 py-2 bg-[#7a1355] text-white rounded-xl font-bold text-sm hover:bg-[#5f0f40] transition">Tutup</button>
                     </div>
                 </div>
             </div>
@@ -2967,12 +2967,12 @@ HTML;
     ========================================================== -->
             <div id="prevReportModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
                 <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden">
-                    <div class="px-5 py-4 flex justify-between items-center" style="background:linear-gradient(135deg,#0f766e,#0d9488);">
+                    <div class="px-5 py-4 flex justify-between items-center" style="background:linear-gradient(135deg,#7a1355,#8b1a6b);">
                         <div>
                             <h3 class="text-base font-bold text-white"><i class="fas fa-clipboard-check mr-2"></i>Form Report Preventive</h3>
-                            <p class="text-teal-100 text-xs mt-0.5" id="prevReportModalMachine">—</p>
+                            <p class="text-[#f2d4e8] text-xs mt-0.5" id="prevReportModalMachine">—</p>
                         </div>
-                        <button onclick="hideModal('prevReportModal')" class="text-teal-100 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition"><i class="fas fa-times"></i></button>
+                        <button onclick="hideModal('prevReportModal')" class="text-[#f2d4e8] hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition"><i class="fas fa-times"></i></button>
                     </div>
                     <form id="prevReportForm" class="p-5">
                         <input type="hidden" name="prev_action" value="prev_report">
@@ -2982,28 +2982,28 @@ HTML;
                         <div class="mb-3">
                             <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tanggal Aktual Pekerjaan <span class="text-red-500">*</span></label>
                             <input type="date" name="actual_date" id="prev_report_actual_date" required
-                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-teal-100 outline-none transition text-sm">
+                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
                             <p class="text-xs text-slate-400 mt-1">Last Change akan diperbarui ke tanggal ini, dan Next Change = tanggal ini + interval.</p>
                         </div>
                         <div class="mb-3">
                             <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Teknisi <span class="text-red-500">*</span></label>
                             <input type="text" name="teknisi" id="prev_report_teknisi" required
                                 placeholder="Nama teknisi yang mengerjakan..."
-                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-teal-100 outline-none transition text-sm">
+                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
                         </div>
                         <div class="mb-3">
                             <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Keterangan / Note <span class="text-red-500">*</span></label>
                             <textarea name="note" rows="3" required placeholder="Tuliskan detail pekerjaan preventive maintenance..."
-                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-teal-100 outline-none transition text-sm resize-none"></textarea>
+                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm resize-none"></textarea>
                         </div>
                         <div class="mb-3">
                             <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Foto Dokumentasi <span class="text-red-500">*</span></label>
-                            <div class="border-2 border-dashed border-slate-200 rounded-xl p-3 text-center cursor-pointer hover:border-teal-400 hover:bg-teal-50/30 transition"
+                            <div class="border-2 border-dashed border-slate-200 rounded-xl p-3 text-center cursor-pointer hover:border-[#c97aad] hover:bg-[#f9eef5]/30 transition"
                                 onclick="document.getElementById('prev_report_photo').click()">
                                 <i class="fas fa-image text-2xl text-slate-200 mb-1 block"></i>
                                 <p class="text-xs text-slate-400 font-medium">Klik untuk pilih foto</p>
                                 <p class="text-xs text-slate-300">.jpg .jpeg .png — maks 5MB</p>
-                                <p class="text-xs text-teal-600 font-bold mt-2 hidden" id="prevPhotoNameLabel"></p>
+                                <p class="text-xs text-[#8b1a6b] font-bold mt-2 hidden" id="prevPhotoNameLabel"></p>
                             </div>
                             <input type="file" name="photo" id="prev_report_photo" accept=".jpg,.jpeg,.png,.webp" class="hidden"
                                 onchange="document.getElementById('prevPhotoNameLabel').textContent=this.files[0]?.name||''; document.getElementById('prevPhotoNameLabel').classList.toggle('hidden',!this.files[0])">
@@ -3012,7 +3012,7 @@ HTML;
                         <div class="flex justify-end gap-3">
                             <button type="button" onclick="hideModal('prevReportModal')" class="px-6 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
                             <button type="button" id="btnSubmitPrevReport" onclick="submitPrevReport()"
-                                class="btn-submit-prev text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm" style="background:#0f766e;">
+                                class="btn-submit-prev text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm" style="background:#7a1355;">
                                 <i class="fas fa-paper-plane mr-1"></i> Submit Report
                             </button>
                         </div>
@@ -3027,28 +3027,28 @@ HTML;
                 <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
                     <div class="px-5 py-4 flex justify-between items-center" style="background:linear-gradient(135deg, #3730a3, #4f46e5);">
                         <h3 class="text-base font-bold text-white"><i class="fas fa-file-excel mr-2"></i>Import Data Preventive dari Excel</h3>
-                        <button onclick="hideModal('prevImportModal')" class="text-teal-100 hover:text-white transition"><i class="fas fa-times text-lg"></i></button>
+                        <button onclick="hideModal('prevImportModal')" class="text-[#f2d4e8] hover:text-white transition"><i class="fas fa-times text-lg"></i></button>
                     </div>
                     <div class="p-5">
                         <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4 text-sm">
                             <p class="font-black text-slate-600 mb-2 text-xs uppercase tracking-widest">📋 Mapping Kolom Excel → Preventive</p>
                             <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-slate-600 font-medium text-xs">
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">DEPARTEMENT</span><span class="text-slate-400">→</span><span>Department</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">LINE</span><span class="text-slate-400">→</span><span>Line</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">OPERATION PROCESS</span><span class="text-slate-400">→</span><span>Op. Process</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">MACHINE NAME</span><span class="text-slate-400">→</span><span>Machine Name</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">PROCESS MACHINE</span><span class="text-slate-400">→</span><span>Process Machine</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">NAME UNIT</span><span class="text-slate-400">→</span><span>Unit Name</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">MAINTENANCE POINT</span><span class="text-slate-400">→</span><span>Maint. Point</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">INTERVAL (MONTH)</span><span class="text-slate-400">→</span><span>Interval</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">USE DATE</span><span class="text-slate-400">→</span><span>Last Change</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">CHANGE DATE PLAN</span><span class="text-slate-400">→</span><span>Change Plan</span></div>
-                                <div class="flex items-center gap-1.5"><span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-mono text-[10px]">REMINDER ACTIVITY</span><span class="text-slate-400">→</span><span>Reminder</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">DEPARTEMENT</span><span class="text-slate-400">→</span><span>Department</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">LINE</span><span class="text-slate-400">→</span><span>Line</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">OPERATION PROCESS</span><span class="text-slate-400">→</span><span>Op. Process</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">MACHINE NAME</span><span class="text-slate-400">→</span><span>Machine Name</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">PROCESS MACHINE</span><span class="text-slate-400">→</span><span>Process Machine</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">NAME UNIT</span><span class="text-slate-400">→</span><span>Unit Name</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">MAINTENANCE POINT</span><span class="text-slate-400">→</span><span>Maint. Point</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">INTERVAL (MONTH)</span><span class="text-slate-400">→</span><span>Interval</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">USE DATE</span><span class="text-slate-400">→</span><span>Last Change</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">CHANGE DATE PLAN</span><span class="text-slate-400">→</span><span>Change Plan</span></div>
+                                <div class="flex items-center gap-1.5"><span class="bg-[#f9eef5] text-[#8b1a6b] px-1.5 py-0.5 rounded font-mono text-[10px]">REMINDER ACTIVITY</span><span class="text-slate-400">→</span><span>Reminder</span></div>
                             </div>
                             <p class="text-[10px] text-slate-400 mt-2 italic">⚠️ Kolom Part Order &amp; Part Availability tidak ada di preventive.</p>
                         </div>
                         <div id="prevDropZone"
-                            class="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center cursor-pointer transition-all hover:border-teal-500 hover:bg-teal-50 mb-4"
+                            class="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center cursor-pointer transition-all hover:border-[#f9eef5]0 hover:bg-[#f9eef5] mb-4"
                             onclick="document.getElementById('prevExcelFileInput').click()"
                             ondragover="event.preventDefault();this.classList.add('dragover')"
                             ondragleave="this.classList.remove('dragover')"
@@ -3057,7 +3057,7 @@ HTML;
                             <p class="font-bold text-slate-600 text-sm">Klik atau drag &amp; drop file Excel di sini</p>
                             <p class="text-slate-400 text-xs mt-1">Format: .xlsx atau .xls &nbsp;|&nbsp; Maks: 10 MB</p>
                             <div id="prevSelectedFileName" class="mt-3 hidden">
-                                <span class="bg-teal-100 text-teal-700 font-bold px-3 py-1 rounded-full text-xs" id="prevFileNameLabel"></span>
+                                <span class="bg-[#f9eef5] text-[#8b1a6b] font-bold px-3 py-1 rounded-full text-xs" id="prevFileNameLabel"></span>
                             </div>
                         </div>
                         <input type="file" id="prevExcelFileInput" accept=".xlsx,.xls" class="hidden" onchange="handlePrevFileSelect(event)">
@@ -3067,7 +3067,7 @@ HTML;
                                 class="px-6 py-2.5 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
                             <button id="btnStartPrevImport" onclick="startPrevImport()" disabled
                                 class="text-white px-8 py-2.5 rounded-xl font-black shadow-lg transition-all opacity-50 cursor-not-allowed flex items-center gap-2 text-sm"
-                                style="background:#0f766e;">
+                                style="background:#7a1355;">
                                 <i class="fas fa-upload"></i> Import Sekarang
                             </button>
                         </div>
@@ -3078,13 +3078,13 @@ HTML;
             <!-- Loading overlay preventive -->
             <div id="prevImportOverlay" style="position:fixed;inset:0;background:rgba(15,118,110,.55);backdrop-filter:blur(4px);z-index:9999;align-items:center;justify-content:center;">
                 <div class="bg-white rounded-3xl shadow-2xl p-10 text-center max-w-sm w-full mx-4">
-                    <div class="w-16 h-16 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <i class="fas fa-spinner fa-spin text-teal-600 text-2xl"></i>
+                    <div class="w-16 h-16 bg-[#f9eef5] rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-spinner fa-spin text-[#8b1a6b] text-2xl"></i>
                     </div>
                     <p class="font-bold text-slate-700 text-lg mb-2">Sedang mengimport data...</p>
                     <p class="text-slate-400 text-sm mb-4">Mohon tunggu, jangan tutup halaman ini.</p>
                     <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                        <div class="anim-bar bg-teal-500 h-2 w-1/3 rounded-full"></div>
+                        <div class="anim-bar bg-[#8b1a6b] h-2 w-1/3 rounded-full"></div>
                     </div>
                 </div>
             </div>
@@ -3166,8 +3166,8 @@ HTML;
                     dots.forEach((el, n) => {
                         el.style.width = n === i ? '14px' : '6px';
                         el.style.background = type === 'pred' ?
-                            (n === i ? '#2563eb' : '#bfdbfe') :
-                            (n === i ? '#0d9488' : '#99f6e4');
+                            (n === i ? '#5f0f40' : '#f2d4e8') :
+                            (n === i ? '#8b1a6b' : '#99f6e4');
                     });
                     if (idxEl) idxEl.textContent = i + 1;
                     if (ivEl && data[i]) ivEl.textContent = data[i].interval || '-';
@@ -3186,16 +3186,16 @@ HTML;
                 function openTodayModal(type) {
                     const data = TODAY_DATA[type];
                     const isPred = type === 'pred';
-                    const color = isPred ? 'linear-gradient(135deg,#1e40af,#2563eb)' : 'linear-gradient(135deg,#0f766e,#0d9488)';
+                    const color = isPred ? 'linear-gradient(135deg,#5f0f40,#5f0f40)' : 'linear-gradient(135deg,#7a1355,#8b1a6b)';
                     const label = isPred ? 'Predictive' : 'Preventive';
 
                     document.getElementById('todayModalHeader').style.background = color;
                     document.getElementById('todayModalTitle').textContent = `${label} — ${data.length} Jadwal Hari Ini`;
                     document.getElementById('todayModalCount').textContent = `${data.length} jadwal ditemukan`;
 
-                    const itemColor = isPred ? '#2563eb' : '#0d9488';
-                    const bgPill = isPred ? '#eff6ff' : '#f0fdfa';
-                    const bdPill = isPred ? '#bfdbfe' : '#99f6e4';
+                    const itemColor = isPred ? '#5f0f40' : '#8b1a6b';
+                    const bgPill = isPred ? '#f9eef5' : '#f0fdfa';
+                    const bdPill = isPred ? '#f2d4e8' : '#99f6e4';
 
                     if (!data.length) {
                         document.getElementById('todayModalBody').innerHTML =
@@ -3282,7 +3282,7 @@ HTML;
                             <input type="text" name="process_machine" id="am_process_machine"
                                 placeholder="Otomatis terisi jika plant Connecting Rod"
                                 class="w-full border border-slate-200 rounded-xl px-3 py-2 focus:ring-4 focus:ring-slate-100 outline-none transition text-sm bg-slate-50">
-                            <p id="am_proc_mach_note" class="text-xs text-blue-500 mt-1" style="display:none;">
+                            <p id="am_proc_mach_note" class="text-xs text-[#8b1a6b] mt-1" style="display:none;">
                                 <i class="fas fa-info-circle"></i> Otomatis diisi "machining" untuk plant Connecting Rod.
                             </p>
                         </div>

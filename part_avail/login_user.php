@@ -3,7 +3,7 @@ session_start();
 require_once __DIR__ . '/config.php';
 
 // Whitelist halaman yang boleh dijadikan redirect tujuan
-$allowed_redirects = ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php'];
+$allowed_redirects = ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php', 'dashboard_report.php'];
 $redirect = trim($_GET['redirect'] ?? $_POST['redirect'] ?? '');
 if (!in_array($redirect, $allowed_redirects)) {
     $redirect = 'dashboard_user.php';

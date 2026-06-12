@@ -288,7 +288,7 @@ $partsByCategory = [
 
         .badge-in {
             background: #d1fae5;
-            color: #065f46;
+            color: #6b0213;
             border-color: #6ee7b7;
         }
 
@@ -384,8 +384,8 @@ $partsByCategory = [
         }
 
         .tab-btn.active {
-            color: #0f766e;
-            border-bottom-color: #0f766e;
+            color: #9a031e;
+            border-bottom-color: #9a031e;
         }
 
         .tab-btn .tab-count {
@@ -404,14 +404,14 @@ $partsByCategory = [
         }
 
         .tab-btn.active .tab-count {
-            background: #ccfbf1;
-            color: #0f766e;
+            background: #fce7ea;
+            color: #9a031e;
         }
 
         /* ══ HISTORY BADGES ══ */
         .hbadge-plus {
             background: #d1fae5;
-            color: #065f46;
+            color: #6b0213;
             border-color: #6ee7b7;
         }
 
@@ -429,7 +429,7 @@ $partsByCategory = [
         <!-- HEADER -->
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
             <div>
-                <a href="index.php" class="text-emerald-600 font-bold text-sm flex items-center gap-2 mb-2 hover:gap-3 transition-all">
+                <a href="index.php" class="text-[#9a031e] font-bold text-sm flex items-center gap-2 mb-2 hover:gap-3 transition-all">
                     <i class="fas fa-arrow-left"></i> Back to Hub
                 </a>
                 <h1 class="text-3xl font-extrabold text-slate-800">📦 Part Availability</h1>
@@ -443,15 +443,15 @@ $partsByCategory = [
                         class="pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-2xl w-72 focus:ring-4 focus:ring-emerald-100 outline-none transition shadow-sm text-sm">
                 </div>
                 <button onclick="openModal('importModal')"
-                    class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-2xl font-bold shadow-lg shadow-emerald-100 transition-all flex items-center gap-2 text-sm">
+                    class="bg-[#9a031e] hover:bg-[#7a0318] text-white px-5 py-3 rounded-2xl font-bold shadow-lg shadow-[#fce7ea] transition-all flex items-center gap-2 text-sm">
                     <i class="fas fa-file-excel"></i> Import Excel
                 </button>
                 <button onclick="openModal('addModal')"
-                    class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-2xl font-bold shadow-lg shadow-emerald-100 transition-all flex items-center gap-2 text-sm">
+                    class="bg-[#9a031e] hover:bg-[#7a0318] text-white px-5 py-3 rounded-2xl font-bold shadow-lg shadow-[#fce7ea] transition-all flex items-center gap-2 text-sm">
                     <i class="fas fa-plus"></i> Tambah Part
                 </button>
                 <div class="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-xl">
-                    <div class="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center flex-shrink-0">
+                    <div class="w-7 h-7 rounded-full bg-[#9a031e] flex items-center justify-center flex-shrink-0">
                         <i class="fas fa-user text-white text-xs"></i>
                     </div>
                     <span class="text-sm font-bold text-slate-700"><?= htmlspecialchars($displayName) ?></span>
@@ -494,9 +494,9 @@ $partsByCategory = [
                     <p class="text-orange-400 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">Low Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
                     <p class="text-3xl font-black text-orange-600"><?= $lowStock ?></p>
                 </div>
-                <div class="stat-card bg-emerald-50 p-5 rounded-3xl border border-emerald-100 shadow-sm" onclick="openCategoryModal('In Stock')">
-                    <p class="text-emerald-500 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">In Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
-                    <p class="text-3xl font-black text-emerald-600"><?= $inStock ?></p>
+                <div class="stat-card bg-[#fff0f2] p-5 rounded-3xl border border-[#fce7ea] shadow-sm" onclick="openCategoryModal('In Stock')">
+                    <p class="text-[#9a031e] text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">In Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
+                    <p class="text-3xl font-black text-[#9a031e]"><?= $inStock ?></p>
                 </div>
                 <div class="stat-card bg-violet-50 p-5 rounded-3xl border border-violet-100 shadow-sm" onclick="openCategoryModal('Over Stock')">
                     <p class="text-violet-400 text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center">Over Stock<i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i></p>
@@ -508,7 +508,7 @@ $partsByCategory = [
             <div class="bg-white rounded-[2rem] shadow-xl border border-slate-200 overflow-hidden">
                 <div style="max-height:520px; overflow-y:auto; overflow-x:auto;">
                     <table class="w-full text-left border-collapse" id="partsTable">
-                        <thead class="bg-slate-800 text-white" style="background:linear-gradient(135deg,#0f766e,#0d9488);position:sticky;top:0;z-index:10;">
+                        <thead class="bg-slate-800 text-white" style="background:linear-gradient(135deg,#9a031e,#b5152a);position:sticky;top:0;z-index:10;">
                             <tr>
                                 <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest">No</th>
                                 <th class="px-6 py-4 text-[11px] font-semibold uppercase tracking-widest">Item Code</th>
@@ -546,7 +546,7 @@ $partsByCategory = [
                                             <span class="inline-block bg-slate-100 text-slate-600 font-bold px-3 py-1 rounded-lg text-sm"><?= $safety ?></span>
                                         </td>
                                         <td class="px-6 py-4 text-center font-black text-lg
-                            <?= $actual === 0 ? 'text-red-500' : ($actual < $safety ? 'text-orange-500' : ($actual === $safety ? 'text-emerald-600' : 'text-violet-600')) ?>">
+                            <?= $actual === 0 ? 'text-red-500' : ($actual < $safety ? 'text-orange-500' : ($actual === $safety ? 'text-[#9a031e]' : 'text-violet-600')) ?>">
                                             <?= $actual ?>
                                         </td>
                                         <td class="px-6 py-4 text-center font-bold text-sm <?= $effective < 0 ? 'text-red-500' : 'text-slate-600' ?>">
@@ -558,7 +558,7 @@ $partsByCategory = [
                                         <td class="px-6 py-4 text-center">
                                             <div class="flex items-center justify-center gap-2">
                                                 <button onclick="openEditModal(<?= $part['id'] ?>,'<?= htmlspecialchars($part['item_code'], ENT_QUOTES) ?>','<?= htmlspecialchars($part['item_description'] ?? '', ENT_QUOTES) ?>',<?= $actual ?>,<?= $safety ?>)"
-                                                    class="bg-emerald-400 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl font-bold text-xs transition flex items-center gap-1.5">
+                                                    class="bg-[#c91f38] hover:bg-[#b5152a] text-white px-3 py-2 rounded-xl font-bold text-xs transition flex items-center gap-1.5">
                                                     <i class="fas fa-pencil"></i> Edit
                                                 </button>
                                             </div>
@@ -603,7 +603,7 @@ $partsByCategory = [
             <div class="bg-white rounded-[2rem] shadow-xl border border-slate-200 overflow-hidden">
                 <div style="max-height:560px; overflow-y:auto; overflow-x:auto;">
                     <table class="w-full text-left border-collapse" id="historyTable">
-                        <thead style="background:linear-gradient(135deg,#1e293b,#334155);position:sticky;top:0;z-index:10;">
+                        <thead style="background:linear-gradient(135deg,#9a031e,#b5152a);position:sticky;top:0;z-index:10;">
                             <tr>
                                 <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white">No</th>
                                 <th class="px-5 py-4 text-[11px] font-semibold uppercase tracking-widest text-white">Waktu</th>
@@ -714,10 +714,10 @@ $partsByCategory = [
     <!-- MODAL: TAMBAH PART -->
     <div id="addModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
         <div class="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden modal-enter">
-            <div class="bg-gradient-to-r from-emerald-600 to-emerald-700 px-8 py-5 flex justify-between items-center">
+            <div class="bg-gradient-to-r from-[#9a031e] to-[#7a0318] px-8 py-5 flex justify-between items-center">
                 <div>
                     <h3 class="text-lg font-bold text-white"><i class="fas fa-plus-circle mr-2"></i>Tambah Part Baru</h3>
-                    <p class="text-emerald-200 text-xs mt-0.5">Isi semua kolom yang diperlukan</p>
+                    <p class="text-[#f9c4cc] text-xs mt-0.5">Isi semua kolom yang diperlukan</p>
                 </div>
                 <button onclick="closeModal('addModal')" class="text-blue-200 hover:text-white transition w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10"><i class="fas fa-times"></i></button>
             </div>
@@ -769,10 +769,10 @@ $partsByCategory = [
     <!-- MODAL: EDIT STOK -->
     <div id="editModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
         <div class="bg-white w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden modal-enter">
-            <div class="bg-gradient-to-r from-emerald-500 to-green-500 px-6 py-4 flex justify-between items-center">
+            <div class="bg-gradient-to-r from-[#b5152a] to-[#b5152a] px-6 py-4 flex justify-between items-center">
                 <div>
                     <h3 class="text-base font-bold text-white"><i class="fas fa-pencil mr-2"></i>Edit Actual Stock</h3>
-                    <p class="text-emerald-100 text-xs mt-0.5">Hanya actual stock yang dapat diubah</p>
+                    <p class="text-[#fce7ea] text-xs mt-0.5">Hanya actual stock yang dapat diubah</p>
                 </div>
                 <button onclick="closeModal('editModal')" class="text-amber-100 hover:text-white transition w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10"><i class="fas fa-times"></i></button>
             </div>
@@ -828,7 +828,7 @@ $partsByCategory = [
                 <div id="editAlert" class="hidden rounded-xl p-3 mb-3 text-sm font-medium border"></div>
                 <div class="flex justify-end gap-3">
                     <button onclick="closeModal('editModal')" class="px-5 py-2.5 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
-                    <button onclick="submitEditStock()" class="bg-emerald-500 hover:bg-emerald-600 text-white px-7 py-2.5 rounded-xl font-black shadow-lg transition text-sm">
+                    <button onclick="submitEditStock()" class="bg-[#b5152a] hover:bg-[#9a031e] text-white px-7 py-2.5 rounded-xl font-black shadow-lg transition text-sm">
                         <i class="fas fa-check mr-1"></i> Update
                     </button>
                 </div>
@@ -840,12 +840,12 @@ $partsByCategory = [
     <!-- MODAL: IMPORT EXCEL -->
     <div id="importModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
         <div class="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden modal-enter">
-            <div class="bg-gradient-to-r from-emerald-600 to-teal-600 px-8 py-5 flex justify-between items-center">
+            <div class="bg-gradient-to-r from-[#9a031e] to-[#7a1020] px-8 py-5 flex justify-between items-center">
                 <div>
                     <h3 class="text-lg font-bold text-white"><i class="fas fa-file-excel mr-2"></i>Import Parts dari Excel</h3>
-                    <p class="text-emerald-100 text-xs mt-0.5">Data akan di-upsert (update jika sudah ada)</p>
+                    <p class="text-[#fce7ea] text-xs mt-0.5">Data akan di-upsert (update jika sudah ada)</p>
                 </div>
-                <button onclick="closeModal('importModal')" class="text-emerald-100 hover:text-white transition w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10"><i class="fas fa-times"></i></button>
+                <button onclick="closeModal('importModal')" class="text-[#fce7ea] hover:text-white transition w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10"><i class="fas fa-times"></i></button>
             </div>
             <div class="p-8">
                 <div class="bg-slate-50 rounded-2xl p-4 mb-5 border border-slate-100">
@@ -853,34 +853,34 @@ $partsByCategory = [
                     <div class="grid grid-cols-2 gap-2">
                         <?php foreach ([['ITEM CODE', 'wajib'], ['ITEM DESCRIPTION', 'opsional'], ['SAFETY STOCK', 'angka'], ['QTY ACTUAL / ACTUAL STOCK', 'angka']] as [$col, $note]): ?>
                             <div class="flex items-center gap-2">
-                                <span class="font-mono text-[10px] bg-emerald-100 text-emerald-700 px-2 py-1 rounded font-bold"><?= $col ?></span>
+                                <span class="font-mono text-[10px] bg-[#fce7ea] text-[#9a031e] px-2 py-1 rounded font-bold"><?= $col ?></span>
                                 <span class="text-[10px] text-slate-400"><?= $note ?></span>
                             </div>
                         <?php endforeach; ?>
                     </div>
                 </div>
                 <div id="dropZone"
-                    class="border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center cursor-pointer hover:border-emerald-400 transition-all mb-5"
+                    class="border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center cursor-pointer hover:border-[#c91f38] transition-all mb-5"
                     onclick="document.getElementById('partsFile').click()"
-                    ondragover="event.preventDefault();this.classList.add('border-emerald-400','bg-emerald-50')"
-                    ondragleave="this.classList.remove('border-emerald-400','bg-emerald-50')"
+                    ondragover="event.preventDefault();this.classList.add('border-[#c91f38]','bg-[#fff0f2]')"
+                    ondragleave="this.classList.remove('border-[#c91f38]','bg-[#fff0f2]')"
                     ondrop="handleDrop(event)">
                     <i class="fas fa-cloud-upload-alt text-4xl text-slate-200 mb-3 block"></i>
                     <p class="font-bold text-slate-500 text-sm">Klik atau drag & drop file di sini</p>
                     <p class="text-slate-300 text-xs mt-1">.xlsx atau .xls — maks. 10 MB</p>
                     <div id="fileNameBadge" class="hidden mt-3">
-                        <span class="inline-flex items-center gap-2 bg-emerald-100 text-emerald-700 font-bold px-4 py-1.5 rounded-full text-sm" id="fileNameLabel"></span>
+                        <span class="inline-flex items-center gap-2 bg-[#fce7ea] text-[#9a031e] font-bold px-4 py-1.5 rounded-full text-sm" id="fileNameLabel"></span>
                     </div>
                 </div>
                 <input type="file" id="partsFile" accept=".xlsx,.xls" class="hidden" onchange="handleFileSelect(event)">
                 <div id="importLoading" class="hidden rounded-xl overflow-hidden bg-slate-100 h-2 mb-4">
-                    <div class="anim-bar bg-emerald-500 h-2 w-1/3 rounded-full"></div>
+                    <div class="anim-bar bg-[#b5152a] h-2 w-1/3 rounded-full"></div>
                 </div>
                 <div id="importAlert" class="hidden rounded-xl p-3 mb-4 text-sm font-medium border"></div>
                 <div class="flex justify-end gap-3">
                     <button onclick="closeModal('importModal')" class="px-6 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
                     <button id="btnImport" onclick="startImport()" disabled
-                        class="bg-emerald-600 text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm opacity-50 cursor-not-allowed flex items-center gap-2">
+                        class="bg-[#9a031e] text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm opacity-50 cursor-not-allowed flex items-center gap-2">
                         <i class="fas fa-upload"></i> Import
                     </button>
                 </div>
@@ -895,7 +895,7 @@ $partsByCategory = [
         const CAT_HEADERS = {
             'Zero Stock': 'linear-gradient(135deg,#ef4444,#b91c1c)',
             'Low Stock': 'linear-gradient(135deg,#f97316,#c2410c)',
-            'In Stock': 'linear-gradient(135deg,#10b981,#047857)',
+            'In Stock': 'linear-gradient(135deg,#b5152a,#7a0318)',
             'Over Stock': 'linear-gradient(135deg,#8b5cf6,#6d28d9)',
         };
         const BADGE_CLS = {
@@ -1089,7 +1089,7 @@ $partsByCategory = [
 
         function handleDrop(e) {
             e.preventDefault();
-            document.getElementById('dropZone').classList.remove('border-emerald-400', 'bg-emerald-50');
+            document.getElementById('dropZone').classList.remove('border-[#c91f38]', 'bg-[#fff0f2]');
             if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
         }
 

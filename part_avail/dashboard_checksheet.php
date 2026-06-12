@@ -487,7 +487,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         #sidebar .nav-item.active {
-            background: linear-gradient(135deg, #f43f5e, #e11d48);
+            background: linear-gradient(135deg, #e36414, #c4550f);
             color: #fff;
             box-shadow: 0 4px 12px rgba(244, 63, 94, .35);
         }
@@ -636,7 +636,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         .form-field:focus {
-            border-color: #f43f5e;
+            border-color: #e36414;
             box-shadow: 0 0 0 3px rgba(244, 63, 94, .12);
         }
 
@@ -796,7 +796,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         .note-input:focus {
-            border-color: #f43f5e;
+            border-color: #e36414;
             box-shadow: 0 0 0 3px rgba(244, 63, 94, .12);
         }
 
@@ -1039,7 +1039,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         #foto-strip .foto-label i {
-            color: #f43f5e;
+            color: #e36414;
         }
 
         #btn-open-camera {
@@ -1102,8 +1102,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         #btn-foto-retake:hover {
-            border-color: #f43f5e;
-            color: #f43f5e;
+            border-color: #e36414;
+            color: #e36414;
         }
 
         .foto-status-badge {
@@ -1184,7 +1184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         #camera-modal-header .modal-title i {
-            color: #f43f5e;
+            color: #e36414;
         }
 
         #btn-modal-close {
@@ -1317,7 +1317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             flex: 1;
             padding: 8px 0;
             border-radius: 10px;
-            background: #f43f5e;
+            background: #e36414;
             color: #fff;
             font-size: .78rem;
             font-weight: 700;
@@ -1331,7 +1331,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         #btn-capture:hover {
-            background: #e11d48;
+            background: #c4550f;
         }
 
         #btn-cancel-camera {
@@ -1352,8 +1352,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
         }
 
         #btn-cancel-camera:hover {
-            border-color: #f43f5e;
-            color: #f43f5e;
+            border-color: #e36414;
+            color: #e36414;
         }
 
         #btn-use-photo {
@@ -1384,7 +1384,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
     <aside id="sidebar" class="collapsed">
         <div class="brand">
             <div class="brand-icon-wrap">
-                <div class="w-8 h-8 rounded-lg bg-rose-500 flex items-center justify-center flex-shrink-0">
+                <div class="w-8 h-8 rounded-lg bg-[#e36414] flex items-center justify-center flex-shrink-0">
                     <i class="fas fa-tools text-white text-xs"></i>
                 </div>
                 <div class="brand-text">
@@ -1424,8 +1424,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
 
         <div class="topbar">
             <div class="flex items-center gap-2">
-                <div class="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center">
-                    <i class="fas fa-clipboard-check text-rose-500 text-xs"></i>
+                <div class="w-7 h-7 rounded-lg bg-[#fdf4ee] flex items-center justify-center">
+                    <i class="fas fa-clipboard-check text-[#e36414] text-xs"></i>
                 </div>
                 <div>
                     <div class="text-sm font-bold text-slate-800">Daily Check Sheet</div>
@@ -1546,7 +1546,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                                 </div>
                             </div>
                             <div id="category-badge" class="hidden">
-                                <span class="px-3 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-600 border border-rose-100"></span>
+                                <span class="px-3 py-1 rounded-full text-[11px] font-bold bg-[#fdf4ee] text-[#e36414] border border-[#fce4cc]"></span>
                             </div>
                         </div>
 
@@ -1629,7 +1629,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                         <div id="foto-section">
                             <div id="foto-strip">
                                 <span class="foto-label">
-                                    <i class="fas fa-camera"></i> Take Machine Photo <span style="color:#f43f5e;margin-left:1px;">*</span>
+                                    <i class="fas fa-camera"></i> Take Machine Photo <span style="color:#e36414;margin-left:1px;">*</span>
                                 </span>
                                 <button id="btn-open-camera" type="button" onclick="openCameraModal()">
                                     <i class="fas fa-camera"></i> Open Camera
@@ -2215,7 +2215,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             const btn = document.getElementById('btn-submit');
             btn.disabled = !enabled;
             btn.className = enabled ?
-                'px-6 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm cursor-pointer' :
+                'px-6 py-2 rounded-xl bg-[#c4550f] hover:bg-rose-700 text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm cursor-pointer' :
                 'px-6 py-2 rounded-xl bg-slate-200 text-slate-400 text-sm font-bold cursor-not-allowed transition-all flex items-center gap-2';
         }
 

@@ -16,11 +16,139 @@
 
         .menu-card {
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-width: 2px;
+            border-style: solid;
         }
 
         .menu-card:hover {
             transform: translateY(-4px);
-            box-shadow: 0 12px 20px -5px rgba(0, 0, 0, 0.05);
+            box-shadow: 0 12px 20px -5px rgba(0, 0, 0, 0.12);
+        }
+
+        /* Schedule – #5f0f40 */
+        .card-schedule {
+            border-color: #c97aad;
+        }
+
+        .card-schedule:hover {
+            border-color: #5f0f40;
+        }
+
+        .card-schedule .card-icon {
+            background: #f9eef5;
+            color: #5f0f40;
+        }
+
+        .card-schedule:hover .card-icon {
+            background: #5f0f40;
+            color: #fff;
+        }
+
+        .card-schedule .card-link {
+            color: #5f0f40;
+        }
+
+        /* Inventory – #9a031e */
+        .card-inventory {
+            border-color: #e08090;
+        }
+
+        .card-inventory:hover {
+            border-color: #9a031e;
+        }
+
+        .card-inventory .card-icon {
+            background: #fdf0f2;
+            color: #9a031e;
+        }
+
+        .card-inventory:hover .card-icon {
+            background: #9a031e;
+            color: #fff;
+        }
+
+        .card-inventory .card-link {
+            color: #9a031e;
+        }
+
+        /* E-Report – #fb8b24 */
+        .card-report {
+            border-color: #fdcf9a;
+        }
+
+        .card-report:hover {
+            border-color: #fb8b24;
+        }
+
+        .card-report .card-icon {
+            background: #fff4e8;
+            color: #fb8b24;
+        }
+
+        .card-report:hover .card-icon {
+            background: #fb8b24;
+            color: #fff;
+        }
+
+        .card-report .card-link {
+            color: #fb8b24;
+        }
+
+        /* Checksheet – #e36414 */
+        .card-checksheet {
+            border-color: #f5b889;
+        }
+
+        .card-checksheet:hover {
+            border-color: #e36414;
+        }
+
+        .card-checksheet .card-icon {
+            background: #fef3ea;
+            color: #e36414;
+        }
+
+        .card-checksheet:hover .card-icon {
+            background: #e36414;
+            color: #fff;
+        }
+
+        .card-checksheet .card-link {
+            color: #e36414;
+        }
+
+        /* Monitoring – #0f4c5c */
+        .card-monitor {
+            border-color: #7ab3bf;
+        }
+
+        .card-monitor:hover {
+            border-color: #0f4c5c;
+        }
+
+        .card-monitor .card-icon {
+            background: #e8f4f7;
+            color: #0f4c5c;
+        }
+
+        .card-monitor:hover .card-icon {
+            background: #0f4c5c;
+            color: #fff;
+        }
+
+        .card-monitor .card-link {
+            color: #0f4c5c;
+        }
+
+        .card-icon {
+            width: 3rem;
+            height: 3rem;
+            border-radius: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1rem;
+            transition: all 0.3s;
         }
     </style>
 </head>
@@ -36,57 +164,62 @@
 
         <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
 
-            <a href="login_user.php" class="menu-card group bg-white p-6 rounded-3xl border-2 border-blue-200 hover:border-blue-500 flex flex-col items-start">
-                <div class="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-4 group-hover:bg-blue-600 group-hover:text-white transition-all">
+            <!-- Schedule -->
+            <a href="login_user.php" class="menu-card card-schedule group bg-white p-6 rounded-3xl flex flex-col items-start">
+                <div class="card-icon card-icon group-hover:text-white">
                     <i class="fas fa-calendar-check text-lg"></i>
                 </div>
                 <h2 class="text-base font-bold text-slate-800 mb-1">Schedule</h2>
                 <p class="text-xs text-slate-500 leading-relaxed mb-4">Create part replacement schedule, monitor part changes, and notification alerts</p>
-                <div class="mt-auto flex items-center text-xs font-bold text-blue-600">
+                <div class="mt-auto flex items-center text-xs font-bold card-link">
                     Open Dashboard <i class="fas fa-arrow-right ml-2 group-hover:ml-3 transition-all"></i>
                 </div>
             </a>
 
-            <a href="dashboard_part.php" class="menu-card group bg-white p-6 rounded-3xl border-2 border-emerald-200 hover:border-emerald-500 flex flex-col items-start">
-                <div class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mb-4 group-hover:bg-emerald-600 group-hover:text-white transition-all">
+            <!-- Inventory -->
+            <a href="login_user.php?redirect=dashboard_part.php" class="menu-card card-inventory group bg-white p-6 rounded-3xl flex flex-col items-start">
+                <div class="card-icon group-hover:text-white">
                     <i class="fas fa-boxes-stacked text-lg"></i>
                 </div>
                 <h2 class="text-base font-bold text-slate-800 mb-1">Inventory</h2>
                 <p class="text-xs text-slate-500 leading-relaxed mb-4">Check real-time sparepart stock and warehouse availability.</p>
-                <div class="mt-auto flex items-center text-xs font-bold text-emerald-600">
+                <div class="mt-auto flex items-center text-xs font-bold card-link">
                     Check Inventory <i class="fas fa-arrow-right ml-2 group-hover:ml-3 transition-all"></i>
                 </div>
             </a>
 
-            <a href="dashboard_checksheet.php" class="menu-card group bg-white p-6 rounded-3xl border-2 border-rose-200 hover:border-rose-500 flex flex-col items-start">
-                <div class="w-12 h-12 bg-rose-50 text-rose-600 rounded-2xl flex items-center justify-center mb-4 group-hover:bg-rose-600 group-hover:text-white transition-all">
-                    <i class="fas fa-clipboard-list text-lg"></i>
-                </div>
-                <h2 class="text-base font-bold text-slate-800 mb-1">Checksheet</h2>
-                <p class="text-xs text-slate-500 leading-relaxed mb-4">Manage and record daily checksheet activities for machine inspection.</p>
-                <div class="mt-auto flex items-center text-xs font-bold text-rose-600">
-                    Open Checksheet <i class="fas fa-arrow-right ml-2 group-hover:ml-3 transition-all"></i>
-                </div>
-            </a>
-
-            <a href="dashboard_report.php" class="menu-card group bg-white p-6 rounded-3xl border-2 border-orange-200 hover:border-orange-500 flex flex-col items-start">
-                <div class="w-12 h-12 bg-orange-50 text-orange-600 rounded-2xl flex items-center justify-center mb-4 group-hover:bg-orange-600 group-hover:text-white transition-all">
+            <!-- E-Report -->
+            <a href="login_user.php?redirect=dashboard_report.php" class="menu-card card-report group bg-white p-6 rounded-3xl flex flex-col items-start">
+                <div class="card-icon group-hover:text-white">
                     <i class="fas fa-chart-bar text-lg"></i>
                 </div>
                 <h2 class="text-base font-bold text-slate-800 mb-1">E-Report</h2>
                 <p class="text-xs text-slate-500 leading-relaxed mb-4">Generate and view maintenance reports and summaries.</p>
-                <div class="mt-auto flex items-center text-xs font-bold text-orange-600">
+                <div class="mt-auto flex items-center text-xs font-bold card-link">
                     Open Report <i class="fas fa-arrow-right ml-2 group-hover:ml-3 transition-all"></i>
                 </div>
             </a>
 
-            <a href="monitor.php" class="menu-card group bg-white p-6 rounded-3xl border-2 border-violet-200 hover:border-violet-500 flex flex-col items-start">
-                <div class="w-12 h-12 bg-violet-50 text-violet-600 rounded-2xl flex items-center justify-center mb-4 group-hover:bg-violet-600 group-hover:text-white transition-all">
+            <!-- Checksheet -->
+            <a href="dashboard_checksheet.php" class="menu-card card-checksheet group bg-white p-6 rounded-3xl flex flex-col items-start">
+                <div class="card-icon group-hover:text-white">
+                    <i class="fas fa-clipboard-list text-lg"></i>
+                </div>
+                <h2 class="text-base font-bold text-slate-800 mb-1">Checksheet</h2>
+                <p class="text-xs text-slate-500 leading-relaxed mb-4">Manage and record daily checksheet activities for machine inspection.</p>
+                <div class="mt-auto flex items-center text-xs font-bold card-link">
+                    Open Checksheet <i class="fas fa-arrow-right ml-2 group-hover:ml-3 transition-all"></i>
+                </div>
+            </a>
+
+            <!-- Monitoring -->
+            <a href="monitor.php" class="menu-card card-monitor group bg-white p-6 rounded-3xl flex flex-col items-start">
+                <div class="card-icon group-hover:text-white">
                     <i class="fas fa-display text-lg"></i>
                 </div>
                 <h2 class="text-base font-bold text-slate-800 mb-1">Monitoring</h2>
                 <p class="text-xs text-slate-500 leading-relaxed mb-4">View-only dashboard for schedule, part availability, and maintenance history data.</p>
-                <div class="mt-auto flex items-center text-xs font-bold text-violet-600">
+                <div class="mt-auto flex items-center text-xs font-bold card-link">
                     Open Monitor <i class="fas fa-arrow-right ml-2 group-hover:ml-3 transition-all"></i>
                 </div>
             </a>
@@ -95,7 +228,7 @@
 
         <div class="mt-10 pt-6 border-t border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
             <div class="flex items-center gap-2">
-                <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                <span class="w-2 h-2 rounded-full animate-pulse" style="background:#5f0f40;"></span>
                 <span class="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Version 1.3</span>
             </div>
             <div class="flex items-center gap-1 text-xs text-slate-400 font-medium italic">

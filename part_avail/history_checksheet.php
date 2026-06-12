@@ -471,7 +471,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         }
 
         #sidebar .nav-item.active {
-            background: linear-gradient(135deg, #f43f5e, #e11d48);
+            background: linear-gradient(135deg, #e36414, #c4550f);
             color: #fff;
             box-shadow: 0 4px 12px rgba(244, 63, 94, .35);
         }
@@ -597,8 +597,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
         /* ── Table ── */
         .hist-table thead th {
-            background: #1e293b;
-            color: #f1f5f9;
+            background: linear-gradient(135deg, #e36414, #c4550f);
+            color: #fff;
             font-size: .68rem;
             font-weight: 700;
             letter-spacing: .05em;
@@ -725,7 +725,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         }
 
         .form-field:focus {
-            border-color: #f43f5e;
+            border-color: #e36414;
             box-shadow: 0 0 0 3px rgba(244, 63, 94, .12);
         }
 
@@ -840,7 +840,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         }
 
         #modal-photo-section .photo-label i {
-            color: #f43f5e;
+            color: #e36414;
         }
 
         #modal-photo-thumb-wrap {
@@ -862,7 +862,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
         #modal-photo-thumb:hover {
             opacity: .85;
-            border-color: #f43f5e;
+            border-color: #e36414;
         }
 
         #modal-photo-open-btn {
@@ -967,13 +967,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         }
 
         .page-btn:hover:not(:disabled) {
-            border-color: #f43f5e;
-            color: #f43f5e;
+            border-color: #e36414;
+            color: #e36414;
         }
 
         .page-btn.active {
-            background: #f43f5e;
-            border-color: #f43f5e;
+            background: #e36414;
+            border-color: #e36414;
             color: #fff;
         }
 
@@ -1048,7 +1048,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         }
 
         .tab-btn.active {
-            background: #f43f5e;
+            background: #e36414;
             color: #fff;
             box-shadow: 0 2px 8px rgba(244, 63, 94, .25);
         }
@@ -1156,7 +1156,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
     <aside id="sidebar" class="collapsed">
         <div class="brand">
             <div class="brand-icon-wrap">
-                <div class="w-8 h-8 rounded-lg bg-rose-500 flex items-center justify-center flex-shrink-0">
+                <div class="w-8 h-8 rounded-lg bg-[#e36414] flex items-center justify-center flex-shrink-0">
                     <i class="fas fa-tools text-white text-xs"></i>
                 </div>
                 <div class="brand-text">
@@ -1196,8 +1196,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
         <div class="topbar">
             <div class="flex items-center gap-3">
-                <div class="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center">
-                    <i class="fas fa-history text-rose-500 text-xs"></i>
+                <div class="w-7 h-7 rounded-lg bg-[#fdf4ee] flex items-center justify-center">
+                    <i class="fas fa-history text-[#e36414] text-xs"></i>
                 </div>
                 <div>
                     <div class="text-sm font-bold text-slate-800">History Check Sheet</div>
@@ -1215,7 +1215,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                         <div class="flex rounded-xl border border-slate-200 overflow-hidden">
                             <button id="btn-mode-daily"
                                 onclick="setMode('daily')"
-                                class="px-4 py-2 text-xs font-bold transition-all bg-rose-600 text-white">
+                                class="px-4 py-2 text-xs font-bold transition-all bg-[#c4550f] text-white">
                                 <i class="fas fa-calendar-day mr-1.5"></i>Harian
                             </button>
                             <button id="btn-mode-monthly"
@@ -1234,7 +1234,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     </div>
 
                     <button onclick="loadHistory(1)"
-                        class="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm">
+                        class="px-5 py-2.5 rounded-xl bg-[#c4550f] hover:bg-[#a8420b] text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm">
                         <i class="fas fa-search text-xs"></i> Cari
                     </button>
 
@@ -1290,7 +1290,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
                     <div class="flex-1 tab-history-only"></div>
                     <span id="result-label" class="text-[11px] text-slate-400 font-medium tab-history-only"></span>
-                    <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-600 tab-history-only"></span>
+                    <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#fde8d5] text-[#e36414] tab-history-only"></span>
                     <span id="showing-label" class="text-[11px] text-slate-400 font-medium flex-shrink-0 tab-history-only"></span>
                 </div>
 
@@ -1567,14 +1567,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             const label = document.getElementById('picker-label');
 
             if (mode === 'daily') {
-                daily.className = 'px-4 py-2 text-xs font-bold transition-all bg-rose-600 text-white';
+                daily.className = 'px-4 py-2 text-xs font-bold transition-all bg-[#c4550f] text-white';
                 month.className = 'px-4 py-2 text-xs font-bold transition-all bg-white text-slate-500 hover:bg-slate-50';
                 inp.type = 'date';
                 label.textContent = 'Tanggal';
                 inp.value = new Date().toISOString().split('T')[0];
             } else {
                 daily.className = 'px-4 py-2 text-xs font-bold transition-all bg-white text-slate-500 hover:bg-slate-50';
-                month.className = 'px-4 py-2 text-xs font-bold transition-all bg-rose-600 text-white';
+                month.className = 'px-4 py-2 text-xs font-bold transition-all bg-[#c4550f] text-white';
                 inp.type = 'month';
                 label.textContent = 'Bulan';
                 inp.value = new Date().toISOString().slice(0, 7);
@@ -1690,7 +1690,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 <td class="text-slate-400 text-xs text-center">${row.submitted_at?.slice(0,16) ?? '-'}</td>
                 <td class="text-center">
                     <button onclick="openDetail(${row.id}, '${esc(row.department)}', '${esc(row.line)}', '${esc(row.op)}', '${esc(row.machine_name)}', '${esc(row.checker)}', '${row.check_date}')"
-                        class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-rose-100 hover:text-rose-600 text-slate-500 transition-all inline-flex items-center justify-center">
+                        class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-[#fde8d5] hover:text-[#e36414] text-slate-500 transition-all inline-flex items-center justify-center">
                         <i class="fas fa-eye text-xs"></i>
                     </button>
                 </td>`;
