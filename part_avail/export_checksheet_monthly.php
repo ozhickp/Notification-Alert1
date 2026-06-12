@@ -1,5 +1,8 @@
 <?php
 // export_checksheet_monthly.php
+set_time_limit(120);
+ini_set('memory_limit', '256M');
+
 session_start();
 include 'config.php';
 require 'vendor/autoload.php';
@@ -14,37 +17,86 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 $bulan = $_GET['bulan'] ?? '';
 if ($bulan == '') die("Pilih bulan terlebih dahulu.");
 
-// ─── DB ────────────────────────────────────────────────────────────────────────
-$host    = 'localhost';
-$db      = 'db_notif_alert';
-$user    = 'root';
-$pass    = '';
-$charset = 'utf8mb4';
-$pdo = new PDO(
-    "mysql:host=$host;dbname=$db;charset=$charset",
-    $user,
-    $pass,
-    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
-);
+// ── Format filename: CheckSheet_monthly_YYYY_MM ───────────────────────────────
+$dtParts  = explode('-', $bulan);
+$filename = 'CheckSheet_monthly_' . implode('_', $dtParts) . '.xlsx';
 
-// Semua submission di bulan ini
+// ── Ambil semua submission ─────────────────────────────────────────────────────
 $stmtSub = $pdo->prepare("
-    SELECT * FROM checksheet_submissions
+    SELECT id, check_date, department, line, op, machine_name,
+           machine_type, category_key, checker, submitted_at
+    FROM checksheet_submissions
     WHERE DATE_FORMAT(check_date, '%Y-%m') = ?
     ORDER BY check_date ASC, submitted_at ASC
 ");
 $stmtSub->execute([$bulan]);
-$submissions = $stmtSub->fetchAll();
+$submissions = $stmtSub->fetchAll(PDO::FETCH_ASSOC);
 
-if (empty($submissions)) {
-    die("Tidak ada data untuk bulan $bulan.");
+if (empty($submissions)) die("Tidak ada data untuk bulan $bulan.");
+
+// ── BULK FETCH detail untuk Sheet1 (result saja) ──────────────────────────────
+$subIds       = array_column($submissions, 'id');
+$placeholders = implode(',', array_fill(0, count($subIds), '?'));
+
+$stmtR = $pdo->prepare("
+    SELECT submission_id, result
+    FROM checksheet_submission_details
+    WHERE submission_id IN ($placeholders)
+");
+$stmtR->execute($subIds);
+$allResults = $stmtR->fetchAll(PDO::FETCH_ASSOC);
+
+// Group by submission_id, hitung langsung
+$countMap = []; // [id => ['total'=>n,'ok'=>n,'x'=>n,'r'=>n,'ro'=>n]]
+foreach ($subIds as $sid) {
+    $countMap[$sid] = ['total' => 0, 'ok' => 0, 'x' => 0, 'r' => 0, 'ro' => 0];
+}
+foreach ($allResults as $d) {
+    $sid = $d['submission_id'];
+    $countMap[$sid]['total']++;
+    if ($d['result'] === 'V')  $countMap[$sid]['ok']++;
+    if ($d['result'] === 'X')  $countMap[$sid]['x']++;
+    if ($d['result'] === 'R')  $countMap[$sid]['r']++;
+    if ($d['result'] === 'RO') $countMap[$sid]['ro']++;
 }
 
-// ─── Excel ────────────────────────────────────────────────────────────────────
+// ── BULK FETCH detail lengkap untuk Sheet2 ────────────────────────────────────
+$stmtDet = $pdo->prepare("
+    SELECT submission_id, no, part, standard, result, note
+    FROM checksheet_submission_details
+    WHERE submission_id IN ($placeholders)
+    ORDER BY submission_id, no
+");
+$stmtDet->execute($subIds);
+$allDetails = $stmtDet->fetchAll(PDO::FETCH_ASSOC);
+
+$detailMap = [];
+foreach ($allDetails as $d) {
+    $detailMap[$d['submission_id']][] = $d;
+}
+
+// ── Konstanta style ───────────────────────────────────────────────────────────
+$resultLabel = [
+    'V'  => 'OK',
+    'X'  => 'Problem',
+    'R'  => 'Repair',
+    'RO' => 'Repair by Outsider',
+    '-'  => 'Tidak Digunakan',
+];
+$resultColors = [
+    'V'  => ['bg' => 'DCFCE7', 'fg' => '15803D'],
+    'X'  => ['bg' => 'FEE2E2', 'fg' => 'DC2626'],
+    'R'  => ['bg' => 'FEF9C3', 'fg' => 'CA8A04'],
+    'RO' => ['bg' => 'EDE9FE', 'fg' => '7C3AED'],
+    '-'  => ['bg' => 'F1F5F9', 'fg' => '94A3B8'],
+];
+
+// ── Excel ─────────────────────────────────────────────────────────────────────
 $spreadsheet = new Spreadsheet();
+$spreadsheet->getCalculationEngine()->disableCalculationCache();
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SHEET 1: Summary per submission
+// SHEET 1: Summary
 // ══════════════════════════════════════════════════════════════════════════════
 $sheet1 = $spreadsheet->getActiveSheet();
 $sheet1->setTitle("Summary");
@@ -58,11 +110,11 @@ if (file_exists('assets/company_logo.jpg')) {
     $logo->setWorksheet($sheet1);
 }
 
-/* TITLE */
 $sheet1->mergeCells('A1:O1');
 $sheet1->setCellValue('A1', 'MONTHLY CHECK SHEET REPORT — SUMMARY');
 $sheet1->getStyle('A1')->getFont()->setBold(true)->setSize(15);
-$sheet1->getStyle('A1')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
+$sheet1->getStyle('A1')->getAlignment()
+    ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
 $sheet1->getRowDimension(1)->setRowHeight(45);
 
 $sheet1->mergeCells('A2:O2');
@@ -70,8 +122,7 @@ $sheet1->setCellValue('A2', 'Bulan : ' . $bulan);
 $sheet1->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
 $sheet1->getStyle('A2')->getFont()->setSize(11);
 
-/* HEADER */
-$headers = [
+$sheet1->fromArray([
     'No',
     'Check Date',
     'Department',
@@ -87,8 +138,7 @@ $headers = [
     'Problem (X)',
     'Repair (R)',
     'Repair Outsider (RO)'
-];
-$sheet1->fromArray($headers, NULL, 'A4');
+], NULL, 'A4');
 $sheet1->getStyle('A4:O4')->applyFromArray([
     'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
     'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
@@ -96,24 +146,21 @@ $sheet1->getStyle('A4:O4')->applyFromArray([
 ]);
 $sheet1->getRowDimension(4)->setRowHeight(18);
 
-$resultLabel = [
-    'V'  => 'OK',
-    'X'  => 'Problem',
-    'R'  => 'Repair',
-    'RO' => 'Repair by Outsider',
-    '-'  => 'Tidak Digunakan',
-];
-
-$row1 = 5;
-$no   = 1;
+$row1        = 5;
+$no          = 1;
 $grandTotal  = ['items' => 0, 'ok' => 0, 'x' => 0, 'r' => 0, 'ro' => 0];
 $prevDate    = '';
 
+// Kumpulkan baris yang perlu coloring problem/repair untuk diterapkan massal
+$colorRowsX  = []; // baris dengan problem (X > 0)
+$colorRowsR  = []; // baris dengan repair
+$colorRowsRO = []; // baris dengan repair outsider
+$dataRowsS1  = []; // range baris data (untuk alignment massal)
+
 foreach ($submissions as $sub) {
-    // ── Baris pemisah antar tanggal ──
     $curDate = substr($sub['check_date'], 0, 10);
+
     if ($curDate !== $prevDate) {
-        // Baris kosong dengan background abu muda sebagai divider
         $sheet1->mergeCells("A{$row1}:O{$row1}");
         $sheet1->setCellValue("A{$row1}", "— " . date('d F Y', strtotime($curDate)) . " —");
         $sheet1->getStyle("A{$row1}:O{$row1}")->applyFromArray([
@@ -124,25 +171,15 @@ foreach ($submissions as $sub) {
         ]);
         $sheet1->getRowDimension($row1)->setRowHeight(14);
         $row1++;
+        $prevDate = $curDate;
     }
-    $prevDate = $curDate;
-    $stmtDet = $pdo->prepare("
-        SELECT result FROM checksheet_submission_details WHERE submission_id = ?
-    ");
-    $stmtDet->execute([$sub['id']]);
-    $details = $stmtDet->fetchAll();
 
-    $total = count($details);
-    $ok    = count(array_filter($details, fn($d) => $d['result'] === 'V'));
-    $xc    = count(array_filter($details, fn($d) => $d['result'] === 'X'));
-    $rc    = count(array_filter($details, fn($d) => $d['result'] === 'R'));
-    $ro    = count(array_filter($details, fn($d) => $d['result'] === 'RO'));
-
-    $grandTotal['items'] += $total;
-    $grandTotal['ok']    += $ok;
-    $grandTotal['x']     += $xc;
-    $grandTotal['r']     += $rc;
-    $grandTotal['ro']    += $ro;
+    $c = $countMap[$sub['id']];
+    $grandTotal['items'] += $c['total'];
+    $grandTotal['ok']    += $c['ok'];
+    $grandTotal['x']     += $c['x'];
+    $grandTotal['r']     += $c['r'];
+    $grandTotal['ro']    += $c['ro'];
 
     $sheet1->fromArray([
         $no++,
@@ -155,42 +192,62 @@ foreach ($submissions as $sub) {
         $sub['category_key'],
         $sub['checker'],
         $sub['submitted_at'],
-        $total,
-        $ok,
-        $xc,
-        $rc,
-        $ro,
+        $c['total'],
+        $c['ok'],
+        $c['x'],
+        $c['r'],
+        $c['ro'],
     ], NULL, "A{$row1}");
 
-    // Color problem & repair columns
-    if ($xc > 0) {
-        $sheet1->getStyle("M{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEE2E2']], 'font' => ['bold' => true, 'color' => ['rgb' => 'DC2626']]]);
-    }
-    if ($rc > 0 || $ro > 0) {
-        $sheet1->getStyle("N{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEF9C3']], 'font' => ['bold' => true, 'color' => ['rgb' => 'CA8A04']]]);
-        $sheet1->getStyle("O{$row1}")->applyFromArray(['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'EDE9FE']], 'font' => ['bold' => true, 'color' => ['rgb' => '7C3AED']]]);
-    }
+    // Catat baris yang butuh coloring
+    if ($c['x']  > 0) $colorRowsX[]  = $row1;
+    if ($c['r']  > 0) $colorRowsR[]  = $row1;
+    if ($c['ro'] > 0) $colorRowsRO[] = $row1;
 
-    $sheet1->getStyle("A{$row1}:O{$row1}")->getAlignment()
-        ->setVertical(Alignment::VERTICAL_CENTER)->setHorizontal(Alignment::HORIZONTAL_CENTER)->setWrapText(true);
-    $sheet1->getStyle("C{$row1}:F{$row1}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_LEFT);
+    $dataRowsS1[] = $row1;
     $sheet1->getRowDimension($row1)->setRowHeight(15);
     $row1++;
 }
 
+// Terapkan alignment data rows Sheet1 massal
+if (!empty($dataRowsS1)) {
+    $s1DataRange = "A{$dataRowsS1[0]}:O{$dataRowsS1[count($dataRowsS1) - 1]}";
+    $sheet1->getStyle($s1DataRange)->getAlignment()
+        ->setVertical(Alignment::VERTICAL_CENTER)
+        ->setHorizontal(Alignment::HORIZONTAL_CENTER)
+        ->setWrapText(true);
+    // Kolom teks kiri
+    $sheet1->getStyle("C{$dataRowsS1[0]}:F{$dataRowsS1[count($dataRowsS1) - 1]}")
+        ->getAlignment()->setHorizontal(Alignment::HORIZONTAL_LEFT);
+}
+
+// Coloring problem/repair massal
+$styleX  = ['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEE2E2']], 'font' => ['bold' => true, 'color' => ['rgb' => 'DC2626']]];
+$styleR  = ['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEF9C3']], 'font' => ['bold' => true, 'color' => ['rgb' => 'CA8A04']]];
+$styleRO = ['fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'EDE9FE']], 'font' => ['bold' => true, 'color' => ['rgb' => '7C3AED']]];
+foreach ($colorRowsX  as $r) $sheet1->getStyle("M{$r}")->applyFromArray($styleX);
+foreach ($colorRowsR  as $r) $sheet1->getStyle("N{$r}")->applyFromArray($styleR);
+foreach ($colorRowsRO as $r) $sheet1->getStyle("O{$r}")->applyFromArray($styleRO);
+
 /* Grand Total Row */
 $sheet1->mergeCells("A{$row1}:J{$row1}");
 $sheet1->setCellValue("A{$row1}", "TOTAL");
-$sheet1->fromArray([$grandTotal['items'], $grandTotal['ok'], $grandTotal['x'], $grandTotal['r'], $grandTotal['ro']], NULL, "K{$row1}");
+$sheet1->fromArray([
+    $grandTotal['items'],
+    $grandTotal['ok'],
+    $grandTotal['x'],
+    $grandTotal['r'],
+    $grandTotal['ro']
+], NULL, "K{$row1}");
 $sheet1->getStyle("A{$row1}:O{$row1}")->applyFromArray([
-    'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
-    'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
+    'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
+    'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
     'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
 ]);
 $sheet1->getRowDimension($row1)->setRowHeight(18);
 
-/* Border & autosize sheet1 */
-$sheet1->getStyle("A4:O" . $row1)->applyFromArray([
+// Border & autosize Sheet1 — 1 call saja untuk seluruh range
+$sheet1->getStyle("A4:O{$row1}")->applyFromArray([
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
 ]);
 foreach (range('A', 'O') as $col) {
@@ -199,24 +256,23 @@ foreach (range('A', 'O') as $col) {
 $sheet1->freezePane('A5');
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SHEET 2: Detail semua item
+// SHEET 2: Detail Items
 // ══════════════════════════════════════════════════════════════════════════════
 $sheet2 = $spreadsheet->createSheet();
 $sheet2->setTitle("Detail Items");
 
-/* TITLE */
-$sheet2->mergeCells('A1:L1');
+$sheet2->mergeCells('A1:M1');
 $sheet2->setCellValue('A1', 'MONTHLY CHECK SHEET REPORT — DETAIL ITEMS');
 $sheet2->getStyle('A1')->getFont()->setBold(true)->setSize(15);
-$sheet2->getStyle('A1')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
+$sheet2->getStyle('A1')->getAlignment()
+    ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
 $sheet2->getRowDimension(1)->setRowHeight(45);
 
-$sheet2->mergeCells('A2:L2');
+$sheet2->mergeCells('A2:M2');
 $sheet2->setCellValue('A2', 'Bulan : ' . $bulan);
 $sheet2->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
 
-/* HEADER */
-$hdrs2 = [
+$sheet2->fromArray([
     'No',
     'Check Date',
     'Department',
@@ -229,9 +285,8 @@ $hdrs2 = [
     'Standard',
     'Result',
     'Keterangan',
-    'Submitted At',
-];
-$sheet2->fromArray($hdrs2, NULL, 'A4');
+    'Submitted At'
+], NULL, 'A4');
 $sheet2->getStyle('A4:M4')->applyFromArray([
     'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
     'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4F46E5']],
@@ -239,26 +294,33 @@ $sheet2->getStyle('A4:M4')->applyFromArray([
 ]);
 $sheet2->getRowDimension(4)->setRowHeight(18);
 
-$row2   = 5;
-$no2    = 1;
-$resultColors = [
-    'V'  => ['bg' => 'DCFCE7', 'fg' => '15803D'],
-    'X'  => ['bg' => 'FEE2E2', 'fg' => 'DC2626'],
-    'R'  => ['bg' => 'FEF9C3', 'fg' => 'CA8A04'],
-    'RO' => ['bg' => 'EDE9FE', 'fg' => '7C3AED'],
-    '-'  => ['bg' => 'F1F5F9', 'fg' => '94A3B8'],
-];
+$row2      = 5;
+$no2       = 1;
+$prevDate  = '';
+// Kumpulkan result rows untuk coloring massal
+$resultRowsS2 = []; // ['row' => n, 'result' => 'V']
 
 foreach ($submissions as $sub) {
-    $stmtDet2 = $pdo->prepare("
-        SELECT no, part, standard, result, note
-        FROM checksheet_submission_details
-        WHERE submission_id = ?
-        ORDER BY no
-    ");
-    $stmtDet2->execute([$sub['id']]);
-    $items = $stmtDet2->fetchAll();
+    $items = $detailMap[$sub['id']] ?? [];
+    if (empty($items)) continue;
 
+    // Pemisah tanggal di Sheet2
+    $curDate = substr($sub['check_date'], 0, 10);
+    if ($curDate !== $prevDate) {
+        $sheet2->mergeCells("A{$row2}:M{$row2}");
+        $sheet2->setCellValue("A{$row2}", "— " . date('d F Y', strtotime($curDate)) . " —");
+        $sheet2->getStyle("A{$row2}:M{$row2}")->applyFromArray([
+            'font'      => ['bold' => true, 'size' => 9, 'color' => ['rgb' => '64748B'], 'italic' => true],
+            'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'F1F5F9']],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
+            'borders'   => ['bottom' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'CBD5E1']]],
+        ]);
+        $sheet2->getRowDimension($row2)->setRowHeight(14);
+        $row2++;
+        $prevDate = $curDate;
+    }
+
+    $blockStart = $row2;
     foreach ($items as $item) {
         $sheet2->fromArray([
             $no2++,
@@ -276,38 +338,52 @@ foreach ($submissions as $sub) {
             $sub['submitted_at'],
         ], NULL, "A{$row2}");
 
-        $rc = $resultColors[$item['result']] ?? ['bg' => 'FFFFFF', 'fg' => '000000'];
-        $sheet2->getStyle("K{$row2}")->applyFromArray([
-            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => $rc['bg']]],
-            'font' => ['bold' => true, 'color' => ['rgb' => $rc['fg']]],
-            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
-        ]);
-
-        $sheet2->getStyle("A{$row2}:M{$row2}")->getAlignment()
-            ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
+        $resultRowsS2[] = ['row' => $row2, 'result' => $item['result']];
         $sheet2->getRowDimension($row2)->setRowHeight(14);
         $row2++;
     }
+
+    // Alignment untuk blok submission ini sekaligus
+    $sheet2->getStyle("A{$blockStart}:M" . ($row2 - 1))
+        ->getAlignment()->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
 }
 
-$sheet2->getStyle("A4:M" . ($row2 - 1))->applyFromArray([
-    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
-]);
+// Coloring result massal per grup
+$groupedResult = [];
+foreach ($resultRowsS2 as $item) {
+    $groupedResult[$item['result']][] = $item['row'];
+}
+foreach ($groupedResult as $result => $rows) {
+    $rc = $resultColors[$result] ?? ['bg' => 'FFFFFF', 'fg' => '000000'];
+    $styleResult = [
+        'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => $rc['bg']]],
+        'font'      => ['bold' => true, 'color' => ['rgb' => $rc['fg']]],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+    ];
+    foreach ($rows as $r) {
+        $sheet2->getStyle("K{$r}")->applyFromArray($styleResult);
+    }
+}
+
+// Border seluruh Sheet2 — 1 call
+if ($row2 > 5) {
+    $sheet2->getStyle("A4:M" . ($row2 - 1))->applyFromArray([
+        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
+    ]);
+}
 foreach (range('A', 'M') as $col) {
     $sheet2->getColumnDimension($col)->setAutoSize(true);
 }
 $sheet2->freezePane('A5');
 
-// Aktifkan sheet pertama
 $spreadsheet->setActiveSheetIndex(0);
 
-/* ── EXPORT ── */
-$writer   = new Xlsx($spreadsheet);
-$filename = "CheckSheet_Monthly_{$bulan}.xlsx";
+// ── Export ─────────────────────────────────────────────────────────────────────
+$writer = new Xlsx($spreadsheet);
+$writer->setPreCalculateFormulas(false);
 
 header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-header("Content-Disposition: attachment;filename=\"{$filename}\"");
+header("Content-Disposition: attachment; filename=\"{$filename}\"");
 header('Cache-Control: max-age=0');
-
-$writer->save("php://output");
+$writer->save('php://output');
 exit;
