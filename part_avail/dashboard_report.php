@@ -676,13 +676,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                 <!-- Repair Finish -->
                                 <div class="col-span-2">
                                     <label class="form-label block mb-1.5">
-                                        <i class="fas fa-stop-circle text-slate-300 mr-1"></i> Repair Finish
+                                        <i class="fas fa-stop-circle text-slate-300 mr-1"></i> Repair Finish <span class="text-red-400">*</span>
                                     </label>
                                     <div class="flex gap-2">
                                         <input type="date" id="inp-finish-date" class="form-field" style="flex:1;" oninput="calcDuration()">
                                         <input type="time" id="inp-finish-time" class="form-field" style="flex:1;" oninput="calcDuration()">
                                     </div>
-                                    <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual (opsional)</div>
+                                    <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
                                 </div>
 
                                 <!-- Durasi + Reported By + PIC — 3 kolom dalam 1 baris -->
@@ -822,6 +822,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
         }
 
         // ── Duration calculator ───────────────────────────────────────────────────────
+        let durationError = false; // flag: finish <= start
+
         function calcDuration() {
             const startDate = document.getElementById('inp-start-date').value;
             const startTime = document.getElementById('inp-start-time').value;
@@ -833,7 +835,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
             if (!startDate || !startTime || !finishDate || !finishTime) {
                 dispEl.value = '';
+                dispEl.style.color = '';
                 minEl.value = '';
+                durationError = false;
+                checkAllFieldsFilled();
                 return;
             }
 
@@ -843,16 +848,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
             if (diffMs <= 0) {
                 dispEl.value = 'Finish harus setelah Start';
+                dispEl.style.color = '#dc2626';
                 minEl.value = '';
+                durationError = true;
+                checkAllFieldsFilled();
                 return;
             }
 
-            const totalSec = Math.round(diffMs / 1000);
             const totalMin = Math.round(diffMs / 60000);
             const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
             const mm = String(totalMin % 60).padStart(2, '0');
             dispEl.value = `${hh}:${mm}:00`;
-            minEl.value = totalMin; // simpan dalam menit
+            dispEl.style.color = '';
+            minEl.value = totalMin;
+            durationError = false;
+            checkAllFieldsFilled();
         }
 
         // ── Submit button state ───────────────────────────────────────────────────────
@@ -866,7 +876,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const problem = document.getElementById('inp-problem').value.trim();
             const action = document.getElementById('inp-action').value.trim();
 
-            const ready = !!(dept && line && machine && startDate && startTime && pic && problem && action);
+            const finishDate = document.getElementById('inp-finish-date').value;
+            const finishTime = document.getElementById('inp-finish-time').value;
+
+            const ready = !!(dept && line && machine && startDate && startTime && finishDate && finishTime && pic && problem && action) && !durationError;
             setSubmitEnabled(ready);
         }
 
@@ -884,7 +897,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
         // Attach listeners ke semua field wajib (kecuali dropdown cascade yang punya handler sendiri)
         document.addEventListener('DOMContentLoaded', () => {
-            ['inp-start-date', 'inp-start-time', 'inp-problem', 'inp-action'].forEach(id => {
+            ['inp-start-date', 'inp-start-time', 'inp-finish-date', 'inp-finish-time', 'inp-problem', 'inp-action'].forEach(id => {
                 document.getElementById(id).addEventListener('input', checkAllFieldsFilled);
             });
             document.getElementById('inp-pic').addEventListener('change', checkAllFieldsFilled);

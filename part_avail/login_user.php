@@ -9,7 +9,7 @@ if (!in_array($redirect, $allowed_redirects)) {
     $redirect = 'dashboard_user.php';
 }
 
-if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'user') {
+if (isset($_SESSION['user_id'], $_SESSION['role']) && $_SESSION['role'] === 'user') {
     header('Location: ' . $redirect);
     exit;
 }
