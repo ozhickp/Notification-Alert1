@@ -77,11 +77,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
     $problem         = trim($_POST['problem']         ?? '');
     $action          = trim($_POST['action']          ?? '');
     $reportedBy      = trim($_POST['reported_by']     ?? '');
+    $shift           = trim($_POST['shift']           ?? '');
+    $status          = trim($_POST['status']          ?? '');
     $durationMinutes = isset($_POST['duration_minutes']) && $_POST['duration_minutes'] !== ''
         ? (int)$_POST['duration_minutes'] : null;
 
-    if (!$dept || !$line || !$machineName || !$startTime || !$pic || !$problem || !$action) {
-        echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib.']);
+    if (!$dept || !$line || !$machineName || !$startTime || !$pic || !$problem || !$action || !$shift || !$status) {
+        echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib (termasuk Shift & Keterangan).']);
+        exit;
+    }
+
+    if (!in_array($shift, ['Shift 1', 'Shift 2', 'Shift 3'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Shift tidak valid.']);
+        exit;
+    }
+
+    if (!in_array($status, ['selesai', 'belum selesai'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Keterangan / status tidak valid.']);
         exit;
     }
 
@@ -91,14 +103,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
     try {
         $stmt = $pdo->prepare("
             INSERT INTO e_reports
-              (department, `line`, op, machine_name, machine_type, report_date,
-               repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+              (department, `line`, op, shift, machine_name, machine_type, report_date,
+               repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
         $stmt->execute([
             $dept,
             $line,
             $op,
+            $shift,
             $machineName,
             $machineType,
             $reportDate,
@@ -109,6 +122,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             $pic,
             $problem,
             $action,
+            $status,
         ]);
         echo json_encode(['success' => true, 'message' => 'E-Report berhasil disimpan.']);
     } catch (\Exception $e) {
@@ -474,6 +488,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             transform: scale(.98);
         }
 
+        /* ── Choice button group (Shift & Keterangan) ───────────────────────────── */
+        .choice-btn-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .choice-btn {
+            flex: 1;
+            padding: 9px 0;
+            border-radius: 10px;
+            border: 2px solid #e2e8f0;
+            background: #f8fafc;
+            color: #64748b;
+            font-size: .78rem;
+            font-weight: 800;
+            cursor: pointer;
+            transition: all .15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            font-family: inherit;
+        }
+
+        .choice-btn:hover {
+            border-color: #cbd5e1;
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .choice-btn.active {
+            background: #fff7ed;
+            color: #d9721a;
+            border-color: #fb8b24;
+        }
+
+        .choice-btn.active-done {
+            background: #dcfce7;
+            color: #15803d;
+            border-color: #86efac;
+        }
+
+        .choice-btn.active-pending {
+            background: #fef3c7;
+            color: #b45309;
+            border-color: #fcd34d;
+        }
+
         /* ── Toast ───────────────────────────────────────────────────────────── */
         #toast {
             position: fixed;
@@ -717,6 +779,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                     </select>
                                 </div>
 
+                                <!-- Shift -->
+                                <div class="col-span-3">
+                                    <label class="form-label block mb-1.5">
+                                        <i class="fas fa-user-clock text-slate-300 mr-1"></i> Shift <span class="text-red-400">*</span>
+                                    </label>
+                                    <div class="choice-btn-group" id="shift-btn-group" style="max-width:420px;">
+                                        <button type="button" class="choice-btn" data-val="Shift 1" onclick="setShift(this)">Shift 1</button>
+                                        <button type="button" class="choice-btn" data-val="Shift 2" onclick="setShift(this)">Shift 2</button>
+                                        <button type="button" class="choice-btn" data-val="Shift 3" onclick="setShift(this)">Shift 3</button>
+                                    </div>
+                                    <input type="hidden" id="inp-shift" value="">
+                                </div>
+
                                 <!-- Problem / Alarm — full width -->
                                 <div class="col-span-2">
                                     <label class="form-label block mb-1.5">
@@ -735,6 +810,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                     <textarea id="inp-action" class="form-field"
                                         placeholder="Jelaskan langkah-langkah perbaikan yang dilakukan secara detail. Sertakan part yang diganti, settingan yang diubah, hasil pengujian, dan catatan penting lainnya..."
                                         style="min-height:130px;"></textarea>
+                                </div>
+
+                                <!-- Keterangan (status selesai / belum selesai) -->
+                                <div class="col-span-3">
+                                    <label class="form-label block mb-1.5">
+                                        <i class="fas fa-flag text-slate-300 mr-1"></i> Keterangan Pekerjaan<span class="text-red-400">*</span>
+                                    </label>
+                                    <div class="choice-btn-group" id="status-btn-group" style="max-width:420px;">
+                                        <button type="button" class="choice-btn" data-val="selesai" onclick="setStatus(this)">
+                                            <i class="fas fa-check-circle"></i> Selesai
+                                        </button>
+                                        <button type="button" class="choice-btn" data-val="belum selesai" onclick="setStatus(this)">
+                                            <i class="fas fa-clock"></i> Belum Selesai
+                                        </button>
+                                    </div>
+                                    <input type="hidden" id="inp-status" value="">
                                 </div>
 
                             </div>
@@ -865,6 +956,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             checkAllFieldsFilled();
         }
 
+        // ── Shift & Keterangan (status) selector ────────────────────────────────────
+        function setShift(btn) {
+            document.querySelectorAll('#shift-btn-group .choice-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('inp-shift').value = btn.getAttribute('data-val');
+            checkAllFieldsFilled();
+        }
+
+        function setStatus(btn) {
+            document.querySelectorAll('#status-btn-group .choice-btn').forEach(b => b.classList.remove('active-done', 'active-pending'));
+            const val = btn.getAttribute('data-val');
+            btn.classList.add(val === 'selesai' ? 'active-done' : 'active-pending');
+            document.getElementById('inp-status').value = val;
+            checkAllFieldsFilled();
+        }
+
         // ── Submit button state ───────────────────────────────────────────────────────
         function checkAllFieldsFilled() {
             const dept = document.getElementById('sel-dept').value;
@@ -878,8 +985,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
             const finishDate = document.getElementById('inp-finish-date').value;
             const finishTime = document.getElementById('inp-finish-time').value;
+            const shift = document.getElementById('inp-shift').value;
+            const status = document.getElementById('inp-status').value;
 
-            const ready = !!(dept && line && machine && startDate && startTime && finishDate && finishTime && pic && problem && action) && !durationError;
+            const ready = !!(dept && line && machine && startDate && startTime && finishDate && finishTime && pic && problem && action && shift && status) && !durationError;
             setSubmitEnabled(ready);
         }
 
@@ -1058,6 +1167,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const problem = document.getElementById('inp-problem').value.trim();
             const action = document.getElementById('inp-action').value.trim();
             const reported = document.getElementById('inp-reported-by').value;
+            const shift = document.getElementById('inp-shift').value;
+            const status = document.getElementById('inp-status').value;
 
             const btn = document.getElementById('btn-submit');
             btn.disabled = true;
@@ -1082,6 +1193,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             fd.append('problem', problem);
             fd.append('action', action);
             fd.append('duration_minutes', document.getElementById('inp-duration-minutes').value);
+            fd.append('shift', shift);
+            fd.append('status', status);
 
             fetch(BASE, {
                     method: 'POST',
@@ -1121,6 +1234,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             document.getElementById('inp-pic').value = '';
             document.getElementById('inp-problem').value = '';
             document.getElementById('inp-action').value = '';
+            document.getElementById('inp-shift').value = '';
+            document.getElementById('inp-status').value = '';
+            document.querySelectorAll('#shift-btn-group .choice-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#status-btn-group .choice-btn').forEach(b => b.classList.remove('active-done', 'active-pending'));
             checkAllFieldsFilled();
         }
 

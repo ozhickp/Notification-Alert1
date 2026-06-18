@@ -47,11 +47,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $total = (int)$stmtCount->fetchColumn();
 
     $stmt = $pdo->prepare("
-        SELECT r.id, r.report_date, r.department, r.line, r.op,
+        SELECT r.id, r.parent_id, r.report_date, r.department, r.line, r.op, r.shift,
                r.machine_name, r.machine_type,
                r.repair_start, r.repair_finish,
                r.reported_by, r.pic,
-               r.problem, r.action,
+               r.problem, r.action, r.status,
                r.created_at
         FROM e_reports r
         $where
@@ -76,6 +76,128 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     $stmt = $pdo->prepare("SELECT * FROM e_reports WHERE id = ?");
     $stmt->execute([$id]);
     echo json_encode($stmt->fetch());
+    exit;
+}
+
+// ─── AJAX: thread (rangkaian laporan awal + semua follow-up-nya) ─────────────
+// Dipanggil dari modal detail agar follow-up terlihat "tersambung" ke laporan
+// asalnya, tanpa tercampur dengan history lain pada mesin yang sama.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'thread') {
+    header('Content-Type: application/json');
+    $id = (int)($_GET['id'] ?? 0);
+    if (!$id) {
+        echo json_encode(['root_id' => null, 'items' => []]);
+        exit;
+    }
+
+    $stmt = $pdo->prepare("SELECT id, parent_id FROM e_reports WHERE id = ?");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        echo json_encode(['root_id' => null, 'items' => []]);
+        exit;
+    }
+
+    // Root = laporan paling awal dari rangkaian ini. Kalau baris yang dibuka
+    // sendiri sudah berupa follow-up (punya parent_id), root-nya ya parent itu.
+    $rootId = $row['parent_id'] ?: $row['id'];
+
+    $stmt = $pdo->prepare("
+        SELECT id, parent_id, report_date, shift, repair_start, repair_finish,
+               pic, problem, action, status, reported_by, created_at
+        FROM e_reports
+        WHERE id = ? OR parent_id = ?
+        ORDER BY created_at ASC
+    ");
+    $stmt->execute([$rootId, $rootId]);
+    echo json_encode(['root_id' => $rootId, 'items' => $stmt->fetchAll()]);
+    exit;
+}
+
+// ─── AJAX: tambah informasi lanjutan (follow-up INSERT row baru) ──────────────
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+
+    // Ambil data mesin dari baris asli (read-only, tidak boleh diubah)
+    $sourceId = (int)($_POST['source_id'] ?? 0);
+    if (!$sourceId) {
+        echo json_encode(['success' => false, 'message' => 'ID laporan sumber tidak valid.']);
+        exit;
+    }
+
+    $src = $pdo->prepare("SELECT department, `line`, op, machine_name, machine_type, report_date, parent_id FROM e_reports WHERE id = ?");
+    $src->execute([$sourceId]);
+    $orig = $src->fetch();
+    if (!$orig) {
+        echo json_encode(['success' => false, 'message' => 'Laporan sumber tidak ditemukan.']);
+        exit;
+    }
+
+    $startDate       = trim($_POST['start_date']   ?? '');
+    $startTime       = trim($_POST['start_time']   ?? '');
+    $finishDate      = trim($_POST['finish_date']  ?? '');
+    $finishTime      = trim($_POST['finish_time']  ?? '');
+    $shift           = trim($_POST['shift']        ?? '');
+    $pic             = trim($_POST['pic']          ?? '');
+    $problem         = trim($_POST['problem']      ?? '');
+    $action          = trim($_POST['action']       ?? '');
+    $status          = trim($_POST['status']       ?? '');
+    $reportedBy      = $_SESSION['username'] ?? 'Unknown';
+    $durationMinutes = isset($_POST['duration_minutes']) && $_POST['duration_minutes'] !== ''
+        ? (int)$_POST['duration_minutes'] : null;
+
+    if (!$startDate || !$startTime || !$pic || !$problem || !$action || !$shift || !$status) {
+        echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib.']);
+        exit;
+    }
+
+    if (!in_array($shift, ['Shift 1', 'Shift 2', 'Shift 3'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Shift tidak valid.']);
+        exit;
+    }
+
+    if (!in_array($status, ['selesai', 'belum selesai'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Keterangan / status tidak valid.']);
+        exit;
+    }
+
+    $startDatetime  = $startDate . ' ' . $startTime . ':00';
+    $finishDatetime = ($finishDate && $finishTime) ? $finishDate . ' ' . $finishTime . ':00' : null;
+
+    // Root = laporan paling pertama dalam rangkaian ini. Kalau sumbernya sendiri
+    // sudah berupa follow-up, ikut ke parent-nya supaya rangkaian tetap satu utas
+    // (bukan jadi follow-up-dari-follow-up yang bikin susah ditelusuri).
+    $rootId = $orig['parent_id'] ?: $sourceId;
+
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO e_reports
+              (parent_id, department, `line`, op, shift, machine_name, machine_type, report_date,
+               repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ");
+        $stmt->execute([
+            $rootId,
+            $orig['department'],
+            $orig['line'],
+            $orig['op'],
+            $shift,
+            $orig['machine_name'],
+            $orig['machine_type'],
+            $orig['report_date'],
+            $startDatetime,
+            $finishDatetime,
+            $durationMinutes,
+            $reportedBy,
+            $pic,
+            $problem,
+            $action,
+            $status,
+        ]);
+        echo json_encode(['success' => true, 'message' => 'Informasi lanjutan berhasil disimpan.']);
+    } catch (\Exception $e) {
+        echo json_encode(['success' => false, 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
+    }
     exit;
 }
 ?>
@@ -318,17 +440,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             flex: 1 1 0;
             min-height: 0;
             overflow-y: auto;
+            overflow-x: auto;
         }
 
         /* ── Table ────────────────────────────────────────────────────────────── */
         .hist-table thead th {
             background: linear-gradient(135deg, #fb8b24, #d9721a);
             color: #fff;
-            font-size: .68rem;
+            font-size: .66rem;
             font-weight: 700;
-            letter-spacing: .05em;
+            letter-spacing: .04em;
             text-transform: uppercase;
-            padding: 10px 14px;
+            padding: 9px 10px;
             position: sticky;
             top: 0;
             z-index: 10;
@@ -356,8 +479,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         }
 
         .hist-table tbody td {
-            padding: 9px 14px;
-            font-size: .77rem;
+            padding: 7px 10px;
+            font-size: .76rem;
             color: #334155;
             border-bottom: 1px solid #e2e8f0;
             vertical-align: middle;
@@ -552,6 +675,230 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
             white-space: pre-wrap;
             line-height: 1.6;
         }
+
+        /* ── Status badge (history table & modal) ───────────────────────────────── */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: .68rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .status-badge.status-done {
+            background: #dcfce7;
+            color: #15803d;
+        }
+
+        .status-badge.status-pending {
+            background: #fef3c7;
+            color: #b45309;
+        }
+
+        /* ── Badge "Lanjutan" (baris follow-up di tabel) ─────────────────────────── */
+        .linked-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: .62rem;
+            font-weight: 800;
+            white-space: nowrap;
+            background: #eef2ff;
+            color: #4338ca;
+            margin-top: 3px;
+        }
+
+        /* ── Rangkaian laporan (timeline di modal detail) ───────────────────────── */
+        .thread-wrap {
+            margin-top: 6px;
+            padding-top: 14px;
+            border-top: 1px dashed #e2e8f0;
+        }
+
+        .thread-title {
+            font-size: .7rem;
+            font-weight: 800;
+            color: #4338ca;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .thread-item {
+            position: relative;
+            display: flex;
+            gap: 10px;
+            padding: 9px 10px 9px 4px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background .15s;
+        }
+
+        .thread-item:hover {
+            background: #f8fafc;
+        }
+
+        .thread-item-current {
+            background: #eef2ff;
+            cursor: default;
+        }
+
+        .thread-item-current:hover {
+            background: #eef2ff;
+        }
+
+        .thread-item-dot {
+            flex-shrink: 0;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #c7d2fe;
+            margin-top: 5px;
+        }
+
+        .thread-item-current .thread-item-dot {
+            background: #4338ca;
+        }
+
+        .thread-item-body {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .thread-item-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 2px;
+        }
+
+        .thread-item-date {
+            font-size: .72rem;
+            font-weight: 700;
+            color: #334155;
+        }
+
+        .thread-item-problem {
+            font-size: .74rem;
+            color: #64748b;
+            line-height: 1.4;
+        }
+
+        .thread-item-pic {
+            font-size: .68rem;
+            color: #94a3b8;
+            margin-top: 2px;
+        }
+
+        .thread-current-tag {
+            color: #4338ca;
+            font-weight: 700;
+        }
+
+        .thread-root-tag {
+            font-size: .6rem;
+            font-weight: 800;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: .03em;
+            margin-right: 5px;
+        }
+
+        /* ── Choice button group (Edit form: Shift & Keterangan) ────────────────── */
+        .choice-btn-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .choice-btn {
+            flex: 1;
+            padding: 9px 0;
+            border-radius: 10px;
+            border: 2px solid #e2e8f0;
+            background: #f8fafc;
+            color: #64748b;
+            font-size: .78rem;
+            font-weight: 800;
+            cursor: pointer;
+            transition: all .15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            font-family: inherit;
+        }
+
+        .choice-btn:hover {
+            border-color: #cbd5e1;
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .choice-btn.active {
+            background: #fff7ed;
+            color: #d9721a;
+            border-color: #fb8b24;
+        }
+
+        .choice-btn.active-done {
+            background: #dcfce7;
+            color: #15803d;
+            border-color: #86efac;
+        }
+
+        .choice-btn.active-pending {
+            background: #fef3c7;
+            color: #b45309;
+            border-color: #fcd34d;
+        }
+
+        /* ── Edit form (inside modal) ────────────────────────────────────────────── */
+        #modal-edit-wrap .form-label {
+            font-size: .68rem;
+            font-weight: 800;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        #modal-edit-wrap .edit-field {
+            width: 100%;
+            padding: 8px 11px;
+            border: 1.5px solid #e2e8f0;
+            border-radius: 10px;
+            font-size: .82rem;
+            color: #1e293b;
+            background: #fff;
+            outline: none;
+            font-family: inherit;
+            transition: border-color .2s, box-shadow .2s;
+        }
+
+        #modal-edit-wrap .edit-field:focus {
+            border-color: #fb8b24;
+            box-shadow: 0 0 0 3px rgba(249, 115, 22, .12);
+        }
+
+        #modal-edit-wrap .edit-field[readonly] {
+            background: #f8fafc;
+            color: #64748b;
+            cursor: default;
+        }
+
+        #modal-edit-wrap textarea.edit-field {
+            resize: vertical;
+        }
     </style>
 </head>
 
@@ -696,9 +1043,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                                 <th>Line</th>
                                 <th class="text-center">OP</th>
                                 <th>Mesin</th>
-                                <th>Repair Start</th>
-                                <th>Repair Finish</th>
-                                <th>Submitted At</th>
+                                <th>Waktu Perbaikan</th>
+                                <th class="text-center">Status</th>
                                 <th class="text-center w-16">Detail</th>
                             </tr>
                         </thead>
@@ -758,13 +1104,99 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                     <?php endfor; ?>
                 </div>
                 <div id="modal-content" style="display:none;"></div>
+
+                <!-- ── Follow-up form (tampil saat user klik tombol Tambah Info) ── -->
+                <div id="modal-edit-wrap" style="display:none;">
+                    <div class="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2.5">
+                        <div class="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-1">Informasi Mesin (Read-Only)</div>
+                        <div class="text-xs font-semibold text-slate-700" id="edit-machine-info"></div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-x-4 gap-y-4">
+                        <div>
+                            <label class="form-label">PIC / Technician <span class="text-red-400">*</span></label>
+                            <select id="edit-pic" class="edit-field"></select>
+                        </div>
+                        <div></div>
+
+                        <div>
+                            <label class="form-label">Repair Start <span class="text-red-400">*</span></label>
+                            <div class="flex gap-2">
+                                <input type="date" id="edit-start-date" class="edit-field" oninput="calcEditDuration()">
+                                <input type="time" id="edit-start-time" class="edit-field" oninput="calcEditDuration()">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="form-label">Repair Finish</label>
+                            <div class="flex gap-2">
+                                <input type="date" id="edit-finish-date" class="edit-field" oninput="calcEditDuration()">
+                                <input type="time" id="edit-finish-time" class="edit-field" oninput="calcEditDuration()">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="form-label">Durasi <span class="text-slate-300 font-normal normal-case">(otomatis)</span></label>
+                            <input type="text" id="edit-duration-display" class="edit-field" readonly style="cursor:default;">
+                            <input type="hidden" id="edit-duration-minutes">
+                        </div>
+                        <div></div>
+
+                        <div class="col-span-2">
+                            <label class="form-label">Shift <span class="text-red-400">*</span></label>
+                            <div class="choice-btn-group" id="edit-shift-group" style="max-width:420px;">
+                                <button type="button" class="choice-btn" data-val="Shift 1" onclick="setEditShift(this)">Shift 1</button>
+                                <button type="button" class="choice-btn" data-val="Shift 2" onclick="setEditShift(this)">Shift 2</button>
+                                <button type="button" class="choice-btn" data-val="Shift 3" onclick="setEditShift(this)">Shift 3</button>
+                            </div>
+                            <input type="hidden" id="edit-inp-shift">
+                        </div>
+
+                        <div class="col-span-2">
+                            <label class="form-label">Problem / Alarm <span class="text-red-400">*</span></label>
+                            <textarea id="edit-problem" class="edit-field" style="min-height:70px;"></textarea>
+                        </div>
+
+                        <div class="col-span-2">
+                            <label class="form-label">Action / Perbaikan <span class="text-red-400">*</span></label>
+                            <textarea id="edit-action" class="edit-field" style="min-height:100px;"></textarea>
+                        </div>
+
+                        <div class="col-span-2">
+                            <label class="form-label">Keterangan <span class="text-red-400">*</span></label>
+                            <div class="choice-btn-group" id="edit-status-group" style="max-width:420px;">
+                                <button type="button" class="choice-btn" data-val="selesai" onclick="setEditStatus(this)">
+                                    <i class="fas fa-check-circle"></i> Selesai
+                                </button>
+                                <button type="button" class="choice-btn" data-val="belum selesai" onclick="setEditStatus(this)">
+                                    <i class="fas fa-clock"></i> Belum Selesai
+                                </button>
+                            </div>
+                            <input type="hidden" id="edit-inp-status">
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-between flex-shrink-0">
                 <span id="modal-meta" class="text-[11px] text-slate-400 font-medium"></span>
-                <button onclick="closeModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
-                    Tutup
-                </button>
+                <div class="flex gap-2" id="modal-footer-view">
+                    <button id="btn-edit-report" onclick="openFollowupForm()" style="display:none;"
+                        class="px-4 py-2 rounded-xl bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs font-bold transition-all flex items-center gap-1.5">
+                        <i class="fas fa-plus-circle"></i> Tambah Info
+                    </button>
+                    <button onclick="closeModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
+                        Tutup
+                    </button>
+                </div>
+                <div class="flex gap-2" id="modal-footer-edit" style="display:none;">
+                    <button onclick="cancelEdit()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
+                        Batal
+                    </button>
+                    <button id="btn-save-edit" onclick="submitFollowup()"
+                        class="px-4 py-2 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5" style="background:#fb8b24;">
+                        <i class="fas fa-save"></i> Simpan Informasi
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -918,20 +1350,30 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                 tr.className = 'fade-in';
                 tr.style.animationDelay = `${idx * 15}ms`;
 
-                const startFmt = row.repair_start ? row.repair_start.slice(0, 16) : '—';
-                const finishFmt = row.repair_finish ? row.repair_finish.slice(0, 16) : '<span class="text-slate-300">—</span>';
-                const submittedFmt = row.created_at ? row.created_at.slice(0, 16) : '—';
+                // Jam saja (tanggal sudah ada di kolom "Tanggal") agar kolom tetap ringkas.
+                const startTimeFmt = row.repair_start ? row.repair_start.slice(11, 16) : '—';
+                const finishTimeFmt = row.repair_finish ? row.repair_finish.slice(11, 16) : null;
+                const repairTimeFmt = finishTimeFmt ?
+                    `<span class="whitespace-nowrap">${startTimeFmt} – ${finishTimeFmt}</span>` :
+                    `<span class="whitespace-nowrap">${startTimeFmt} – <span class="text-slate-300">selesai?</span></span>`;
+
+                const statusVal = row.status || 'belum selesai';
+                const statusBadge = statusVal === 'selesai' ?
+                    '<span class="status-badge status-done"><i class="fas fa-check-circle"></i> Selesai</span>' :
+                    '<span class="status-badge status-pending"><i class="fas fa-clock"></i> Belum Selesai</span>';
+
+                const linkedBadge = row.parent_id ?
+                    `<br><span class="linked-badge" title="Lanjutan dari laporan sebelumnya — buka Detail untuk lihat rangkaiannya"><i class="fas fa-link"></i> Lanjutan</span>` : '';
 
                 tr.innerHTML = `
         <td class="text-center text-slate-400 font-bold text-xs">${no}</td>
         <td class="font-semibold text-slate-700 whitespace-nowrap">${row.report_date?.slice(0,10) ?? '—'}</td>
-        <td class="text-slate-600 max-w-[120px] truncate" title="${esc(row.department)}">${esc(row.department)}</td>
-        <td class="text-slate-600">${esc(row.line)}</td>
+        <td class="text-slate-600 max-w-[100px] truncate" title="${esc(row.department)}">${esc(row.department)}</td>
+        <td class="text-slate-600 max-w-[70px] truncate" title="${esc(row.line)}">${esc(row.line)}</td>
         <td class="text-center text-slate-500">${row.op || '—'}</td>
-        <td class="font-medium text-slate-700 max-w-[150px] truncate" title="${esc(row.machine_name)}">${esc(row.machine_name)}</td>
-        <td class="text-xs text-slate-600 whitespace-nowrap">${startFmt}</td>
-        <td class="text-xs text-slate-600 whitespace-nowrap">${finishFmt}</td>
-        <td class="text-xs text-slate-500 whitespace-nowrap">${submittedFmt}</td>
+        <td class="font-medium text-slate-700 max-w-[130px] truncate" title="${esc(row.machine_name)}">${esc(row.machine_name)}</td>
+        <td class="text-xs text-slate-600">${repairTimeFmt}</td>
+        <td class="text-center">${statusBadge}${linkedBadge}</td>
         <td class="text-center">
             <button onclick="openDetail(${row.id})"
                 class="w-8 h-8 rounded-lg bg-slate-100 transition-all inline-flex items-center justify-center"
@@ -1042,10 +1484,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         }
 
         // ── Modal detail ──────────────────────────────────────────────────────────────
+        let currentDetailRow = null;
+
         function openDetail(id) {
             document.getElementById('modal-overlay').classList.add('open');
             document.getElementById('modal-loading').style.display = 'block';
             document.getElementById('modal-content').style.display = 'none';
+            document.getElementById('modal-edit-wrap').style.display = 'none';
+            document.getElementById('modal-footer-view').style.display = 'flex';
+            document.getElementById('modal-footer-edit').style.display = 'none';
             document.getElementById('modal-title').textContent = `Detail E-Report #${id}`;
             document.getElementById('modal-subtitle').textContent = '';
             document.getElementById('modal-meta').textContent = '';
@@ -1058,6 +1505,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         closeModal();
                         return;
                     }
+                    currentDetailRow = r;
                     document.getElementById('modal-loading').style.display = 'none';
                     document.getElementById('modal-subtitle').textContent =
                         `${r.department} — ${r.line} | OP: ${r.op||'—'} | ${r.machine_name}`;
@@ -1076,6 +1524,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         }
                     }
 
+                    const statusVal = r.status || 'belum selesai';
+                    const statusBadgeHtml = statusVal === 'selesai' ?
+                        '<span class="status-badge status-done"><i class="fas fa-check-circle"></i> Selesai</span>' :
+                        '<span class="status-badge status-pending"><i class="fas fa-clock"></i> Belum Selesai</span>';
+
                     const fields = [
                         ['Tanggal Laporan', r.report_date?.slice(0, 10) ?? '—'],
                         ['Department', r.department],
@@ -1083,6 +1536,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         ['OP', r.op || '—'],
                         ['Nama Mesin', r.machine_name],
                         ['Machine Type', r.machine_type || '—'],
+                        ['Shift', r.shift || '—'],
                         ['Repair Start', startFmt],
                         ['Repair Finish', finishFmt],
                         ['Durasi Perbaikan', durationFmt],
@@ -1090,17 +1544,47 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                         ['PIC / Teknisi', r.pic],
                         ['Problem / Alarm', r.problem],
                         ['Action / Perbaikan', r.action],
+                        ['Status', statusBadgeHtml, true],
                         ['Submitted At', r.created_at?.slice(0, 16) ?? '—'],
                     ];
 
                     const content = document.getElementById('modal-content');
-                    content.innerHTML = fields.map(([label, val]) => `
+                    content.innerHTML = fields.map(([label, val, isHtml]) => `
                 <div class="detail-row">
                     <div class="detail-label">${label}</div>
-                    <div class="detail-value">${esc(String(val ?? '—'))}</div>
+                    <div class="detail-value">${isHtml ? val : esc(String(val ?? '—'))}</div>
                 </div>`).join('');
                     content.style.display = 'block';
                     document.getElementById('modal-meta').textContent = '';
+
+                    const editBtn = document.getElementById('btn-edit-report');
+                    // Default dulu berdasarkan status baris ini sendiri (fallback kalau fetch thread gagal)
+                    editBtn.style.display = statusVal !== 'selesai' ? 'inline-flex' : 'none';
+
+                    // Ambil rangkaian (laporan awal + semua follow-up yang terhubung)
+                    fetch(`history_report.php?ajax=thread&id=${id}`)
+                        .then(r => r.json())
+                        .then(t => {
+                            const items = t.items || [];
+                            const threadHtml = renderThread(items, id, t.root_id);
+                            if (threadHtml) content.innerHTML += threadHtml;
+
+                            // Kalau SALAH SATU entri dalam rangkaian ini (baris ini sendiri,
+                            // atau follow-up lainnya) sudah "selesai", berarti pekerjaannya
+                            // sudah tuntas — jangan tampilkan lagi tombol Tambah Info,
+                            // walau baris yang sedang dibuka masih tercatat "belum selesai".
+                            const alreadyDone = items.some(it => (it.status || 'belum selesai') === 'selesai');
+                            editBtn.style.display = alreadyDone ? 'none' : 'inline-flex';
+
+                            if (alreadyDone && statusVal !== 'selesai') {
+                                content.innerHTML += `
+                                <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 mt-3 text-xs font-semibold text-emerald-700 flex items-center gap-2">
+                                    <i class="fas fa-check-circle"></i>
+                                    Pekerjaan ini sudah ditandai "Selesai" pada salah satu laporan dalam rangkaian ini.
+                                </div>`;
+                            }
+                        })
+                        .catch(() => {});
                 })
                 .catch(() => {
                     showToast('Gagal memuat detail.', 'error');
@@ -1108,9 +1592,217 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
                 });
         }
 
+        // ── Rangkaian laporan (root + semua follow-up yang terhubung) ──────────────────
+        function renderThread(items, currentId, rootId) {
+            if (!items || items.length <= 1) return ''; // tidak ada follow-up, tidak perlu ditampilkan
+
+            const list = items.map(it => {
+                const isCurrent = it.id === currentId;
+                const isRoot = it.id === rootId;
+                const done = (it.status || 'belum selesai') === 'selesai';
+                const badge = done ?
+                    '<span class="status-badge status-done"><i class="fas fa-check-circle"></i> Selesai</span>' :
+                    '<span class="status-badge status-pending"><i class="fas fa-clock"></i> Belum Selesai</span>';
+                const dt = it.repair_start ? it.repair_start.slice(0, 16) : (it.report_date ? it.report_date.slice(0, 10) : '—');
+                const problemRaw = it.problem || '';
+                const problemSnippet = esc(problemRaw.length > 90 ? problemRaw.slice(0, 90) + '…' : (problemRaw || '—'));
+
+                return `
+                <div class="thread-item ${isCurrent ? 'thread-item-current' : ''}" ${isCurrent ? '' : `onclick="openDetail(${it.id})"`}>
+                    <div class="thread-item-dot"></div>
+                    <div class="thread-item-body">
+                        <div class="thread-item-top">
+                            <span class="thread-item-date"><span class="thread-root-tag">${isRoot ? 'Laporan Awal' : 'Lanjutan'}</span>${dt} · ${esc(it.shift || '—')}</span>
+                            ${badge}
+                        </div>
+                        <div class="thread-item-problem">${problemSnippet}</div>
+                        <div class="thread-item-pic">PIC: ${esc(it.pic || '—')}${isCurrent ? ' <span class="thread-current-tag">(sedang dilihat)</span>' : ''}</div>
+                    </div>
+                </div>`;
+            }).join('');
+
+            return `
+            <div class="thread-wrap">
+                <div class="thread-title"><i class="fas fa-link"></i> Rangkaian Laporan Ini (${items.length} entri terhubung)</div>
+                ${list}
+            </div>`;
+        }
+
         function closeModal(e) {
             if (e && e.target !== document.getElementById('modal-overlay')) return;
             document.getElementById('modal-overlay').classList.remove('open');
+        }
+
+        // ── Follow-up form: load teknisi ─────────────────────────────────────────────
+        let techniciansLoaded = false;
+
+        function loadTechniciansForEdit() {
+            if (techniciansLoaded) return;
+            fetch('dashboard_report.php?ajax=technicians')
+                .then(r => r.json())
+                .then(data => {
+                    const sel = document.getElementById('edit-pic');
+                    sel.innerHTML = '<option value="">— Pilih Teknisi —</option>';
+                    (data || []).forEach(t => {
+                        const o = document.createElement('option');
+                        o.value = t.name;
+                        o.textContent = t.name;
+                        sel.appendChild(o);
+                    });
+                    techniciansLoaded = true;
+                })
+                .catch(() => {});
+        }
+
+        function setEditShift(btn) {
+            document.querySelectorAll('#edit-shift-group .choice-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('edit-inp-shift').value = btn.getAttribute('data-val');
+        }
+
+        function setEditStatus(btn) {
+            document.querySelectorAll('#edit-status-group .choice-btn').forEach(b => b.classList.remove('active-done', 'active-pending'));
+            const val = btn.getAttribute('data-val');
+            btn.classList.add(val === 'selesai' ? 'active-done' : 'active-pending');
+            document.getElementById('edit-inp-status').value = val;
+        }
+
+        function calcEditDuration() {
+            const sd = document.getElementById('edit-start-date').value;
+            const st = document.getElementById('edit-start-time').value;
+            const fd = document.getElementById('edit-finish-date').value;
+            const ft = document.getElementById('edit-finish-time').value;
+            const disp = document.getElementById('edit-duration-display');
+            const hid = document.getElementById('edit-duration-minutes');
+
+            if (!sd || !st || !fd || !ft) {
+                disp.value = '';
+                disp.style.color = '';
+                hid.value = '';
+                return;
+            }
+            const start = new Date(`${sd}T${st}`);
+            const finish = new Date(`${fd}T${ft}`);
+            const diffMs = finish - start;
+            if (diffMs <= 0) {
+                disp.value = 'Finish harus setelah Start';
+                disp.style.color = '#dc2626';
+                hid.value = '';
+                return;
+            }
+            const totalMin = Math.round(diffMs / 60000);
+            const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
+            const mm = String(totalMin % 60).padStart(2, '0');
+            disp.value = `${hh}:${mm}:00`;
+            disp.style.color = '';
+            hid.value = totalMin;
+        }
+
+        function openFollowupForm() {
+            if (!currentDetailRow) return;
+            const r = currentDetailRow;
+            loadTechniciansForEdit();
+
+            document.getElementById('modal-title').textContent = `Tambah Info — E-Report #${r.id}`;
+            document.getElementById('modal-content').style.display = 'none';
+            document.getElementById('modal-edit-wrap').style.display = 'block';
+            document.getElementById('modal-footer-view').style.display = 'none';
+            document.getElementById('modal-footer-edit').style.display = 'flex';
+
+            document.getElementById('edit-machine-info').innerHTML =
+                `<i class="fas fa-industry mr-1.5 text-slate-400"></i> ${esc(r.department)} — ${esc(r.line)} | OP: ${esc(r.op || '—')} | ${esc(r.machine_name)} (${esc(r.machine_type || '—')})`;
+
+            // Reset semua field — shift 2 mulai dari awal bukan dari data shift 1
+            document.getElementById('edit-start-date').value = '';
+            document.getElementById('edit-start-time').value = '';
+            document.getElementById('edit-finish-date').value = '';
+            document.getElementById('edit-finish-time').value = '';
+            document.getElementById('edit-duration-display').value = '';
+            document.getElementById('edit-duration-minutes').value = '';
+            document.getElementById('edit-pic').value = '';
+            document.getElementById('edit-problem').value = '';
+            document.getElementById('edit-action').value = '';
+
+            document.querySelectorAll('#edit-shift-group .choice-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('edit-inp-shift').value = '';
+
+            document.querySelectorAll('#edit-status-group .choice-btn').forEach(b => b.classList.remove('active-done', 'active-pending'));
+            document.getElementById('edit-inp-status').value = '';
+        }
+
+        function cancelEdit() {
+            if (!currentDetailRow) {
+                closeModal();
+                return;
+            }
+            document.getElementById('modal-title').textContent = `Detail E-Report #${currentDetailRow.id}`;
+            document.getElementById('modal-edit-wrap').style.display = 'none';
+            document.getElementById('modal-content').style.display = 'block';
+            document.getElementById('modal-footer-edit').style.display = 'none';
+            document.getElementById('modal-footer-view').style.display = 'flex';
+        }
+
+        function submitFollowup() {
+            if (!currentDetailRow) return;
+            const sourceId = currentDetailRow.id;
+
+            const startDate = document.getElementById('edit-start-date').value;
+            const startTime = document.getElementById('edit-start-time').value;
+            const finishDate = document.getElementById('edit-finish-date').value;
+            const finishTime = document.getElementById('edit-finish-time').value;
+            const durationMinutes = document.getElementById('edit-duration-minutes').value;
+            const shift = document.getElementById('edit-inp-shift').value;
+            const pic = document.getElementById('edit-pic').value;
+            const problem = document.getElementById('edit-problem').value.trim();
+            const action = document.getElementById('edit-action').value.trim();
+            const status = document.getElementById('edit-inp-status').value;
+
+            if (!startDate || !startTime || !shift || !pic || !problem || !action || !status) {
+                showToast('Lengkapi semua field wajib.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('btn-save-edit');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+            const fd = new FormData();
+            fd.append('source_id', sourceId);
+            fd.append('start_date', startDate);
+            fd.append('start_time', startTime);
+            fd.append('finish_date', finishDate);
+            fd.append('finish_time', finishTime);
+            fd.append('duration_minutes', durationMinutes);
+            fd.append('shift', shift);
+            fd.append('pic', pic);
+            fd.append('problem', problem);
+            fd.append('action', action);
+            fd.append('status', status);
+
+            fetch('history_report.php?ajax=add_followup', {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        showToast('Informasi lanjutan berhasil disimpan.', 'success');
+                        // Tampilkan kembali tampilan detail (bukan form), lalu muat ulang
+                        // datanya dari server — supaya status terbaru (mis. jadi "selesai")
+                        // langsung kebaca dan tombol "Tambah Info" ikut hilang kalau perlu.
+                        document.getElementById('modal-edit-wrap').style.display = 'none';
+                        document.getElementById('modal-footer-edit').style.display = 'none';
+                        openDetail(sourceId);
+                        loadHistory(currentPage); // refresh tabel
+                    } else {
+                        showToast(res.message || 'Gagal menyimpan.', 'error');
+                    }
+                })
+                .catch(() => showToast('Koneksi error.', 'error'))
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-save"></i> Simpan Informasi';
+                });
         }
 
         // ── Toast ─────────────────────────────────────────────────────────────────────
