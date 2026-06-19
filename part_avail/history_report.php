@@ -46,6 +46,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $stmtCount->execute($params);
     $total = (int)$stmtCount->fetchColumn();
 
+    // Hitung total duration_minutes untuk seluruh periode (bukan hanya halaman aktif)
+    $stmtSum = $pdo->prepare("SELECT COALESCE(SUM(duration_minutes), 0) FROM e_reports r $where");
+    $stmtSum->execute($params);
+    $totalMinutes = (int)$stmtSum->fetchColumn();
+
     $stmt = $pdo->prepare("
         SELECT r.id, r.parent_id, r.report_date, r.department, r.line, r.op, r.shift,
                r.machine_name, r.machine_type,
@@ -61,7 +66,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $stmt->execute($params);
     $rows = $stmt->fetchAll();
 
-    echo json_encode(['rows' => $rows, 'total' => $total, 'limit' => $limit]);
+    echo json_encode(['rows' => $rows, 'total' => $total, 'limit' => $limit, 'total_minutes' => $totalMinutes]);
     exit;
 }
 
@@ -989,6 +994,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         <i class="fas fa-search text-xs"></i> Cari
                     </button>
 
+                    <div id="total-worktime-wrap" style="display:none;" class="flex items-center gap-2 px-4 py-2 rounded-xl border border-orange-200 bg-orange-50">
+                        <i class="fas fa-clock text-xs" style="color:#fb8b24;"></i>
+                        <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Total Repair Time:</span>
+                        <span id="total-worktime-val" class="text-sm font-extrabold" style="color:#fb8b24;">0 menit</span>
+                    </div>
+
                     <div class="flex-1"></div>
 
                     <button onclick="exportData()"
@@ -1043,7 +1054,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                                 <th>Line</th>
                                 <th class="text-center">OP</th>
                                 <th>Mesin</th>
-                                <th>Waktu Perbaikan</th>
+                                <th class="text-center">Repair Start</th>
+                                <th class="text-center">Repair Finish</th>
+                                <th class="text-center">Submitted At</th>
                                 <th class="text-center">Status</th>
                                 <th class="text-center w-16">Detail</th>
                             </tr>
@@ -1301,6 +1314,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     document.getElementById('hist-loading').style.display = 'none';
                     totalRecords = data.total;
 
+                    // Tampilkan total work time (seluruh periode, bukan hanya halaman)
+                    const twWrap = document.getElementById('total-worktime-wrap');
+                    const twVal = document.getElementById('total-worktime-val');
+                    const mins = data.total_minutes || 0;
+                    twWrap.style.display = 'flex';
+                    twVal.textContent = `${mins} menit`;
+
                     if (!data.rows || data.rows.length === 0) {
                         document.getElementById('hist-empty').style.display = 'flex';
                         if (searchQuery !== '') {
@@ -1350,12 +1370,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 tr.className = 'fade-in';
                 tr.style.animationDelay = `${idx * 15}ms`;
 
-                // Jam saja (tanggal sudah ada di kolom "Tanggal") agar kolom tetap ringkas.
-                const startTimeFmt = row.repair_start ? row.repair_start.slice(11, 16) : '—';
-                const finishTimeFmt = row.repair_finish ? row.repair_finish.slice(11, 16) : null;
-                const repairTimeFmt = finishTimeFmt ?
-                    `<span class="whitespace-nowrap">${startTimeFmt} – ${finishTimeFmt}</span>` :
-                    `<span class="whitespace-nowrap">${startTimeFmt} – <span class="text-slate-300">selesai?</span></span>`;
+                // Format repair start (tanggal + jam)
+                const fmtDt = (dt) => {
+                    if (!dt) return '<span class="text-slate-300">—</span>';
+                    const d = dt.slice(0, 10);
+                    const t = dt.slice(11, 16);
+                    return `<span class="whitespace-nowrap text-xs">${d}<br><span class="font-bold">${t}</span></span>`;
+                };
+                const repairStartFmt = fmtDt(row.repair_start);
+                const repairFinishFmt = row.repair_finish ?
+                    fmtDt(row.repair_finish) :
+                    '<span class="text-amber-400 text-xs whitespace-nowrap">Belum selesai</span>';
+                const submittedAtFmt = fmtDt(row.created_at);
 
                 const statusVal = row.status || 'belum selesai';
                 const statusBadge = statusVal === 'selesai' ?
@@ -1368,11 +1394,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 tr.innerHTML = `
         <td class="text-center text-slate-400 font-bold text-xs">${no}</td>
         <td class="font-semibold text-slate-700 whitespace-nowrap">${row.report_date?.slice(0,10) ?? '—'}</td>
-        <td class="text-slate-600 max-w-[100px] truncate" title="${esc(row.department)}">${esc(row.department)}</td>
-        <td class="text-slate-600 max-w-[70px] truncate" title="${esc(row.line)}">${esc(row.line)}</td>
-        <td class="text-center text-slate-500">${row.op || '—'}</td>
-        <td class="font-medium text-slate-700 max-w-[130px] truncate" title="${esc(row.machine_name)}">${esc(row.machine_name)}</td>
-        <td class="text-xs text-slate-600">${repairTimeFmt}</td>
+        <td class="text-slate-600" style="max-width:110px;word-break:break-word;white-space:normal;">${esc(row.department)}</td>
+        <td class="text-slate-600" style="max-width:80px;word-break:break-word;white-space:normal;">${esc(row.line)}</td>
+        <td class="text-center text-slate-500" style="white-space:normal;word-break:break-word;max-width:60px;">${row.op || '—'}</td>
+        <td class="font-medium text-slate-700" style="max-width:140px;word-break:break-word;white-space:normal;">${esc(row.machine_name)}</td>
+        <td class="text-center">${repairStartFmt}</td>
+        <td class="text-center">${repairFinishFmt}</td>
+        <td class="text-center">${submittedAtFmt}</td>
         <td class="text-center">${statusBadge}${linkedBadge}</td>
         <td class="text-center">
             <button onclick="openDetail(${row.id})"
