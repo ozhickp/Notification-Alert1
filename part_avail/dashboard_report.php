@@ -877,23 +877,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             }
         })();
 
-        // ── Date init ─────────────────────────────────────────────────────────────────
-        const today = new Date();
-        const todayISO = today.toISOString().split('T')[0];
-        const todayFmt = today.toLocaleDateString('id-ID', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric'
-        });
+        // ── Date init (live — update otomatis setiap menit) ───────────────────────────
+        function updateLiveDate() {
+            const now = new Date();
+            const iso = now.toISOString().split('T')[0];
+            const fmt = now.toLocaleDateString('id-ID', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric'
+            });
+            document.getElementById('inp-tanggal').value = iso;
+            document.getElementById('inp-tanggal-display').value = fmt;
+            document.getElementById('today-label').textContent = now.toLocaleDateString('id-ID', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+        }
 
-        document.getElementById('inp-tanggal').value = todayISO;
-        document.getElementById('inp-tanggal-display').value = todayFmt;
-        document.getElementById('today-label').textContent = today.toLocaleDateString('id-ID', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        });
+        updateLiveDate(); // jalankan sekali saat load
+        setInterval(updateLiveDate, 60000); // update setiap 1 menit
+        // saat submit, ambil nilai terkini langsung dari hidden field #inp-tanggal
 
         // ── Helper: get current machine name (adaptive: text input or select dropdown) ──
         function isMachineDropdownActive() {
@@ -1183,7 +1188,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             fd.append('op', op);
             fd.append('machine_name', machine);
             fd.append('machine_type', type);
-            fd.append('report_date', todayISO);
+            fd.append('report_date', document.getElementById('inp-tanggal').value);
             fd.append('start_date', startDate);
             fd.append('start_time', startTime);
             fd.append('finish_date', finishDate);

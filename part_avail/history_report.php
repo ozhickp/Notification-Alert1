@@ -29,9 +29,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     }
 
     if ($mode === 'daily') {
-        $where = "WHERE DATE(r.report_date) = ?";
+        $where = "WHERE DATE(r.created_at) = ?";
     } else {
-        $where = "WHERE DATE_FORMAT(r.report_date, '%Y-%m') = ?";
+        $where = "WHERE DATE_FORMAT(r.created_at, '%Y-%m') = ?";
     }
     $params = [$value];
 
