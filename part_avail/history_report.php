@@ -10,6 +10,14 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
+// ─── AJAX: distinct departments ────────────────────────────────────────────────
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
+    header('Content-Type: application/json');
+    $stmt = $pdo->query("SELECT DISTINCT department FROM e_reports WHERE department IS NOT NULL AND department <> '' ORDER BY department ASC");
+    echo json_encode($stmt->fetchAll(PDO::FETCH_COLUMN));
+    exit;
+}
+
 // ─── AJAX: history list ────────────────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     error_reporting(0);
@@ -22,6 +30,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $limit  = max(20, (int)($_GET['limit'] ?? 20));
     $offset = ($page - 1) * $limit;
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
+    $dept   = isset($_GET['dept']) ? trim($_GET['dept']) : '';
 
     if ($value === '') {
         echo json_encode(['rows' => [], 'total' => 0]);
@@ -34,6 +43,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
         $where = "WHERE DATE_FORMAT(r.created_at, '%Y-%m') = ?";
     }
     $params = [$value];
+
+    // Filter department
+    if ($dept !== '') {
+        $where .= " AND r.department = ?";
+        $params[] = $dept;
+    }
 
     // Server-side search: cari di seluruh data, bukan hanya halaman aktif
     if ($search !== '') {
@@ -994,10 +1009,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         <i class="fas fa-search text-xs"></i> Cari
                     </button>
 
-                    <div id="total-worktime-wrap" style="display:none;" class="flex items-center gap-2 px-4 py-2 rounded-xl border border-orange-200 bg-orange-50">
-                        <i class="fas fa-clock text-xs" style="color:#fb8b24;"></i>
-                        <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Total Repair Time:</span>
-                        <span id="total-worktime-val" class="text-sm font-extrabold" style="color:#fb8b24;">0 menit</span>
+                    <div id="dept-filter-wrap" style="display:none;">
+                        <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Department</label>
+                        <select id="inp-dept" onchange="loadHistory(1)"
+                            class="form-field text-xs" style="min-width:160px;">
+                            <option value="">Semua Department</option>
+                        </select>
+                    </div>
+
+                    <div id="total-worktime-wrap" style="display:none;position:relative;">
+                        <div class="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-orange-200 bg-orange-50">
+                            <i class="fas fa-clock text-xs" style="color:#fb8b24;"></i>
+                            <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Total Repair Time:</span>
+                            <span id="total-worktime-val" class="text-sm font-extrabold" style="color:#fb8b24;">0 menit</span>
+                        </div>
+                        <span style="position:absolute;bottom:-16px;left:2px;font-size:10px;color:#94a3b8;font-weight:500;">*berdasarkan tanggal submit</span>
                     </div>
 
                     <div class="flex-1"></div>
@@ -1290,10 +1316,31 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         }
 
         // ── Load history (server-side search + pagination) ────────────────────────────
+        let deptLoaded = false;
+
+        function loadDepartments() {
+            fetch('history_report.php?ajax=departments')
+                .then(r => r.json())
+                .then(depts => {
+                    const sel = document.getElementById('inp-dept');
+                    // reset ke option pertama saja
+                    sel.innerHTML = '<option value="">Semua Department</option>';
+                    depts.forEach(d => {
+                        const opt = document.createElement('option');
+                        opt.value = d;
+                        opt.textContent = d;
+                        sel.appendChild(opt);
+                    });
+                    document.getElementById('dept-filter-wrap').style.display = 'block';
+                    deptLoaded = true;
+                });
+        }
+
         function loadHistory(page = 1) {
             const value = document.getElementById('inp-date').value;
             const searchQuery = document.getElementById('inp-search').value.trim();
             const limitSelect = document.getElementById('inp-limit').value;
+            const dept = document.getElementById('inp-dept')?.value || '';
 
             if (!value) {
                 showToast('Pilih tanggal / bulan terlebih dahulu.', 'error');
@@ -1308,7 +1355,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             document.getElementById('pagination').classList.add('hidden');
             document.getElementById('result-label').textContent = '';
 
-            fetch(`history_report.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}`)
+            // Load departments sekali saja saat pertama kali cari
+            if (!deptLoaded) loadDepartments();
+
+            fetch(`history_report.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&dept=${encodeURIComponent(dept)}`)
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('hist-loading').style.display = 'none';
