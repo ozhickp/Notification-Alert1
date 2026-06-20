@@ -1439,7 +1439,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     '<span class="status-badge status-pending"><i class="fas fa-clock"></i> Belum Selesai</span>';
 
                 const linkedBadge = row.parent_id ?
-                    `<br><span class="linked-badge" title="Lanjutan dari laporan sebelumnya — buka Detail untuk lihat rangkaiannya"><i class="fas fa-link"></i> Lanjutan</span>` : '';
+                    `<br><span class="linked-badge" title="Baris ini adalah sambungan/lanjutan pekerjaan dari laporan sebelumnya — buka Detail untuk lihat rangkaiannya"><i class="fas fa-link"></i> Lanjutan Pekerjaan</span>` : '';
 
                 tr.innerHTML = `
         <td class="text-center text-slate-400 font-bold text-xs">${no}</td>

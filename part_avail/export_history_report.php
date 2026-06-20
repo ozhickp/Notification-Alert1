@@ -28,13 +28,13 @@ $bulan   = $_GET['bulan']   ?? '';
 // ── Validasi + filename ───────────────────────────────────────────────────────
 if ($mode === 'daily') {
     if ($tanggal === '') die('Pilih tanggal terlebih dahulu.');
-    $whereDate    = "DATE(r.report_date) = " . $pdo->quote($tanggal);
+    $whereDate    = "DATE(r.created_at) = " . $pdo->quote($tanggal);
     $periodeLabel = 'Tanggal : ' . $tanggal;
     $dtParts      = explode('-', $tanggal);
     $filename     = 'History_EReport_daily_' . implode('_', $dtParts) . '.xlsx';
 } elseif ($mode === 'monthly') {
     if ($bulan === '') die('Pilih bulan terlebih dahulu.');
-    $whereDate    = "DATE_FORMAT(r.report_date, '%Y-%m') = " . $pdo->quote($bulan);
+    $whereDate    = "DATE_FORMAT(r.created_at, '%Y-%m') = " . $pdo->quote($bulan);
     $periodeLabel = 'Bulan : ' . $bulan;
     $dtParts      = explode('-', $bulan);
     $filename     = 'History_EReport_monthly_' . implode('_', $dtParts) . '.xlsx';
@@ -44,9 +44,9 @@ if ($mode === 'daily') {
 
 // ── Query ─────────────────────────────────────────────────────────────────────
 $rows = $pdo->query("
-    SELECT r.id, r.report_date, r.department, r.line, r.op,
+    SELECT r.id, r.parent_id, r.report_date, r.department, r.line, r.op, r.shift,
            r.machine_name, r.machine_type, r.repair_start, r.repair_finish,
-           r.reported_by, r.pic, r.problem, r.action, r.created_at
+           r.reported_by, r.pic, r.problem, r.action, r.status, r.created_at
     FROM e_reports r
     WHERE {$whereDate}
     ORDER BY r.report_date ASC, r.created_at ASC
@@ -54,12 +54,34 @@ $rows = $pdo->query("
 
 if (empty($rows)) die("Tidak ada data untuk periode yang dipilih.");
 
+// Map id (database) → nomor urut "No" di sheet, dipakai sama untuk semua mode
+// karena urutan baris ($rows) identik antar sheet.
+$idToNo = [];
+foreach ($rows as $i => $r) {
+    $idToNo[$r['id']] = $i + 1;
+}
+
+// ── Helper: rujukan "Lanjutan Dari" harus menunjuk ke nomor urut "No" yang
+// tampil di sheet, bukan ID mentah di database — supaya konsisten dengan apa
+// yang dilihat user dan bisa langsung dicocokkan ke baris di atasnya.
+function buildLanjutanLabel($parentId, array $idToNo)
+{
+    if (!$parentId) return '—';
+    return isset($idToNo[$parentId]) ? '#' . $idToNo[$parentId] : '#' . $parentId . ' (luar periode)';
+}
+
 // ── Helper durasi ─────────────────────────────────────────────────────────────
 function durasiMenit($start, $finish)
 {
     if (empty($start) || empty($finish)) return '—';
     $diff = (new DateTime($start))->diff(new DateTime($finish));
     return ($diff->days * 1440) + ($diff->h * 60) + $diff->i;
+}
+
+// ── Helper label status ────────────────────────────────────────────────────────
+function statusLabel($status)
+{
+    return $status === 'selesai' ? 'Selesai' : 'Belum Selesai';
 }
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
@@ -80,6 +102,7 @@ $colHeaders = [
     'Department',
     'Line',
     'OP',
+    'Shift',
     'Nama Mesin',
     'Tipe Mesin',
     'Repair Start',
@@ -89,12 +112,38 @@ $colHeaders = [
     'PIC / Teknisi',
     'Problem / Alarm',
     'Action / Perbaikan',
+    'Status',
+    'Lanjutan Dari',
     'Submitted At'
 ];
 
 // ── Excel ─────────────────────────────────────────────────────────────────────
 $spreadsheet = new Spreadsheet();
 $spreadsheet->getCalculationEngine()->disableCalculationCache();
+
+// Lebar kolom tetap (dipakai semua sheet) — N & O dilebarkan untuk Problem/Action
+// dengan wrap text supaya isian berpoin-poin tetap terbaca rapi ke bawah, bukan
+// melebar ke samping seperti hasil autosize.
+$colWidths = [
+    'A' => 5,   // No
+    'B' => 13,  // Report Date
+    'C' => 18,  // Department
+    'D' => 14,  // Line
+    'E' => 8,   // OP
+    'F' => 10,  // Shift
+    'G' => 24,  // Nama Mesin
+    'H' => 16,  // Tipe Mesin
+    'I' => 18,  // Repair Start
+    'J' => 18,  // Repair Finish
+    'K' => 10,  // Durasi (mnt)
+    'L' => 16,  // Reported By
+    'M' => 16,  // PIC / Teknisi
+    'N' => 38,  // Problem / Alarm
+    'O' => 38,  // Action / Perbaikan
+    'P' => 14,  // Status
+    'Q' => 14,  // Lanjutan Dari
+    'R' => 18   // Submitted At
+];
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MODE DAILY — 1 sheet, 1 blok per record
@@ -113,13 +162,13 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet);
     }
 
-    $sheet->mergeCells('A1:O1');
+    $sheet->mergeCells('A1:R1');
     $sheet->setCellValue('A1', 'HISTORY E-REPORT MAINTENANCE');
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet->getRowDimension(1)->setRowHeight(45);
-    $sheet->mergeCells('A2:O2');
+    $sheet->mergeCells('A2:R2');
     $sheet->setCellValue('A2', $periodeLabel);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
@@ -148,7 +197,7 @@ if ($mode === 'daily') {
             $r['reported_by'],
             $r['created_at']
         );
-        $sheet->mergeCells("A{$infoRow}:O{$infoRow}");
+        $sheet->mergeCells("A{$infoRow}:R{$infoRow}");
         $sheet->setCellValue("A{$infoRow}", $infoText);
         $sheet->getStyle("A{$infoRow}")->applyFromArray($styleInfo);
         $sheet->getRowDimension($infoRow)->setRowHeight(18);
@@ -156,7 +205,7 @@ if ($mode === 'daily') {
 
         $hdrRow = $startRow;
         $sheet->fromArray($colHeaders, NULL, "A{$hdrRow}");
-        $sheet->getStyle("A{$hdrRow}:O{$hdrRow}")->applyFromArray($styleHdr);
+        $sheet->getStyle("A{$hdrRow}:R{$hdrRow}")->applyFromArray($styleHdr);
         $sheet->getRowDimension($hdrRow)->setRowHeight(16);
         $startRow++;
 
@@ -166,6 +215,7 @@ if ($mode === 'daily') {
             $r['department']    ?? '—',
             $r['line']          ?? '—',
             $r['op']            ?? '—',
+            $r['shift']         ?? '—',
             $r['machine_name']  ?? '—',
             $r['machine_type']  ?? '—',
             $r['repair_start']  ? date('d-M-Y H:i', strtotime($r['repair_start']))   : '—',
@@ -175,38 +225,23 @@ if ($mode === 'daily') {
             $r['pic']           ?? '—',
             $r['problem']       ?? '—',
             $r['action']        ?? '—',
+            statusLabel($r['status']),
+            buildLanjutanLabel($r['parent_id'], $idToNo),
             $r['created_at']    ? date('d-M-Y H:i', strtotime($r['created_at']))     : '—',
         ], NULL, "A{$startRow}");
-        $sheet->getStyle("A{$startRow}:O{$startRow}")->getAlignment()
+        $sheet->getStyle("A{$startRow}:R{$startRow}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
         $sheet->getRowDimension($startRow)->setRowHeight(14);
 
-        foreach (['A', 'E', 'J'] as $col) {
+        foreach (['A', 'E', 'F', 'K', 'P', 'Q'] as $col) {
             $sheet->getStyle("{$col}{$startRow}")
                 ->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         }
 
-        $sheet->getStyle("A{$infoRow}:O{$startRow}")->applyFromArray($styleBorder);
+        $sheet->getStyle("A{$infoRow}:R{$startRow}")->applyFromArray($styleBorder);
         $startRow += 2;
     }
 
-    $colWidths = [
-        'A' => 5,
-        'B' => 13,
-        'C' => 18,
-        'D' => 14,
-        'E' => 8,
-        'F' => 24,
-        'G' => 16,
-        'H' => 18,
-        'I' => 18,
-        'J' => 10,
-        'K' => 16,
-        'L' => 16,
-        'M' => 38,
-        'N' => 38,
-        'O' => 18
-    ];
     foreach ($colWidths as $col => $w) {
         $sheet->getColumnDimension($col)->setWidth($w);
     }
@@ -230,19 +265,19 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet1);
     }
 
-    $sheet1->mergeCells('A1:O1');
+    $sheet1->mergeCells('A1:R1');
     $sheet1->setCellValue('A1', 'MONTHLY E-REPORT MAINTENANCE — SUMMARY');
     $sheet1->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet1->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet1->getRowDimension(1)->setRowHeight(45);
-    $sheet1->mergeCells('A2:O2');
+    $sheet1->mergeCells('A2:R2');
     $sheet1->setCellValue('A2', $periodeLabel);
     $sheet1->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet1->getStyle('A2')->getFont()->setSize(11);
 
     $sheet1->fromArray($colHeaders, NULL, 'A4');
-    $sheet1->getStyle('A4:O4')->applyFromArray([
+    $sheet1->getStyle('A4:R4')->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -259,9 +294,9 @@ if ($mode === 'daily') {
 
         // Pemisah tanggal — identik checksheet monthly
         if ($curDate !== $prevDate) {
-            $sheet1->mergeCells("A{$row1}:O{$row1}");
+            $sheet1->mergeCells("A{$row1}:R{$row1}");
             $sheet1->setCellValue("A{$row1}", "— " . date('d F Y', strtotime($curDate)) . " —");
-            $sheet1->getStyle("A{$row1}:O{$row1}")->applyFromArray($styleDivider);
+            $sheet1->getStyle("A{$row1}:R{$row1}")->applyFromArray($styleDivider);
             $sheet1->getRowDimension($row1)->setRowHeight(14);
             $row1++;
             $prevDate = $curDate;
@@ -273,6 +308,7 @@ if ($mode === 'daily') {
             $r['department']    ?? '—',
             $r['line']          ?? '—',
             $r['op']            ?? '—',
+            $r['shift']         ?? '—',
             $r['machine_name']  ?? '—',
             $r['machine_type']  ?? '—',
             $r['repair_start']  ? date('d-M-Y H:i', strtotime($r['repair_start']))   : '—',
@@ -282,6 +318,8 @@ if ($mode === 'daily') {
             $r['pic']           ?? '—',
             $r['problem']       ?? '—',
             $r['action']        ?? '—',
+            statusLabel($r['status']),
+            buildLanjutanLabel($r['parent_id'], $idToNo),
             $r['created_at']    ? date('d-M-Y H:i', strtotime($r['created_at']))     : '—',
         ], NULL, "A{$row1}");
 
@@ -294,28 +332,28 @@ if ($mode === 'daily') {
     if (!empty($dataRowsS1)) {
         $first = $dataRowsS1[0];
         $last  = $dataRowsS1[count($dataRowsS1) - 1];
-        $sheet1->getStyle("A{$first}:O{$last}")->getAlignment()
+        $sheet1->getStyle("A{$first}:R{$last}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)
             ->setHorizontal(Alignment::HORIZONTAL_CENTER)
             ->setWrapText(true);
-        // Kolom teks (C–N) rata kiri
-        $sheet1->getStyle("C{$first}:N{$last}")->getAlignment()
+        // Kolom teks (C–O) rata kiri
+        $sheet1->getStyle("C{$first}:O{$last}")->getAlignment()
             ->setHorizontal(Alignment::HORIZONTAL_LEFT);
     }
 
     // Grand Total row — identik checksheet monthly
-    $sheet1->mergeCells("A{$row1}:O{$row1}");
+    $sheet1->mergeCells("A{$row1}:R{$row1}");
     $sheet1->setCellValue("A{$row1}", "TOTAL : " . count($rows) . " record");
-    $sheet1->getStyle("A{$row1}:O{$row1}")->applyFromArray([
+    $sheet1->getStyle("A{$row1}:R{$row1}")->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
     ]);
     $sheet1->getRowDimension($row1)->setRowHeight(18);
 
-    $sheet1->getStyle("A4:O{$row1}")->applyFromArray($styleBorder);
-    foreach (range('A', 'O') as $col) {
-        $sheet1->getColumnDimension($col)->setAutoSize(true);
+    $sheet1->getStyle("A4:R{$row1}")->applyFromArray($styleBorder);
+    foreach ($colWidths as $col => $w) {
+        $sheet1->getColumnDimension($col)->setWidth($w);
     }
     $sheet1->freezePane('A5');
 
@@ -323,18 +361,18 @@ if ($mode === 'daily') {
     $sheet2 = $spreadsheet->createSheet();
     $sheet2->setTitle("Detail");
 
-    $sheet2->mergeCells('A1:O1');
+    $sheet2->mergeCells('A1:R1');
     $sheet2->setCellValue('A1', 'MONTHLY E-REPORT MAINTENANCE — DETAIL');
     $sheet2->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet2->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet2->getRowDimension(1)->setRowHeight(45);
-    $sheet2->mergeCells('A2:O2');
+    $sheet2->mergeCells('A2:R2');
     $sheet2->setCellValue('A2', $periodeLabel);
     $sheet2->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
 
     $sheet2->fromArray($colHeaders, NULL, 'A4');
-    $sheet2->getStyle('A4:O4')->applyFromArray([
+    $sheet2->getStyle('A4:R4')->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4F46E5']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -350,9 +388,9 @@ if ($mode === 'daily') {
         $curDate = substr($r['report_date'], 0, 10);
 
         if ($curDate !== $prevDate) {
-            $sheet2->mergeCells("A{$row2}:O{$row2}");
+            $sheet2->mergeCells("A{$row2}:R{$row2}");
             $sheet2->setCellValue("A{$row2}", "— " . date('d F Y', strtotime($curDate)) . " —");
-            $sheet2->getStyle("A{$row2}:O{$row2}")->applyFromArray($styleDivider);
+            $sheet2->getStyle("A{$row2}:R{$row2}")->applyFromArray($styleDivider);
             $sheet2->getRowDimension($row2)->setRowHeight(14);
             $row2++;
             $prevDate = $curDate;
@@ -364,6 +402,7 @@ if ($mode === 'daily') {
             $r['department']    ?? '—',
             $r['line']          ?? '—',
             $r['op']            ?? '—',
+            $r['shift']         ?? '—',
             $r['machine_name']  ?? '—',
             $r['machine_type']  ?? '—',
             $r['repair_start']  ? date('d-M-Y H:i', strtotime($r['repair_start']))   : '—',
@@ -373,6 +412,8 @@ if ($mode === 'daily') {
             $r['pic']           ?? '—',
             $r['problem']       ?? '—',
             $r['action']        ?? '—',
+            statusLabel($r['status']),
+            buildLanjutanLabel($r['parent_id'], $idToNo),
             $r['created_at']    ? date('d-M-Y H:i', strtotime($r['created_at']))     : '—',
         ], NULL, "A{$row2}");
 
@@ -385,17 +426,17 @@ if ($mode === 'daily') {
     if (!empty($dataRowsS2)) {
         $first = $dataRowsS2[0];
         $last  = $dataRowsS2[count($dataRowsS2) - 1];
-        $sheet2->getStyle("A{$first}:O{$last}")->getAlignment()
+        $sheet2->getStyle("A{$first}:R{$last}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
-        $sheet2->getStyle("C{$first}:N{$last}")->getAlignment()
+        $sheet2->getStyle("C{$first}:O{$last}")->getAlignment()
             ->setHorizontal(Alignment::HORIZONTAL_LEFT);
     }
 
     if ($row2 > 5) {
-        $sheet2->getStyle("A4:O" . ($row2 - 1))->applyFromArray($styleBorder);
+        $sheet2->getStyle("A4:R" . ($row2 - 1))->applyFromArray($styleBorder);
     }
-    foreach (range('A', 'O') as $col) {
-        $sheet2->getColumnDimension($col)->setAutoSize(true);
+    foreach ($colWidths as $col => $w) {
+        $sheet2->getColumnDimension($col)->setWidth($w);
     }
     $sheet2->freezePane('A5');
 
