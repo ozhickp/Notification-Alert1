@@ -1,7 +1,7 @@
 <?php
 // export_history_report.php
-set_time_limit(120);
-ini_set('memory_limit', '256M');
+set_time_limit(0);          // [FIX-1] Unlimited — monthly mode bisa sangat lama
+ini_set('memory_limit', '512M'); // [FIX-1] Naikkan dari 256M
 
 session_start();
 include 'config.php';
@@ -231,7 +231,8 @@ if ($mode === 'daily') {
         ], NULL, "A{$startRow}");
         $sheet->getStyle("A{$startRow}:R{$startRow}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
-        $sheet->getRowDimension($startRow)->setRowHeight(14);
+        // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
+        $sheet->getRowDimension($startRow)->setRowHeight(-1);
 
         foreach (['A', 'E', 'F', 'K', 'P', 'Q'] as $col) {
             $sheet->getStyle("{$col}{$startRow}")
@@ -324,7 +325,8 @@ if ($mode === 'daily') {
         ], NULL, "A{$row1}");
 
         $dataRowsS1[] = $row1;
-        $sheet1->getRowDimension($row1)->setRowHeight(15);
+        // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
+        $sheet1->getRowDimension($row1)->setRowHeight(-1);
         $row1++;
     }
 
@@ -418,7 +420,8 @@ if ($mode === 'daily') {
         ], NULL, "A{$row2}");
 
         $dataRowsS2[] = $row2;
-        $sheet2->getRowDimension($row2)->setRowHeight(14);
+        // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
+        $sheet2->getRowDimension($row2)->setRowHeight(-1);
         $row2++;
     }
 
@@ -444,10 +447,22 @@ if ($mode === 'daily') {
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────────
+// [FIX-3] Save ke file temp dulu, baru stream ke browser
+// Langsung ke php://output berisiko: koneksi browser bisa timeout sebelum
+// PhpSpreadsheet selesai generate (terutama monthly mode dengan 2 sheet).
+// Content-Length memberi tahu browser ukuran file yang akan datang,
+// sehingga download bar muncul dan koneksi tidak dianggap "menggantung".
 $writer = new Xlsx($spreadsheet);
 $writer->setPreCalculateFormulas(false);
+
+$tmpFile = tempnam(sys_get_temp_dir(), 'ereport_');
+$writer->save($tmpFile);
+
 header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 header("Content-Disposition: attachment; filename=\"{$filename}\"");
 header('Cache-Control: max-age=0');
-$writer->save('php://output');
+header('Content-Length: ' . filesize($tmpFile));
+
+readfile($tmpFile);
+unlink($tmpFile);
 exit;

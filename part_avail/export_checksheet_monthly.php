@@ -1,7 +1,7 @@
 <?php
 // export_checksheet_monthly.php
-set_time_limit(120);
-ini_set('memory_limit', '256M');
+set_time_limit(0);          // [FIX-1] Unlimited — data bulanan bisa butuh waktu jauh lebih dari 120 detik
+ini_set('memory_limit', '512M'); // [FIX-1] Naikkan dari 256M — Sheet 2 detail items bisa ribuan rows
 
 session_start();
 include 'config.php';
@@ -205,7 +205,8 @@ foreach ($submissions as $sub) {
     if ($c['ro'] > 0) $colorRowsRO[] = $row1;
 
     $dataRowsS1[] = $row1;
-    $sheet1->getRowDimension($row1)->setRowHeight(15);
+    // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
+    $sheet1->getRowDimension($row1)->setRowHeight(-1);
     $row1++;
 }
 
@@ -246,12 +247,32 @@ $sheet1->getStyle("A{$row1}:O{$row1}")->applyFromArray([
 ]);
 $sheet1->getRowDimension($row1)->setRowHeight(18);
 
-// Border & autosize Sheet1 — 1 call saja untuk seluruh range
+// Border seluruh Sheet1 — 1 call
 $sheet1->getStyle("A4:O{$row1}")->applyFromArray([
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
 ]);
-foreach (range('A', 'O') as $col) {
-    $sheet1->getColumnDimension($col)->setAutoSize(true);
+
+// [FIX-2] Ganti setAutoSize(true) ke fixed width
+// Sheet1 Summary: kolom cukup dengan lebar tetap, jauh lebih cepat
+$fixedWidthsS1 = [
+    'A' => 5,   // No
+    'B' => 13,  // Check Date
+    'C' => 20,  // Department
+    'D' => 16,  // Line
+    'E' => 8,   // OP
+    'F' => 22,  // Machine Name
+    'G' => 16,  // Machine Type
+    'H' => 14,  // Category
+    'I' => 16,  // Checker
+    'J' => 18,  // Submitted At
+    'K' => 10,  // Total Items
+    'L' => 8,   // OK (V)
+    'M' => 12,  // Problem (X)
+    'N' => 10,  // Repair (R)
+    'O' => 18,  // Repair Outsider (RO)
+];
+foreach ($fixedWidthsS1 as $col => $w) {
+    $sheet1->getColumnDimension($col)->setWidth($w);
 }
 $sheet1->freezePane('A5');
 
@@ -339,7 +360,8 @@ foreach ($submissions as $sub) {
         ], NULL, "A{$row2}");
 
         $resultRowsS2[] = ['row' => $row2, 'result' => $item['result']];
-        $sheet2->getRowDimension($row2)->setRowHeight(14);
+        // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
+        $sheet2->getRowDimension($row2)->setRowHeight(-1);
         $row2++;
     }
 
@@ -371,19 +393,46 @@ if ($row2 > 5) {
         'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
     ]);
 }
-foreach (range('A', 'M') as $col) {
-    $sheet2->getColumnDimension($col)->setAutoSize(true);
+// [FIX-2] Ganti setAutoSize(true) ke fixed width (Sheet2 Detail — bisa ribuan rows)
+// autoSize di Sheet2 adalah bottleneck terbesar karena jumlah row jauh lebih banyak
+$fixedWidthsS2 = [
+    'A' => 5,   // No
+    'B' => 13,  // Check Date
+    'C' => 20,  // Department
+    'D' => 16,  // Line
+    'E' => 22,  // Mesin
+    'F' => 16,  // Checker
+    'G' => 14,  // Category
+    'H' => 8,   // Item No
+    'I' => 28,  // Part to be Checked
+    'J' => 22,  // Standard
+    'K' => 12,  // Result
+    'L' => 16,  // Keterangan
+    'M' => 18,  // Submitted At
+];
+foreach ($fixedWidthsS2 as $col => $w) {
+    $sheet2->getColumnDimension($col)->setWidth($w);
 }
 $sheet2->freezePane('A5');
 
-$spreadsheet->setActiveSheetIndex(0);
+$spreadsheet->setActiveSheetIndex(0); // pastikan yang dibuka pertama adalah Summary
 
 // ── Export ─────────────────────────────────────────────────────────────────────
+// [FIX-3] Save ke file temp dulu, baru stream ke browser
+// Langsung ke php://output berisiko: koneksi browser bisa timeout sebelum
+// PhpSpreadsheet selesai generate (terutama data bulanan yang besar).
+// Content-Length memberi tahu browser ukuran file — tidak dianggap "menggantung".
 $writer = new Xlsx($spreadsheet);
 $writer->setPreCalculateFormulas(false);
+
+$tmpFile = tempnam(sys_get_temp_dir(), 'cs_monthly_');
+$writer->save($tmpFile);
 
 header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 header("Content-Disposition: attachment; filename=\"{$filename}\"");
 header('Cache-Control: max-age=0');
-$writer->save('php://output');
+header('Content-Length: ' . filesize($tmpFile));
+
+readfile($tmpFile);
+unlink($tmpFile);
 exit;

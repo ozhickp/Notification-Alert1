@@ -1,7 +1,7 @@
 <?php
 // export_checksheet_daily.php
-set_time_limit(120);
-ini_set('memory_limit', '256M');
+set_time_limit(0);          // [FIX-1] Unlimited — data besar butuh lebih dari 120 detik
+ini_set('memory_limit', '512M'); // [FIX-1] Naikkan dari 256M — PhpSpreadsheet rakus memori
 
 session_start();
 include 'config.php';
@@ -193,7 +193,8 @@ foreach ($submissions as $sub) {
         // Catat range result untuk coloring massal nanti
         $resultRanges[] = ['row' => $startRow, 'result' => $det['result']];
 
-        $sheet->getRowDimension($startRow)->setRowHeight(14);
+        // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
+        $sheet->getRowDimension($startRow)->setRowHeight(-1);
         $startRow++;
     }
 
@@ -239,18 +240,43 @@ foreach ($groupedResult as $result => $rows) {
     }
 }
 
-// AutoSize kolom
-foreach (range('A', 'M') as $col) {
-    $sheet->getColumnDimension($col)->setAutoSize(true);
+// [FIX-2] Ganti setAutoSize(true) ke fixed width
+// autoSize wajib mengukur teks tiap cell → sangat lambat untuk data banyak
+$fixedWidths = [
+    'A' => 5,   // No
+    'B' => 28,  // Part to be Checked
+    'C' => 22,  // Standard
+    'D' => 18,  // Checking Method
+    'E' => 18,  // Action
+    'F' => 10,  // Interval
+    'G' => 10,  // Result
+    'H' => 16,  // Keterangan
+    'I' => 14,  // Category
+    'J' => 10,  // Submission ID
+    'K' => 14,  // Check Date
+    'L' => 16,  // Checker
+    'M' => 18,  // Submitted At
+];
+foreach ($fixedWidths as $col => $w) {
+    $sheet->getColumnDimension($col)->setWidth($w);
 }
 $sheet->freezePane('A4');
 
 // ── Export ────────────────────────────────────────────────────────────────────
+// [FIX-3] Save ke file temp dulu, baru stream ke browser
+// Langsung ke php://output berisiko: browser timeout sebelum file selesai digenerate,
+// dan tanpa Content-Length browser tidak tahu kapan transfer selesai.
 $writer = new Xlsx($spreadsheet);
-$writer->setPreCalculateFormulas(false); // skip formula recalc → lebih cepat
+$writer->setPreCalculateFormulas(false);
+
+$tmpFile = tempnam(sys_get_temp_dir(), 'cs_daily_');
+$writer->save($tmpFile);
 
 header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 header("Content-Disposition: attachment; filename=\"{$filename}\"");
 header('Cache-Control: max-age=0');
-$writer->save('php://output');
+header('Content-Length: ' . filesize($tmpFile)); // [FIX-3] Browser tahu ukuran file → tidak dianggap "menggantung"
+
+readfile($tmpFile);
+unlink($tmpFile); // hapus temp file setelah dikirim
 exit;
