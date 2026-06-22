@@ -88,7 +88,10 @@ $styleSummary = [
     'alignment' => ['vertical' => Alignment::VERTICAL_CENTER],
 ];
 $styleBorder = [
-    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
+    // [FIX-BORDER] E2E8F0 terlalu pucat — hampir tidak terlihat di Excel saat
+    // gridlines dimatikan. Diganti ke 94A3B8 (lebih gelap) supaya border benar-benar
+    // terlihat jelas, bukan cuma "ada" secara teknis di file XLSX.
+    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
 ];
 
 // ── Excel ─────────────────────────────────────────────────────────────────────

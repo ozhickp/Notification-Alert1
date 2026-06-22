@@ -248,8 +248,9 @@ $sheet1->getStyle("A{$row1}:O{$row1}")->applyFromArray([
 $sheet1->getRowDimension($row1)->setRowHeight(18);
 
 // Border seluruh Sheet1 — 1 call
+// [FIX-BORDER] E2E8F0 terlalu pucat, hampir tidak terlihat di Excel — diganti 94A3B8
 $sheet1->getStyle("A4:O{$row1}")->applyFromArray([
-    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
+    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
 ]);
 
 // [FIX-2] Ganti setAutoSize(true) ke fixed width
@@ -388,9 +389,10 @@ foreach ($groupedResult as $result => $rows) {
 }
 
 // Border seluruh Sheet2 — 1 call
+// [FIX-BORDER] E2E8F0 terlalu pucat, hampir tidak terlihat di Excel — diganti 94A3B8
 if ($row2 > 5) {
     $sheet2->getStyle("A4:M" . ($row2 - 1))->applyFromArray([
-        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
+        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
     ]);
 }
 // [FIX-2] Ganti setAutoSize(true) ke fixed width (Sheet2 Detail — bisa ribuan rows)

@@ -92,10 +92,13 @@ $styleDivider = [
     'borders'   => ['bottom' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'CBD5E1']]],
 ];
 $styleBorder = [
-    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'E2E8F0']]],
+    // [FIX-BORDER] E2E8F0 terlalu pucat — hampir tidak terlihat di Excel saat
+    // gridlines dimatikan. Diganti ke 94A3B8 (lebih gelap) supaya border benar-benar
+    // terlihat jelas, bukan cuma "ada" secara teknis di file XLSX.
+    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
 ];
 
-// Kolom header
+// Kolom header — Detail (18 kolom, lengkap untuk analisis & arsip teknis)
 $colHeaders = [
     'No',
     'Report Date',
@@ -115,6 +118,24 @@ $colHeaders = [
     'Status',
     'Lanjutan Dari',
     'Submitted At'
+];
+
+// Kolom header — Summary (12 kolom, ringkas untuk rekap managerial)
+// Tidak menampilkan: OP, Machine Type, Action, PIC, Lanjutan, Submitted At
+// — dianggap terlalu teknis untuk kebutuhan baca cepat level manager.
+$colHeadersSummary = [
+    'No',
+    'Tanggal',
+    'Department',
+    'Line',
+    'Mesin',
+    'Shift',
+    'Problem / Alarm',
+    'Status',
+    'Repair Start',
+    'Repair Finish',
+    'Durasi (mnt)',
+    'Reported By',
 ];
 
 // ── Excel ─────────────────────────────────────────────────────────────────────
@@ -143,6 +164,22 @@ $colWidths = [
     'P' => 14,  // Status
     'Q' => 14,  // Lanjutan Dari
     'R' => 18   // Submitted At
+];
+
+// Lebar kolom — Summary (A–L, 12 kolom)
+$colWidthsSummary = [
+    'A' => 5,   // No
+    'B' => 13,  // Tanggal
+    'C' => 18,  // Department
+    'D' => 14,  // Line
+    'E' => 24,  // Mesin
+    'F' => 10,  // Shift
+    'G' => 42,  // Problem / Alarm — paling lebar, inti rekap
+    'H' => 14,  // Status
+    'I' => 18,  // Repair Start
+    'J' => 18,  // Repair Finish
+    'K' => 10,  // Durasi (mnt)
+    'L' => 16,  // Reported By
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -254,6 +291,9 @@ if ($mode === 'daily') {
 } else {
 
     // ══ SHEET 1: Summary ══════════════════════════════════════════════════════
+    // Ringkas — 12 kolom (A–L), fokus: siapa/di mana/mesin apa/masalah apa/
+    // status/durasi. Tidak menampilkan OP, Machine Type, Action, PIC,
+    // Lanjutan, Submitted At — dianggap terlalu teknis untuk rekap managerial.
     $sheet1 = $spreadsheet->getActiveSheet();
     $sheet1->setTitle("Summary");
 
@@ -266,19 +306,19 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet1);
     }
 
-    $sheet1->mergeCells('A1:R1');
+    $sheet1->mergeCells('A1:L1');
     $sheet1->setCellValue('A1', 'MONTHLY E-REPORT MAINTENANCE — SUMMARY');
     $sheet1->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet1->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet1->getRowDimension(1)->setRowHeight(45);
-    $sheet1->mergeCells('A2:R2');
+    $sheet1->mergeCells('A2:L2');
     $sheet1->setCellValue('A2', $periodeLabel);
     $sheet1->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet1->getStyle('A2')->getFont()->setSize(11);
 
-    $sheet1->fromArray($colHeaders, NULL, 'A4');
-    $sheet1->getStyle('A4:R4')->applyFromArray([
+    $sheet1->fromArray($colHeadersSummary, NULL, 'A4');
+    $sheet1->getStyle('A4:L4')->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -295,9 +335,9 @@ if ($mode === 'daily') {
 
         // Pemisah tanggal — identik checksheet monthly
         if ($curDate !== $prevDate) {
-            $sheet1->mergeCells("A{$row1}:R{$row1}");
+            $sheet1->mergeCells("A{$row1}:L{$row1}");
             $sheet1->setCellValue("A{$row1}", "— " . date('d F Y', strtotime($curDate)) . " —");
-            $sheet1->getStyle("A{$row1}:R{$row1}")->applyFromArray($styleDivider);
+            $sheet1->getStyle("A{$row1}:L{$row1}")->applyFromArray($styleDivider);
             $sheet1->getRowDimension($row1)->setRowHeight(14);
             $row1++;
             $prevDate = $curDate;
@@ -308,20 +348,14 @@ if ($mode === 'daily') {
             $r['report_date']   ? date('d-M-Y', strtotime($r['report_date']))        : '—',
             $r['department']    ?? '—',
             $r['line']          ?? '—',
-            $r['op']            ?? '—',
-            $r['shift']         ?? '—',
             $r['machine_name']  ?? '—',
-            $r['machine_type']  ?? '—',
+            $r['shift']         ?? '—',
+            $r['problem']       ?? '—',
+            statusLabel($r['status']),
             $r['repair_start']  ? date('d-M-Y H:i', strtotime($r['repair_start']))   : '—',
             $r['repair_finish'] ? date('d-M-Y H:i', strtotime($r['repair_finish']))  : '—',
             durasiMenit($r['repair_start'], $r['repair_finish']),
             $r['reported_by']   ?? '—',
-            $r['pic']           ?? '—',
-            $r['problem']       ?? '—',
-            $r['action']        ?? '—',
-            statusLabel($r['status']),
-            buildLanjutanLabel($r['parent_id'], $idToNo),
-            $r['created_at']    ? date('d-M-Y H:i', strtotime($r['created_at']))     : '—',
         ], NULL, "A{$row1}");
 
         $dataRowsS1[] = $row1;
@@ -334,27 +368,30 @@ if ($mode === 'daily') {
     if (!empty($dataRowsS1)) {
         $first = $dataRowsS1[0];
         $last  = $dataRowsS1[count($dataRowsS1) - 1];
-        $sheet1->getStyle("A{$first}:R{$last}")->getAlignment()
+        $sheet1->getStyle("A{$first}:L{$last}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)
             ->setHorizontal(Alignment::HORIZONTAL_CENTER)
             ->setWrapText(true);
-        // Kolom teks (C–O) rata kiri
-        $sheet1->getStyle("C{$first}:O{$last}")->getAlignment()
-            ->setHorizontal(Alignment::HORIZONTAL_LEFT);
+        // Kolom teks (C, D, E, G, L) rata kiri — Department, Line, Mesin,
+        // Problem/Alarm, Reported By
+        foreach (['C', 'D', 'E', 'G', 'L'] as $col) {
+            $sheet1->getStyle("{$col}{$first}:{$col}{$last}")->getAlignment()
+                ->setHorizontal(Alignment::HORIZONTAL_LEFT);
+        }
     }
 
     // Grand Total row — identik checksheet monthly
-    $sheet1->mergeCells("A{$row1}:R{$row1}");
+    $sheet1->mergeCells("A{$row1}:L{$row1}");
     $sheet1->setCellValue("A{$row1}", "TOTAL : " . count($rows) . " record");
-    $sheet1->getStyle("A{$row1}:R{$row1}")->applyFromArray([
+    $sheet1->getStyle("A{$row1}:L{$row1}")->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
     ]);
     $sheet1->getRowDimension($row1)->setRowHeight(18);
 
-    $sheet1->getStyle("A4:R{$row1}")->applyFromArray($styleBorder);
-    foreach ($colWidths as $col => $w) {
+    $sheet1->getStyle("A4:L{$row1}")->applyFromArray($styleBorder);
+    foreach ($colWidthsSummary as $col => $w) {
         $sheet1->getColumnDimension($col)->setWidth($w);
     }
     $sheet1->freezePane('A5');
