@@ -702,7 +702,7 @@ try {
 } catch (\Exception $e) {
     error_log('[Dashboard] preventive auto-reset gagal: ' . $e->getMessage());
 }
-// SELECT data — selalu dijalankan terlepas dari keberhasilan UPDATE di atas
+// SELALU dijalankan terlepas dari keberhasilan UPDATE di atas
 try {
     $stmtPrev = $pdo->prepare("
         SELECT ps.*,
@@ -715,6 +715,42 @@ try {
     $stmtPrev->execute();
     $prevSchedules = $stmtPrev->fetchAll(PDO::FETCH_ASSOC);
     $stmtPrev->closeCursor();
+
+    // ── FALLBACK TAMPILAN: beberapa baris lama menyimpan department/line ────────
+    // sebagai ID angka (mis. "1") bukan nama string ("ASSEMBLING", "LINE 1").
+    // Tanpa mengubah data di DB, terjemahkan ID → nama dengan mencocokkan
+    // machine_name + operation_process ke machine_list (yang selalu berisi nama).
+    $prevNeedsLookup = array_filter($prevSchedules, function ($r) {
+        return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
+            || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
+    });
+    if (!empty($prevNeedsLookup)) {
+        $stmtMl = $pdo->prepare(
+            "SELECT department, `line`, machine_name, op
+             FROM machine_list
+             WHERE machine_name = ? AND op = ?
+             LIMIT 1"
+        );
+        foreach ($prevSchedules as &$prevRow) {
+            $deptIsId = isset($prevRow['department']) && $prevRow['department'] !== '' && ctype_digit((string)$prevRow['department']);
+            $lineIsId = isset($prevRow['line']) && $prevRow['line'] !== '' && ctype_digit((string)$prevRow['line']);
+            if (!$deptIsId && !$lineIsId) {
+                continue;
+            }
+            $stmtMl->execute([$prevRow['machine_name'] ?? '', $prevRow['operation_process'] ?? '']);
+            $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
+            $stmtMl->closeCursor();
+            if ($mlRow) {
+                if ($deptIsId) {
+                    $prevRow['department'] = $mlRow['department'];
+                }
+                if ($lineIsId) {
+                    $prevRow['line'] = $mlRow['line'];
+                }
+            }
+        }
+        unset($prevRow);
+    }
 } catch (\Exception $e) {
     $prevSchedules = [];
     error_log('[Dashboard] schedules_preventive fetch gagal: ' . $e->getMessage());
@@ -1762,11 +1798,11 @@ HTML;
                         <!-- Preventive Action Buttons (Hidden by Default) -->
                         <div id="preventiveActions" class="flex items-center gap-2 w-full lg:w-auto" style="display: none;">
                             <button onclick="showPrevAddModal()"
-                                class="flex-1 lg:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+                                class="flex-1 lg:flex-none text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap" style="background:#7a1355;" onmouseover="this.style.background='#8b1a6b'" onmouseout="this.style.background='#7a1355'">
                                 <i class="fas fa-plus"></i> Add
                             </button>
                             <button onclick="showPrevImportModal()"
-                                class="flex-1 lg:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
+                                class="flex-1 lg:flex-none text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap" style="background:#7a1355;" onmouseover="this.style.background='#8b1a6b'" onmouseout="this.style.background='#7a1355'">
                                 <i class="fas fa-file-excel"></i> Import
                             </button>
                             <button onclick="showAddMachineModal()"
@@ -1779,7 +1815,7 @@ HTML;
                     <div class="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
                         <div style="max-height:540px;overflow-y:auto;overflow-x:auto;">
                             <table class="w-full text-left border-collapse" id="prevSchedTable">
-                                <thead class="text-white" style="background:linear-gradient(135deg, #3730a3, #4f46e5);position:sticky;top:0;z-index:10;">
+                                <thead class="text-white" style="background:linear-gradient(135deg, #7a1355, #8b1a6b);position:sticky;top:0;z-index:10;">
                                     <tr>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest whitespace-nowrap">Machine Information</th>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest whitespace-nowrap">Maintenance Point</th>
@@ -2881,7 +2917,7 @@ HTML;
     ========================================================== -->
             <div id="prevAddModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
                 <div class="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden">
-                    <div class="px-8 py-6 flex justify-between items-center" style="background:linear-gradient(135deg, #5f0f40, #7a1a5a);">
+                    <div class="px-8 py-6 flex justify-between items-center" style="background:linear-gradient(135deg, #7a1355, #8b1a6b);">
                         <h3 class="text-xl font-bold text-white"><i class="fas fa-shield-halved mr-2"></i>Add Preventive Maintenance Schedule</h3>
                         <button onclick="hideModal('prevAddModal')" class="text-white/60 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
                     </div>
@@ -2903,9 +2939,9 @@ HTML;
     ========================================================== -->
             <div id="prevEditModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm items-center justify-center z-50 p-4" style="display:none;">
                 <div class="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden">
-                    <div class="bg-indigo-600 px-8 py-6 flex justify-between items-center">
+                    <div class="px-8 py-6 flex justify-between items-center" style="background:linear-gradient(135deg, #7a1355, #8b1a6b);">
                         <h3 class="text-xl font-bold text-white"><i class="fas fa-edit mr-2"></i>Edit Jadwal Preventive</h3>
-                        <button onclick="hideModal('prevEditModal')" class="text-indigo-200 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
+                        <button onclick="hideModal('prevEditModal')" class="text-white/60 hover:text-white transition"><i class="fas fa-times text-xl"></i></button>
                     </div>
                     <form id="prevEditForm" class="p-8 max-h-[85vh] overflow-y-auto">
                         <input type="hidden" name="prev_action" value="prev_edit">

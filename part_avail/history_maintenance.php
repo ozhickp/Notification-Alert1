@@ -691,7 +691,7 @@ if (isset($_GET['export'])) {
                     <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                         <div class="overflow-x-auto" style="max-height:600px;overflow-y:auto;">
                             <table class="w-full text-left text-sm border-collapse">
-                                <thead class="text-white" style="background:linear-gradient(135deg, #c2410c, #f97316);position:sticky;top:0;z-index:10;">
+                                <thead class="text-white" style="background:linear-gradient(135deg, #8b1a6b, #a02580);position:sticky;top:0;z-index:10;">
                                     <tr>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest whitespace-nowrap">No</th>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest whitespace-nowrap">Machine Info</th>

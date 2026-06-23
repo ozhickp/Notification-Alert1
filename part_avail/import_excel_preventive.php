@@ -222,27 +222,10 @@ try {
     $errors  = [];
     $importEmailQueue = [];
 
-    // ── Cache plants ─────────────────────────────────────────────────────────
-    $plantCache = [];
-    try {
-        $plantRows = $pdo->query("SELECT id, plant_name FROM plants")->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($plantRows as $p) {
-            $plantCache[mb_strtolower(trim($p['plant_name']))] = (int)$p['id'];
-        }
-    } catch (\Exception $e) {
-        error_log('[ImportPreventive] Gagal load tabel plants: ' . $e->getMessage());
-    }
-
-    // ── Cache line ───────────────────────────────────────────────────────────
-    $lineCache = [];
-    try {
-        $lineRows = $pdo->query("SELECT id, line_name FROM line")->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($lineRows as $ln) {
-            $lineCache[mb_strtolower(trim($ln['line_name']))] = (int)$ln['id'];
-        }
-    } catch (\Exception $e) {
-        error_log('[ImportPreventive] Gagal load tabel line: ' . $e->getMessage());
-    }
+    // NOTE: Department & Line disimpan sebagai NAMA STRING langsung (konsisten dengan
+    // machine_list & tabel schedules predictive), BUKAN di-resolve ke ID dari tabel
+    // plants/line lama. Resolve ke ID adalah sumber bug "1 | 1" yang muncul di tampilan
+    // Preventive — perbaikan ini menghilangkan akar masalah tersebut.
 
     for ($r = $headerRowNum + 1; $r <= $highestRow; $r++) {
 
@@ -262,27 +245,10 @@ try {
             continue;
         }
 
-        // Resolve department → id
-        $deptKey = mb_strtolower(trim($dept));
-        if (isset($plantCache[$deptKey])) {
-            $deptId = $plantCache[$deptKey];
-        } else {
-            $errors[] = "Baris $r: Department '{$dept}' tidak ditemukan di tabel plants — dilewati.";
-            $skipped++;
-            continue;
-        }
-
-        // Resolve line → id
-        $lineRaw = prevCleanStr($get('line'));
-        $lineId  = null;
-        if ($lineRaw !== null) {
-            $lineKey = mb_strtolower(trim($lineRaw));
-            if (isset($lineCache[$lineKey])) {
-                $lineId = $lineCache[$lineKey];
-            } else {
-                $errors[] = "Baris $r: Line '{$lineRaw}' tidak ditemukan di tabel line — diisi NULL.";
-            }
-        }
+        // Department & Line dipakai langsung sebagai nama string (bukan ID)
+        $deptName = $dept;
+        $lineRaw  = prevCleanStr($get('line'));
+        $lineName = $lineRaw; // boleh null jika kosong di Excel
 
         $maintPoint = prevCleanStr($get('maintenance_point'));
         if ($maintPoint === null) {
@@ -333,8 +299,8 @@ try {
         $maintStatus = $needsAction ? 'soon' : 'done';
 
         $params = [
-            ':department'        => $deptId,
-            ':line'              => $lineId,
+            ':department'        => $deptName,
+            ':line'              => $lineName,
             ':operation_process' => $opProcess,
             ':machine_name'      => $machineName,
             ':process_machine'   => prevCleanStr($get('process_machine')),
