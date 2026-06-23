@@ -818,6 +818,19 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             border-bottom: 1px solid #f1f5f9;
         }
 
+        /* [FIX-SEPARATOR] Pemisah antar baris checker di modal "Ringkasan Per
+           Checker" — supaya saat ada 2+ user yang mengisi checksheet, jelas
+           batas antara data user 1, user 2, dst. Tabel ini (#checker-summary-table)
+           dirender via JS dengan style inline, bukan class .modal-table, jadi
+           border antar baris diberi lewat class .checker-row di sini. */
+        .checker-row td {
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .checker-row:last-child td {
+            border-bottom: none;
+        }
+
         /* ── Foto di modal detail ── */
         #modal-photo-section {
             display: none;

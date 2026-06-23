@@ -748,10 +748,10 @@ function partOrderBadge(string $v): string
                                             <?php endforeach; ?>
                                         </div>
                                     <?php else: ?>
-                                        <div class="flex items-center gap-2 py-2 px-1">
+                                        <!-- <div class="flex items-center gap-2 py-2 px-1">
                                             <i class="fas fa-check-circle text-[#5aaec4] text-xs"></i>
                                             <span class="text-[#3d8fa3] font-semibold" style="font-size:.7rem;">No predictive schedule for today</span>
-                                        </div>
+                                        </div> -->
                                     <?php endif; ?>
                                 </div>
                             </div>
@@ -783,10 +783,10 @@ function partOrderBadge(string $v): string
                                             <?php endforeach; ?>
                                         </div>
                                     <?php else: ?>
-                                        <div class="flex items-center gap-2 py-2 px-1">
+                                        <!-- <div class="flex items-center gap-2 py-2 px-1">
                                             <i class="fas fa-check-circle text-indigo-300 text-xs"></i>
                                             <span class="text-[#3d8fa3] font-semibold" style="font-size:.7rem;">No preventive schedule for today</span>
-                                        </div>
+                                        </div> -->
                                     <?php endif; ?>
                                 </div>
                             </div>
@@ -1768,7 +1768,7 @@ function partOrderBadge(string $v): string
                             today.predictive.map((it, i) => makeTodayItem(it, i, 'blue')).join('') +
                             '</div>';
                     } else {
-                        predList.innerHTML = '<div class="flex items-center gap-2 py-2 px-1"><i class="fas fa-check-circle text-[#5aaec4] text-xs"></i><span class="text-[#3d8fa3] font-semibold" style="font-size:.7rem;">No predictive schedule for today</span></div>';
+                        // predList.innerHTML = '<div class="flex items-center gap-2 py-2 px-1"><i class="fas fa-check-circle text-[#5aaec4] text-xs"></i><span class="text-[#3d8fa3] font-semibold" style="font-size:.7rem;">No predictive schedule for today</span></div>';
                     }
                 }
                 if (predCount) predCount.textContent = today.predictive.length;
@@ -1782,7 +1782,7 @@ function partOrderBadge(string $v): string
                             today.preventive.map((it, i) => makeTodayItem(it, i, 'indigo')).join('') +
                             '</div>';
                     } else {
-                        prevList.innerHTML = '<div class="flex items-center gap-2 py-2 px-1"><i class="fas fa-check-circle text-indigo-300 text-xs"></i><span class="text-[#3d8fa3] font-semibold" style="font-size:.7rem;">No preventive schedule for today</span></div>';
+                        //prevList.innerHTML = '<div class="flex items-center gap-2 py-2 px-1"><i class="fas fa-check-circle text-indigo-300 text-xs"></i><span class="text-[#3d8fa3] font-semibold" style="font-size:.7rem;">No preventive schedule for today</span></div>';
                     }
                 }
                 if (prevCount) prevCount.textContent = today.preventive.length;
