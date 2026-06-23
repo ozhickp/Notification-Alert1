@@ -140,6 +140,29 @@
             color: #0f4c5c;
         }
 
+        /* Jidouka System – #124da1 */
+        .card-jidouka {
+            border-color: #7ea9d9;
+        }
+
+        .card-jidouka:hover {
+            border-color: #124da1;
+        }
+
+        .card-jidouka .card-icon {
+            background: #eaf2fb;
+            color: #124da1;
+        }
+
+        .card-jidouka:hover .card-icon {
+            background: #124da1;
+            color: #fff;
+        }
+
+        .card-jidouka .card-link {
+            color: #124da1;
+        }
+
         .card-icon {
             width: 3rem;
             height: 3rem;
@@ -155,14 +178,14 @@
 
 <body class="min-h-screen flex items-center justify-center p-6">
 
-    <div class="w-full max-w-5xl">
+    <div class="w-full max-w-6xl">
         <div class="text-center mb-10">
             <img src="assets/yanmar.png" alt="Company Logo" class="h-20 w-auto mx-auto block">
             <h1 class="text-s font-extrabold text-slate-900 tracking-tight">PT. Yanmar Diesel Indonesia</h1>
             <h2 class="text-2xl font-bold text-slate-700 tracking-tight">Maintenance Hub</h2>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-6 gap-4">
 
             <!-- Schedule -->
             <a href="login_user.php" class="menu-card card-schedule group bg-white p-6 rounded-3xl flex flex-col items-start">
@@ -221,6 +244,18 @@
                 <p class="text-xs text-slate-500 leading-relaxed mb-4">View-only dashboard for schedule, part availability, and maintenance history data.</p>
                 <div class="mt-auto flex items-center text-xs font-bold card-link">
                     Open Monitor <i class="fas fa-arrow-right ml-2 group-hover:ml-3 transition-all"></i>
+                </div>
+            </a>
+
+            <!-- Jidouka System -->
+            <a href="https://jidouka-system.yadin.com" class="menu-card card-jidouka group bg-white p-6 rounded-3xl flex flex-col items-start">
+                <div class="card-icon group-hover:text-white">
+                    <i class="fas fa-gears text-lg"></i>
+                </div>
+                <h2 class="text-base font-bold text-slate-800 mb-1">Jidouka System</h2>
+                <p class="text-xs text-slate-500 leading-relaxed mb-4">Real-time automated machine monitoring and anomaly detection.</p>
+                <div class="mt-auto flex items-center text-xs font-bold card-link">
+                    Open Jidouka <i class="fas fa-arrow-right ml-2 group-hover:ml-3 transition-all"></i>
                 </div>
             </a>
 
