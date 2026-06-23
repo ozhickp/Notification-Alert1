@@ -2295,7 +2295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
                     if (res.success) {
                         // PERBAIKAN POINT 1: Menampilkan pesan sukses tanpa ID & auto reset form
                         showToast(`✓ ${res.message}`, 'success');
-                        resetForm();
+                        resetFormAfterSubmit();
                     } else {
                         showToast('✗ ' + res.message, 'error');
                     }
@@ -2405,6 +2405,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet']))
             resetPhotoState();
             resetCompressorStatus();
             document.getElementById('compressor-status-wrap').style.display = 'none';
+        }
+
+        // PERBAIKAN: Reset parsial setelah submit sukses.
+        // Department, Tanggal, Checker, dan Line TETAP (tidak di-reset).
+        // Hanya OP, Machine Type (otomatis), dan Nama Mesin yang di-reset —
+        // lalu daftar OP di-fetch ulang berdasarkan Department + Line yang masih terisi,
+        // supaya user bisa langsung pilih OP/mesin berikutnya tanpa mengulang dari Department.
+        // Untuk line Kompressor, status ON/OFF & checklist tetap ikut ter-reset (mengikuti
+        // perilaku loadOps() yang sudah ada saat ini).
+        function resetFormAfterSubmit() {
+            resetPhotoState();
+            loadOps();
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────────
