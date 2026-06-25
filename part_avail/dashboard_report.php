@@ -55,6 +55,27 @@ if (isset($_GET['ajax'])) {
         echo json_encode($stmt->fetchAll());
         exit;
     }
+    // Daftar laporan yang masih menggantung (belum selesai), lintas semua user/department.
+    // Sebuah laporan AWAL (parent_id IS NULL) dianggap masih menggantung hanya jika
+    // statusnya 'belum selesai' DAN belum ada satupun follow-up-nya yang sudah 'selesai'
+    // — konsisten dengan logika "rangkaian" yang dipakai di history_report.php, supaya
+    // laporan yang sudah dilanjutkan & ditutup oleh follow-up tidak ikut muncul di sini.
+    if ($_GET['ajax'] === 'pending_followups') {
+        $rows = $pdo->query("
+            SELECT r.id, r.department, r.line, r.op, r.machine_name, r.problem,
+                   r.reported_by, r.pic, r.report_date, r.created_at
+            FROM e_reports r
+            WHERE r.parent_id IS NULL
+              AND r.status = 'belum selesai'
+              AND NOT EXISTS (
+                  SELECT 1 FROM e_reports f
+                  WHERE f.parent_id = r.id AND f.status = 'selesai'
+              )
+            ORDER BY r.created_at DESC
+        ")->fetchAll();
+        echo json_encode($rows);
+        exit;
+    }
     echo json_encode(['error' => 'Unknown request']);
     exit;
 }
@@ -536,6 +557,172 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             border-color: #fcd34d;
         }
 
+        /* ── Pending Follow-up Floating Window ───────────────────────────────── */
+        #pending-fab {
+            position: fixed;
+            top: 70px;
+            right: 12px;
+            left: auto;
+            z-index: 150;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            box-shadow: 0 6px 18px rgba(217, 119, 6, .4);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            color: #fff;
+            font-size: 1rem;
+            touch-action: none;
+            transition: transform .15s ease, left .25s cubic-bezier(.2, .8, .2, 1), top .25s cubic-bezier(.2, .8, .2, 1);
+        }
+
+        #pending-fab.dragging {
+            cursor: grabbing;
+            transition: transform .15s ease;
+            box-shadow: 0 10px 26px rgba(217, 119, 6, .55);
+        }
+
+        #pending-fab:hover {
+            transform: scale(1.08);
+        }
+
+        #pending-fab.dragging:hover {
+            transform: none;
+        }
+
+        #pending-fab-badge {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            min-width: 19px;
+            height: 19px;
+            padding: 0 4px;
+            border-radius: 999px;
+            background: #dc2626;
+            color: #fff;
+            font-size: .65rem;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid #fff;
+            pointer-events: none;
+        }
+
+        #pending-window {
+            position: fixed;
+            top: 70px;
+            left: calc(100vw - 342px);
+            z-index: 151;
+            width: 320px;
+            max-height: 420px;
+            background: #fff;
+            border-radius: 14px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
+            border: 1px solid #fde68a;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #pending-window-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 11px 14px;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #fff;
+            flex-shrink: 0;
+            cursor: grab;
+            touch-action: none;
+            user-select: none;
+        }
+
+        #pending-window-header.dragging {
+            cursor: grabbing;
+        }
+
+        #pending-window-header i.fa-triangle-exclamation {
+            font-size: .85rem;
+        }
+
+        #pending-window-title {
+            flex: 1;
+            font-size: .8rem;
+            font-weight: 800;
+        }
+
+        #pending-window-close {
+            background: rgba(255, 255, 255, .2);
+            border: none;
+            color: #fff;
+            width: 22px;
+            height: 22px;
+            border-radius: 7px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: .7rem;
+            flex-shrink: 0;
+        }
+
+        #pending-window-close:hover {
+            background: rgba(255, 255, 255, .32);
+        }
+
+        #pending-window-body {
+            overflow-y: auto;
+            padding: 6px 14px;
+            background: #fffbeb;
+        }
+
+        .pending-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            padding: 9px 0;
+            border-bottom: 1px dashed #fde68a;
+            font-size: .76rem;
+        }
+
+        .pending-item:last-child {
+            border-bottom: none;
+        }
+
+        .pending-item .pi-top {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+        }
+
+        .pending-item .pi-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #f59e0b;
+            flex-shrink: 0;
+        }
+
+        .pending-item .pi-main {
+            color: #78350f;
+            font-weight: 700;
+        }
+
+        .pending-item .pi-meta {
+            color: #b45309;
+            font-weight: 500;
+        }
+
+        .pending-item .pi-sub {
+            color: #92400e;
+            opacity: .85;
+            padding-left: 12px;
+        }
+
         /* ── Toast ───────────────────────────────────────────────────────────── */
         #toast {
             position: fixed;
@@ -638,6 +825,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                     <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
             </div>
+        </div>
+
+        <!-- ═══ FLOATING WINDOW: Pekerjaan Belum Selesai ═══ -->
+        <div id="pending-fab" title="Pekerjaan belum selesai — geser atau tap">
+            <i class="fas fa-triangle-exclamation"></i>
+            <span id="pending-fab-badge">0</span>
+        </div>
+
+        <div id="pending-window">
+            <div id="pending-window-header">
+                <i class="fas fa-triangle-exclamation"></i>
+                <span id="pending-window-title">Pekerjaan Belum Selesai</span>
+                <button id="pending-window-close" title="Tutup">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div id="pending-window-body"></div>
         </div>
 
         <div class="p-4" style="height:calc(100vh - 58px);overflow:hidden;">
@@ -899,6 +1103,255 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
         updateLiveDate(); // jalankan sekali saat load
         setInterval(updateLiveDate, 60000); // update setiap 1 menit
         // saat submit, ambil nilai terkini langsung dari hidden field #inp-tanggal
+
+        // ── Pending Follow-up Floating Window ─────────────────────────────────────────
+        // Menampilkan semua e-report (lintas user/department) yang masih "belum selesai"
+        // dan belum punya follow-up yang menutupnya — read-only, supaya siapapun yang
+        // mau input laporan baru langsung sadar ada pekerjaan menggantung dan bisa
+        // memerintahkan teknisi untuk melanjutkannya. Tampil sebagai bubble mengambang
+        // yang bisa digeser bebas (seperti chat-bubble di HP) dan nempel ke tepi
+        // terdekat saat dilepas. Posisi terakhir diingat selama tab masih terbuka.
+        function escText(s) {
+            const d = document.createElement('div');
+            d.textContent = s ?? '';
+            return d.innerHTML;
+        }
+
+        const PENDING_POS_KEY = 'pending_widget_pos';
+        const EDGE_MARGIN = 12; // jarak minimum dari tepi viewport
+        const FAB_SIZE = 44; // harus sama dengan width/height #pending-fab di CSS
+
+        function clampPos(x, y, w, h) {
+            const maxX = window.innerWidth - w - EDGE_MARGIN;
+            const maxY = window.innerHeight - h - EDGE_MARGIN;
+            return {
+                x: Math.min(Math.max(x, EDGE_MARGIN), Math.max(maxX, EDGE_MARGIN)),
+                y: Math.min(Math.max(y, EDGE_MARGIN), Math.max(maxY, EDGE_MARGIN)),
+            };
+        }
+
+        function savePendingPos(x, y) {
+            try {
+                sessionStorage.setItem(PENDING_POS_KEY, JSON.stringify({
+                    x,
+                    y
+                }));
+            } catch (e) {
+                /* abaikan jika storage tidak tersedia */
+            }
+        }
+
+        function loadPendingPos() {
+            try {
+                const raw = sessionStorage.getItem(PENDING_POS_KEY);
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        // Membuat sebuah elemen draggable dengan snap-to-edge ala chat-bubble di HP.
+        // dragHandle = elemen yang dipegang untuk menggeser (boleh sama dengan el).
+        // onTap = dipanggil jika gerakan pointer di bawah threshold (dianggap "tap", bukan drag).
+        function makeDraggable(el, dragHandle, onTap) {
+            let startX = 0,
+                startY = 0,
+                origX = 0,
+                origY = 0,
+                moved = false,
+                dragging = false;
+
+            function onPointerDown(e) {
+                if (e.target.closest('#pending-window-close')) return; // jangan drag saat klik tombol close
+                dragging = true;
+                moved = false;
+                el.classList.add('dragging');
+                dragHandle.classList.add('dragging');
+                el.style.transition = 'none';
+                const rect = el.getBoundingClientRect();
+                origX = rect.left;
+                origY = rect.top;
+                startX = e.clientX;
+                startY = e.clientY;
+                dragHandle.setPointerCapture?.(e.pointerId);
+                document.addEventListener('pointermove', onPointerMove);
+                document.addEventListener('pointerup', onPointerUp);
+            }
+
+            function onPointerMove(e) {
+                if (!dragging) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+                const rect = el.getBoundingClientRect();
+                const pos = clampPos(origX + dx, origY + dy, rect.width, rect.height);
+                el.style.left = pos.x + 'px';
+                el.style.top = pos.y + 'px';
+            }
+
+            function onPointerUp(e) {
+                if (!dragging) return;
+                dragging = false;
+                el.classList.remove('dragging');
+                dragHandle.classList.remove('dragging');
+                el.style.transition = '';
+                document.removeEventListener('pointermove', onPointerMove);
+                document.removeEventListener('pointerup', onPointerUp);
+
+                if (!moved) {
+                    onTap?.();
+                    return;
+                }
+
+                // Snap ke tepi kiri/kanan terdekat, pertahankan posisi vertikal
+                const rect = el.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const snapLeft = centerX < window.innerWidth / 2;
+                const finalX = snapLeft ? EDGE_MARGIN : window.innerWidth - rect.width - EDGE_MARGIN;
+                const pos = clampPos(finalX, rect.top, rect.width, rect.height);
+                el.style.left = pos.x + 'px';
+                el.style.top = pos.y + 'px';
+                savePendingPos(pos.x, pos.y);
+            }
+
+            dragHandle.addEventListener('pointerdown', onPointerDown);
+        }
+
+        function applyStoredPosOrDefault(el) {
+            // Nonaktifkan transisi dulu supaya bubble tidak "melayang" dari pojok CSS ke posisi tujuan
+            el.style.transition = 'none';
+            // Switch dari CSS `right` ke JS `left` (drag system pakai left)
+            el.style.right = 'auto';
+            const stored = loadPendingPos();
+            if (stored) {
+                const pos = clampPos(stored.x, stored.y, FAB_SIZE, FAB_SIZE);
+                el.style.left = pos.x + 'px';
+                el.style.top = pos.y + 'px';
+            } else {
+                // Default: nempel di kanan atas dengan EDGE_MARGIN
+                el.style.left = (window.innerWidth - FAB_SIZE - EDGE_MARGIN) + 'px';
+                el.style.top = '70px';
+            }
+            // Pulihkan transisi setelah satu frame (browser sudah commit posisi)
+            requestAnimationFrame(() => {
+                el.style.transition = '';
+            });
+        }
+
+        // Simpan posisi FAB terakhir sebelum window dibuka, supaya close bisa kembalikan ke posisi yang sama
+        let _fabPosBeforeOpen = null;
+
+        function openPendingWindow() {
+            const fab = document.getElementById('pending-fab');
+            const win = document.getElementById('pending-window');
+            const fabRect = fab.getBoundingClientRect();
+            // Catat posisi FAB sebelum disembunyikan
+            _fabPosBeforeOpen = {
+                x: fabRect.left,
+                y: fabRect.top
+            };
+            // Window muncul di posisi bubble terakhir, disesuaikan agar tidak keluar viewport
+            const pos = clampPos(fabRect.left, fabRect.top, 320, 1);
+            win.style.left = pos.x + 'px';
+            win.style.top = pos.y + 'px';
+            fab.style.display = 'none';
+            win.style.display = 'flex';
+            // Setelah tampil, pastikan tidak terpotong di tepi bawah/kanan
+            requestAnimationFrame(() => {
+                const r = win.getBoundingClientRect();
+                const adj = clampPos(r.left, r.top, r.width, r.height);
+                win.style.left = adj.x + 'px';
+                win.style.top = adj.y + 'px';
+            });
+        }
+
+        function closePendingWindow() {
+            const win = document.getElementById('pending-window');
+            const fab = document.getElementById('pending-fab');
+            win.style.display = 'none';
+            // Kembalikan FAB ke posisi sebelum dibuka (bukan posisi window yang mungkin sudah bergeser)
+            const src = _fabPosBeforeOpen ?? {
+                x: window.innerWidth - FAB_SIZE - EDGE_MARGIN,
+                y: 70
+            };
+            const pos = clampPos(src.x, src.y, FAB_SIZE, FAB_SIZE);
+            fab.style.transition = 'none';
+            fab.style.left = pos.x + 'px';
+            fab.style.top = pos.y + 'px';
+            savePendingPos(pos.x, pos.y);
+            fab.style.display = 'flex';
+            requestAnimationFrame(() => {
+                fab.style.transition = '';
+            });
+        }
+
+        document.getElementById('pending-window-close').addEventListener('click', closePendingWindow);
+
+        async function loadPendingFollowups() {
+            try {
+                const res = await fetch(`${BASE}?ajax=pending_followups`);
+                const data = await res.json();
+                const fab = document.getElementById('pending-fab');
+                const badge = document.getElementById('pending-fab-badge');
+                const win = document.getElementById('pending-window');
+                const bodyEl = document.getElementById('pending-window-body');
+
+                if (!Array.isArray(data) || data.length === 0) {
+                    fab.style.display = 'none';
+                    win.style.display = 'none';
+                    return;
+                }
+
+                badge.textContent = data.length > 99 ? '99+' : data.length;
+                const firstShow = fab.style.display !== 'flex' && win.style.display !== 'flex';
+                // hanya tampilkan FAB jika window sedang tertutup (jangan tutup window yang sedang dibuka user)
+                if (win.style.display !== 'flex') {
+                    if (firstShow) {
+                        // Set posisi SEBELUM display:flex supaya browser tidak sempat render dari posisi CSS
+                        applyStoredPosOrDefault(fab);
+                    }
+                    fab.style.display = 'flex';
+                }
+
+                bodyEl.innerHTML = data.map(item => {
+                    const loc = [item.department, item.line, item.op && item.op !== '-' ? item.op : null]
+                        .filter(Boolean).join(' / ');
+                    const dateFmt = item.report_date ? item.report_date.slice(0, 10) : '—';
+                    return `
+                        <div class="pending-item">
+                            <div class="pi-top">
+                                <span class="pi-dot"></span>
+                                <span class="pi-main">${escText(item.machine_name || '—')}</span>
+                                <span class="pi-meta">${escText(loc)}</span>
+                            </div>
+                            <div class="pi-sub">${escText(item.problem || '')}</div>
+                            <div class="pi-sub">PIC: ${escText(item.pic || '—')} · ${dateFmt}</div>
+                        </div>`;
+                }).join('');
+            } catch (e) {
+                console.error('Gagal memuat pending follow-up:', e);
+            }
+        }
+
+        makeDraggable(document.getElementById('pending-fab'), document.getElementById('pending-fab'), openPendingWindow);
+        makeDraggable(document.getElementById('pending-window'), document.getElementById('pending-window-header'), null);
+
+        loadPendingFollowups();
+        setInterval(loadPendingFollowups, 60000); // refresh tiap 1 menit, biar count selalu akurat
+
+        // Jaga widget tidak "terjebak" di luar viewport jika browser di-resize
+        window.addEventListener('resize', () => {
+            ['pending-fab', 'pending-window'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el.style.display === 'none') return;
+                const r = el.getBoundingClientRect();
+                const w = id === 'pending-fab' ? FAB_SIZE : r.width;
+                const h = id === 'pending-fab' ? FAB_SIZE : r.height;
+                const pos = clampPos(r.left, r.top, w, h);
+                el.style.left = pos.x + 'px';
+                el.style.top = pos.y + 'px';
+            });
+        });
 
         // ── Helper: get current machine name (adaptive: text input or select dropdown) ──
         function isMachineDropdownActive() {
