@@ -1107,6 +1107,31 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             opacity: .85;
             padding-left: 12px;
         }
+
+        .pending-item .pi-action {
+            padding-left: 12px;
+            margin-top: 5px;
+        }
+
+        .pi-btn-selesaikan {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            font-size: .72rem;
+            font-weight: 600;
+            color: #fff;
+            background: linear-gradient(135deg, #fb923c, #ea580c);
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: opacity .15s;
+        }
+
+        .pi-btn-selesaikan:hover {
+            opacity: .85;
+        }
     </style>
 </head>
 
@@ -1669,6 +1694,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             </div>
                             <div class="pi-sub">${escTextPending(item.problem || '')}</div>
                             <div class="pi-sub">PIC: ${escTextPending(item.pic || '—')} · ${dateFmt}</div>
+                            <div class="pi-action">
+                                <button class="pi-btn-selesaikan"
+                                        onclick="closePendingWindow(); _autoOpenFollowup = true; openDetail(${item.id});"
+                                        title="Buka form penyelesaian laporan ini">
+                                    <i class="fas fa-check-circle"></i> Selesaikan
+                                </button>
+                            </div>
                         </div>`;
                 }).join('');
             } catch (e) {
@@ -1729,6 +1761,26 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 document.getElementById('btn-clear-search').style.display = q ? 'flex' : 'none';
                 searchTimeout = setTimeout(() => loadHistory(1), 400);
             });
+
+            // ── Auto-open dari bubble: ?open=ID ──────────────────────────────────────
+            // Jika URL mengandung ?open=ID (klik tombol "Selesaikan" dari bubble),
+            // langsung buka detail laporan tersebut lalu masuk ke form Tambah Info.
+            const urlParams = new URLSearchParams(window.location.search);
+            const openId = parseInt(urlParams.get('open'));
+            if (openId) {
+                // Bersihkan parameter dari URL supaya tidak terbuka lagi saat refresh
+                const cleanUrl = window.location.pathname;
+                window.history.replaceState({}, '', cleanUrl);
+
+                // Tunggu sebentar agar halaman (tabel, dll) selesai render dulu
+                setTimeout(() => {
+                    // Buka detail → di dalam openDetail sudah ada callback untuk thread,
+                    // kita perlu tunggu detail selesai load baru buka form followup.
+                    // Gunakan flag khusus agar openDetail tahu harus langsung ke form.
+                    _autoOpenFollowup = true;
+                    openDetail(openId);
+                }, 300);
+            }
         });
 
         // ── Mode ──────────────────────────────────────────────────────────────────────
@@ -2009,6 +2061,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
         // ── Modal detail ──────────────────────────────────────────────────────────────
         let currentDetailRow = null;
+        let _autoOpenFollowup = false; // flag: setelah detail load, langsung buka form followup
 
         function openDetail(id) {
             document.getElementById('modal-overlay').classList.add('open');
@@ -2107,8 +2160,23 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                                     Pekerjaan ini sudah ditandai "Selesai" pada salah satu laporan dalam rangkaian ini.
                                 </div>`;
                             }
+
+                            // Jika dipanggil dari tombol "Selesaikan" di bubble,
+                            // langsung buka form Tambah Info (kalau belum selesai)
+                            if (_autoOpenFollowup) {
+                                _autoOpenFollowup = false;
+                                if (!alreadyDone) {
+                                    openFollowupForm();
+                                }
+                            }
                         })
-                        .catch(() => {});
+                        .catch(() => {
+                            // Tetap coba auto-open meski thread gagal dimuat
+                            if (_autoOpenFollowup) {
+                                _autoOpenFollowup = false;
+                                if (statusVal !== 'selesai') openFollowupForm();
+                            }
+                        });
                 })
                 .catch(() => {
                     showToast('Gagal memuat detail.', 'error');

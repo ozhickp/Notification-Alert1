@@ -723,6 +723,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             padding-left: 12px;
         }
 
+        .pending-item .pi-action {
+            padding-left: 12px;
+            margin-top: 5px;
+        }
+
+        .pi-btn-selesaikan {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            font-size: .72rem;
+            font-weight: 600;
+            color: #fff;
+            background: linear-gradient(135deg, #fb923c, #ea580c);
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: opacity .15s;
+        }
+
+        .pi-btn-selesaikan:hover {
+            opacity: .85;
+        }
+
         /* ── Toast ───────────────────────────────────────────────────────────── */
         #toast {
             position: fixed;
@@ -1326,6 +1351,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                             </div>
                             <div class="pi-sub">${escText(item.problem || '')}</div>
                             <div class="pi-sub">PIC: ${escText(item.pic || '—')} · ${dateFmt}</div>
+                            <div class="pi-action">
+                                <a class="pi-btn-selesaikan"
+                                   href="history_report.php?open=${encodeURIComponent(item.id)}"
+                                   title="Buka form penyelesaian laporan ini">
+                                    <i class="fas fa-check-circle"></i> Selesaikan
+                                </a>
+                            </div>
                         </div>`;
                 }).join('');
             } catch (e) {

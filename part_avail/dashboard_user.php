@@ -2066,6 +2066,13 @@ HTML;
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
+                    <!-- Filter pilih hari (khusus kategori Alert, H-1 s.d H-7) -->
+                    <div id="statusModalDayFilter" class="px-7 py-3 bg-amber-50 border-b border-amber-100 hidden">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-amber-700 mr-1"><i class="fas fa-calendar-day mr-1"></i>Pilih Hari:</span>
+                            <div id="statusModalDayChips" class="flex items-center gap-1.5 flex-wrap"></div>
+                        </div>
+                    </div>
                     <div style="max-height:360px;overflow-y:auto;">
                         <table class="w-full text-left border-collapse">
                             <thead style="position:sticky;top:0;background:#f8fafc;z-index:5;">
@@ -2079,9 +2086,14 @@ HTML;
                             <tbody id="statusModalBody" class="divide-y divide-slate-50 text-sm"></tbody>
                         </table>
                     </div>
-                    <div class="px-7 py-4 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+                    <div class="px-7 py-4 bg-slate-50 border-t border-slate-100 flex justify-between items-center gap-3">
                         <span id="statusModalCount" class="text-xs text-slate-400 font-medium"></span>
-                        <button onclick="hideModal('statusModal')" class="px-5 py-2 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition">Tutup</button>
+                        <div class="flex items-center gap-2">
+                            <button id="statusModalExportBtn" onclick="exportStatusModalExcel('predictive')" class="hidden px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm transition items-center gap-2">
+                                <i class="fas fa-file-excel"></i> Export Excel
+                            </button>
+                            <button onclick="hideModal('statusModal')" class="px-5 py-2 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition">Tutup</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2223,28 +2235,96 @@ HTML;
                 }
 
                 // ── Status card modal ─────────────────────────────
-                function openStatusModal(status) {
-                    const cfg = STATUS_CFG[status] || {};
-                    const items = SCHED_BY_STATUS[status] || [];
-                    document.getElementById('statusModalHeader').style.background = cfg.bg || '#334155';
-                    document.getElementById('statusModalTitle').textContent = (cfg.label || status) + ' — ' + items.length + ' jadwal';
-                    document.getElementById('statusModalCount').textContent = items.length + ' jadwal ditemukan';
-                    const tbody = document.getElementById('statusModalBody');
+                // State filter hari aktif per modal (predictive & preventive terpisah)
+                const dayFilterState = {
+                    predictive: 'all',
+                    preventive: 'all'
+                };
+
+                function renderStatusModalRows(tbodyId, items) {
+                    const tbody = document.getElementById(tbodyId);
                     if (!items.length) {
                         tbody.innerHTML = `<tr><td colspan="4" class="px-6 py-10 text-center text-slate-400 text-sm">
                     <i class="fas fa-inbox text-3xl block mb-2 text-slate-200"></i>Tidak ada jadwal</td></tr>`;
-                    } else {
-                        tbody.innerHTML = items.map(r => `<tr class="hover:bg-slate-50 transition-colors">
+                        return;
+                    }
+                    tbody.innerHTML = items.map(r => `<tr class="hover:bg-slate-50 transition-colors">
                     <td class="px-5 py-3">
-                        <div class="font-bold text-slate-700 text-sm">${esc(r.machine_name||'')}</div>
-                        <div class="text-xs text-slate-400">${esc(r.department||'')} | ${esc(r.line||'')}</div>
+                        <div class="font-bold text-slate-700 text-sm">${esc(r.machine_name||'')}${r.operation_process ? ' | ' + esc(r.operation_process) : ''}</div>
+                        <div class="text-xs text-slate-400">${esc((r.department||'').toUpperCase())} | ${esc((r.line||'').toUpperCase())}</div>
                     </td>
                     <td class="px-5 py-3 text-slate-600 text-sm max-w-[180px]">${esc(r.maintenance_point||'-')}</td>
                     <td class="px-5 py-3 text-center font-black text-base ${parseInt(r.remaining_day)<=0?'style="color:#ef4444"':''}">${r.remaining_day} hari</td>
                     <td class="px-5 py-3 text-center text-xs text-slate-500 whitespace-nowrap">${r.change_date_plan||'-'}</td>
                 </tr>`).join('');
+                }
+
+                // Render chip "Pilih Hari" hanya untuk hari-hari yang benar-benar ada datanya.
+                // type: 'predictive' | 'preventive' — dipakai untuk key dayFilterState & export.
+                function renderDayChips(chipsContainerId, allItems, type, onFilterChange) {
+                    const container = document.getElementById(chipsContainerId);
+                    const daysPresent = [...new Set(allItems.map(r => parseInt(r.remaining_day)))]
+                        .filter(d => d >= 1 && d <= 7)
+                        .sort((a, b) => a - b);
+
+                    const activeDay = dayFilterState[type];
+                    const chipBase = 'px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer border';
+                    const chipActive = 'bg-amber-500 text-white border-amber-500';
+                    const chipInactive = 'bg-white text-amber-700 border-amber-200 hover:bg-amber-100';
+
+                    let html = `<span data-day="all" class="${chipBase} ${activeDay === 'all' ? chipActive : chipInactive}">Semua</span>`;
+                    daysPresent.forEach(d => {
+                        const isActive = String(activeDay) === String(d);
+                        html += `<span data-day="${d}" class="${chipBase} ${isActive ? chipActive : chipInactive}">H-${d}</span>`;
+                    });
+                    container.innerHTML = html;
+
+                    container.querySelectorAll('[data-day]').forEach(chip => {
+                        chip.addEventListener('click', () => {
+                            dayFilterState[type] = chip.dataset.day;
+                            onFilterChange();
+                        });
+                    });
+                }
+
+                function openStatusModal(status) {
+                    const cfg = STATUS_CFG[status] || {};
+                    const allItems = SCHED_BY_STATUS[status] || [];
+                    const isAlert = status === 'alert';
+                    dayFilterState.predictive = 'all';
+
+                    document.getElementById('statusModalHeader').style.background = cfg.bg || '#334155';
+
+                    const dayFilterWrap = document.getElementById('statusModalDayFilter');
+                    const exportBtn = document.getElementById('statusModalExportBtn');
+                    dayFilterWrap.classList.toggle('hidden', !isAlert);
+                    exportBtn.classList.toggle('hidden', !isAlert);
+                    if (isAlert) exportBtn.classList.add('flex');
+                    else exportBtn.classList.remove('flex');
+
+                    function refresh() {
+                        const day = dayFilterState.predictive;
+                        const filtered = (isAlert && day !== 'all') ?
+                            allItems.filter(r => String(parseInt(r.remaining_day)) === String(day)) :
+                            allItems;
+                        document.getElementById('statusModalTitle').textContent = (cfg.label || status) + ' — ' + filtered.length + ' jadwal';
+                        document.getElementById('statusModalCount').textContent = filtered.length + ' jadwal ditemukan';
+                        renderStatusModalRows('statusModalBody', filtered);
+                        // [FIX] Render ulang chip supaya highlight "active" pindah ke chip yang baru diklik.
+                        // Sebelumnya chip hanya digambar sekali di awal, jadi walau data tabel sudah
+                        // terfilter benar, tampilan chip tetap "Semua" terus karena tidak pernah digambar ulang.
+                        if (isAlert) renderDayChips('statusModalDayChips', allItems, 'predictive', refresh);
                     }
+
+                    refresh();
                     showModal('statusModal');
+                }
+
+                // Memicu download export Excel sesuai filter hari yang sedang aktif di modal.
+                // type: 'predictive' | 'preventive'
+                function exportStatusModalExcel(type) {
+                    const day = dayFilterState[type] || 'all';
+                    window.location.href = `export_alert_schedule.php?type=${type}&day=${encodeURIComponent(day)}`;
                 }
 
                 function esc(s) {
@@ -2674,27 +2754,54 @@ HTML;
                     if (ft) ft.textContent = `Menampilkan ${txt}`;
                 }
 
-                // Status modal preventive
-                function openPrevStatusModal(status) {
-                    const cfg = STATUS_CFG[status] || {};
-                    const items = PREV_BY_STATUS[status] || [];
-                    document.getElementById('prevStatusModalHeader').style.background = cfg.bg || '#7a1355';
-                    document.getElementById('prevStatusModalTitle').textContent = (cfg.label || status) + ' — ' + items.length + ' jadwal';
-                    document.getElementById('prevStatusModalCount').textContent = items.length + ' jadwal ditemukan';
+                function renderPrevStatusModalRows(items) {
                     const tbody = document.getElementById('prevStatusModalBody');
                     if (!items.length) {
                         tbody.innerHTML = `<tr><td colspan="4" class="px-6 py-10 text-center text-slate-400 text-sm italic">Tidak ada jadwal</td></tr>`;
-                    } else {
-                        tbody.innerHTML = items.map(r => `<tr class="hover:bg-slate-50 transition-colors">
+                        return;
+                    }
+                    tbody.innerHTML = items.map(r => `<tr class="hover:bg-slate-50 transition-colors">
                     <td class="px-5 py-3">
-                        <div class="font-bold text-slate-700 text-sm">${esc(r.machine_name||'')}</div>
-                        <div class="text-xs text-slate-400">${esc(r.department||'')} | ${esc(r.line||'')}</div>
+                        <div class="font-bold text-slate-700 text-sm">${esc(r.machine_name||'')}${r.operation_process ? ' | ' + esc(r.operation_process) : ''}</div>
+                        <div class="text-xs text-slate-400">${esc((r.department||'').toUpperCase())} | ${esc((r.line||'').toUpperCase())}</div>
                     </td>
                     <td class="px-5 py-3 text-slate-600 text-sm">${esc(r.maintenance_point||'-')}</td>
                     <td class="px-5 py-3 text-center font-black text-base ${parseInt(r.remaining_day)<=0?'text-red-500':''}">${r.remaining_day} hari</td>
                     <td class="px-5 py-3 text-center text-xs text-slate-500 whitespace-nowrap">${r.change_date_plan||'-'}</td>
                 </tr>`).join('');
+                }
+
+                // Status modal preventive
+                function openPrevStatusModal(status) {
+                    const cfg = STATUS_CFG[status] || {};
+                    const allItems = PREV_BY_STATUS[status] || [];
+                    const isAlert = status === 'alert';
+                    dayFilterState.preventive = 'all';
+
+                    document.getElementById('prevStatusModalHeader').style.background = cfg.bg || '#7a1355';
+
+                    const dayFilterWrap = document.getElementById('prevStatusModalDayFilter');
+                    const exportBtn = document.getElementById('prevStatusModalExportBtn');
+                    dayFilterWrap.classList.toggle('hidden', !isAlert);
+                    exportBtn.classList.toggle('hidden', !isAlert);
+                    if (isAlert) exportBtn.classList.add('flex');
+                    else exportBtn.classList.remove('flex');
+
+                    function refresh() {
+                        const day = dayFilterState.preventive;
+                        const filtered = (isAlert && day !== 'all') ?
+                            allItems.filter(r => String(parseInt(r.remaining_day)) === String(day)) :
+                            allItems;
+                        document.getElementById('prevStatusModalTitle').textContent = (cfg.label || status) + ' — ' + filtered.length + ' jadwal';
+                        document.getElementById('prevStatusModalCount').textContent = filtered.length + ' jadwal ditemukan';
+                        renderPrevStatusModalRows(filtered);
+                        // [FIX] Render ulang chip supaya highlight "active" pindah ke chip yang baru diklik.
+                        // Sebelumnya chip hanya digambar sekali di awal, jadi walau data tabel sudah
+                        // terfilter benar, tampilan chip tetap "Semua" terus karena tidak pernah digambar ulang.
+                        if (isAlert) renderDayChips('prevStatusModalDayChips', allItems, 'preventive', refresh);
                     }
+
+                    refresh();
                     showModal('prevStatusModal');
                 }
 
@@ -2978,6 +3085,13 @@ HTML;
                         </div>
                         <button onclick="hideModal('prevStatusModal')" class="text-white/60 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition"><i class="fas fa-times"></i></button>
                     </div>
+                    <!-- Filter pilih hari (khusus kategori Alert, H-1 s.d H-7) -->
+                    <div id="prevStatusModalDayFilter" class="px-7 py-3 bg-amber-50 border-b border-amber-100 hidden">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-amber-700 mr-1"><i class="fas fa-calendar-day mr-1"></i>Pilih Hari:</span>
+                            <div id="prevStatusModalDayChips" class="flex items-center gap-1.5 flex-wrap"></div>
+                        </div>
+                    </div>
                     <div style="max-height:360px;overflow-y:auto;">
                         <table class="w-full text-left border-collapse">
                             <thead style="position:sticky;top:0;background:#f8fafc;z-index:5;">
@@ -2991,9 +3105,14 @@ HTML;
                             <tbody id="prevStatusModalBody" class="divide-y divide-slate-50 text-sm"></tbody>
                         </table>
                     </div>
-                    <div class="px-7 py-4 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+                    <div class="px-7 py-4 bg-slate-50 border-t border-slate-100 flex justify-between items-center gap-3">
                         <span id="prevStatusModalCount" class="text-xs text-slate-400 font-medium"></span>
-                        <button onclick="hideModal('prevStatusModal')" class="px-5 py-2 bg-[#7a1355] text-white rounded-xl font-bold text-sm hover:bg-[#5f0f40] transition">Tutup</button>
+                        <div class="flex items-center gap-2">
+                            <button id="prevStatusModalExportBtn" onclick="exportStatusModalExcel('preventive')" class="hidden px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm transition items-center gap-2">
+                                <i class="fas fa-file-excel"></i> Export Excel
+                            </button>
+                            <button onclick="hideModal('prevStatusModal')" class="px-5 py-2 bg-[#7a1355] text-white rounded-xl font-bold text-sm hover:bg-[#5f0f40] transition">Tutup</button>
+                        </div>
                     </div>
                 </div>
             </div>
