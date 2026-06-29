@@ -651,7 +651,7 @@ if (isset($_GET['export'])) {
                                             <tr class="hist-row hist-pred-row transition-colors fade-in" data-month="<?= $rowMonth ?>">
                                                 <td class="px-5 py-3 text-slate-400 font-mono text-xs"><?= $i + 1 ?></td>
                                                 <td class="px-5 py-3">
-                                                    <div class="font-bold text-slate-800 whitespace-nowrap text-sm"><?= htmlspecialchars($h['machine_name'] ?? '-') ?></div>
+                                                    <div class="font-bold text-slate-800 whitespace-nowrap text-sm"><?= htmlspecialchars($h['machine_name'] ?? '-') ?><?= $h['operation_process'] ? ' | ' . htmlspecialchars($h['operation_process']) : '' ?></div>
                                                     <div class="text-xs text-slate-500 mt-0.5"><?= htmlspecialchars($h['department'] ?? '') ?><?= $h['line'] ? ' | ' . htmlspecialchars($h['line']) : '' ?></div>
                                                     <?php if ($h['name_unit']): ?><div class="text-xs text-slate-400 italic mt-0.5"><?= htmlspecialchars($h['name_unit']) ?></div><?php endif; ?>
                                                 </td>
@@ -724,7 +724,7 @@ if (isset($_GET['export'])) {
                                             <tr class="hist-row hist-prev-row transition-colors fade-in" data-month="<?= $rowMonth ?>">
                                                 <td class="px-5 py-3 text-slate-400 font-mono text-xs"><?= $i + 1 ?></td>
                                                 <td class="px-5 py-3">
-                                                    <div class="font-bold text-slate-800 whitespace-nowrap text-sm"><?= htmlspecialchars($h['machine_name'] ?? '-') ?></div>
+                                                    <div class="font-bold text-slate-800 whitespace-nowrap text-sm"><?= htmlspecialchars($h['machine_name'] ?? '-') ?><?= $h['operation_process'] ? ' | ' . htmlspecialchars($h['operation_process']) : '' ?></div>
                                                     <div class="text-xs text-slate-500 mt-0.5"><?= htmlspecialchars($h['department'] ?? '') ?><?= $h['line'] ? ' | ' . htmlspecialchars($h['line']) : '' ?></div>
                                                     <?php if ($h['name_unit']): ?><div class="text-xs text-slate-400 italic mt-0.5"><?= htmlspecialchars($h['name_unit']) ?></div><?php endif; ?>
                                                 </td>
@@ -1005,7 +1005,7 @@ if (isset($_GET['export'])) {
                     }
 
                     document.getElementById('detailMachine').textContent =
-                        (d.machine_name || '') + (d.line ? ' | ' + d.line : '');
+                        (d.machine_name || '') + (d.operation_process ? ' | ' + d.operation_process : '');
 
                     const fmt = v => v ? v : '—';
                     const fmtDate = v => v ? new Date(v).toLocaleDateString('id-ID', {
