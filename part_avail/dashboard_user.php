@@ -645,6 +645,108 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
             echo json_encode(['status' => 'success', 'message' => 'Report preventive berhasil disimpan. Next change: ' . ($newChangePlan ?? '-')]);
             exit;
         }
+
+        if ($_POST['prev_action'] === 'prev_report_bulk') {
+            $items = $_POST['items'] ?? [];
+            if (!is_array($items) || count($items) === 0) {
+                echo json_encode(['status' => 'error', 'message' => 'Tidak ada job yang dipilih untuk direport']);
+                exit;
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $successCount = 0;
+
+                foreach ($items as $idx => $item) {
+                    $schedId    = (int)($item['schedule_id'] ?? 0);
+                    $note       = trim($item['note'] ?? '');
+                    $teknisi    = trim($item['teknisi'] ?? '');
+                    $actualDate = $item['actual_date'] ?? date('Y-m-d');
+                    $photoPath  = null;
+
+                    if ($schedId <= 0) continue;
+
+                    // ── Upload foto per-item (nama field: items[idx][photo]) ──
+                    if (!empty($_FILES['items']['name'][$idx]['photo']) && $_FILES['items']['error'][$idx]['photo'] === UPLOAD_ERR_OK) {
+                        $uploadDir = __DIR__ . '/uploads/reports/';
+                        if (!is_dir($uploadDir)) @mkdir($uploadDir, 0755, true);
+                        $origName = $_FILES['items']['name'][$idx]['photo'];
+                        $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
+                        if (in_array($ext, ['jpg', 'jpeg', 'png', 'webp'])) {
+                            $fname = 'prev_report_' . $schedId . '_' . time() . '_' . $idx . '.' . $ext;
+                            $photoPath = 'uploads/reports/' . $fname;
+                            move_uploaded_file($_FILES['items']['tmp_name'][$idx]['photo'], $uploadDir . $fname);
+                        }
+                    }
+
+                    $rowStmt = $pdo->prepare("SELECT * FROM schedules_preventive WHERE id = ?");
+                    $rowStmt->execute([$schedId]);
+                    $sched = $rowStmt->fetch(PDO::FETCH_ASSOC);
+                    $rowStmt->closeCursor();
+                    if (!$sched) continue;
+
+                    // ── Hitung use_date & change_date_plan baru ──
+                    $intervalMonth = (int)($sched['interval_month'] ?? 0);
+                    $newUseDate    = $actualDate;
+                    $newChangePlan = null;
+                    if ($intervalMonth > 0) {
+                        $dt = new DateTime($actualDate);
+                        $dt->modify("+{$intervalMonth} months");
+                        $newChangePlan = $dt->format('Y-m-d');
+                    }
+                    $newRemainingDay = null;
+                    if ($newChangePlan) {
+                        $now = new DateTime('today');
+                        $cdp = new DateTime($newChangePlan);
+                        $diff = (int)$now->diff($cdp)->days;
+                        $newRemainingDay = ($cdp >= $now) ? $diff : -$diff;
+                    }
+
+                    $pdo->prepare("INSERT INTO history_preventive
+                        (schedule_id, department, line, operation_process, machine_name,
+                         process_machine, name_unit, maintenance_point, change_date_plan,
+                         note, photo_path, teknisi, reported_by, reported_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                        ->execute([
+                            $schedId,
+                            $sched['department'],
+                            $sched['line'],
+                            $sched['operation_process'],
+                            $sched['machine_name'],
+                            $sched['process_machine'],
+                            $sched['name_unit'],
+                            $sched['maintenance_point'],
+                            $sched['change_date_plan'],
+                            $note,
+                            $photoPath,
+                            $teknisi,
+                            $_SESSION['user_id'] ?? null,
+                        ]);
+
+                    $pdo->prepare("UPDATE schedules_preventive SET
+                        maintenance_status = 'done',
+                        use_date           = ?,
+                        change_date_plan   = ?,
+                        remaining_day      = ?
+                        WHERE id = ?")
+                        ->execute([$newUseDate, $newChangePlan, $newRemainingDay, $schedId]);
+
+                    $successCount++;
+                }
+
+                $pdo->commit();
+
+                if ($successCount === 0) {
+                    echo json_encode(['status' => 'error', 'message' => 'Tidak ada report yang berhasil disimpan']);
+                } else {
+                    echo json_encode(['status' => 'success', 'message' => "Berhasil menyimpan {$successCount} report preventive."]);
+                }
+            } catch (Exception $e) {
+                $pdo->rollBack();
+                echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+            }
+            exit;
+        }
     } catch (Exception $e) {
         echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         exit;
@@ -1828,6 +1930,28 @@ HTML;
                                     </tr>
                                 </thead>
                                 <tbody id="prevSchedBody" class="divide-y divide-slate-100">
+                                    <?php
+                                    // ── Precompute job yang due/bisa-direport, dikelompokkan per machine_name ──
+                                    // Dipakai untuk tombol "Report" gabungan per mesin (checklist multi-select)
+                                    $prevMachineDueJobs = [];
+                                    if (!empty($prevSchedules)) {
+                                        foreach ($prevSchedules as $r) {
+                                            $rDays = (int)$r['remaining_day'];
+                                            $rReminder = (int)($r['reminder_activity'] ?? 30);
+                                            $rMaintSt = $r['maintenance_status'] ?? 'soon';
+                                            $rCanReport = ($rMaintSt !== 'done') && $rDays <= $rReminder;
+                                            if ($rCanReport) {
+                                                $prevMachineDueJobs[$r['machine_name']][] = [
+                                                    'id'                => (int)$r['id'],
+                                                    'maintenance_point' => $r['maintenance_point'],
+                                                    'change_date_plan'  => $r['change_date_plan'],
+                                                    'remaining_day'     => $rDays,
+                                                ];
+                                            }
+                                        }
+                                    }
+                                    $renderedMachineBtn = [];
+                                    ?>
                                     <?php if (!empty($prevSchedules)): foreach ($prevSchedules as $row):
                                             $days     = (int)$row['remaining_day'];
                                             $reminder = (int)($row['reminder_activity'] ?? 30);
@@ -1881,12 +2005,23 @@ HTML;
                                                             class="bg-[#8b1a6b] text-white p-2 rounded-lg hover:bg-[#8b1a6b] transition" title="Edit">
                                                             <i class="fas fa-edit text-xs"></i>
                                                         </button>
-                                                        <?php if ($canReport): ?>
-                                                            <button onclick="showPrevReportModal(<?= $row['id'] ?>, '<?= htmlspecialchars($row['machine_name'], ENT_QUOTES) ?>')"
-                                                                class="bg-emerald-500 text-white p-2 rounded-lg hover:bg-emerald-600 transition" title="Submit Report">
-                                                                <i class="fas fa-clipboard-check text-xs"></i>
-                                                            </button>
-                                                        <?php endif; ?>
+                                                        <?php
+                                                        $mName = $row['machine_name'];
+                                                        if (!isset($renderedMachineBtn[$mName])):
+                                                            $renderedMachineBtn[$mName] = true;
+                                                            $dueJobsForMachine = $prevMachineDueJobs[$mName] ?? [];
+                                                            $dueCount = count($dueJobsForMachine);
+                                                            if ($dueCount > 0):
+                                                        ?>
+                                                                <button onclick="showPrevMachineReportModal('<?= htmlspecialchars($mName, ENT_QUOTES) ?>')"
+                                                                    class="bg-emerald-500 text-white p-2 rounded-lg hover:bg-emerald-600 transition relative" title="Report Mesin (<?= $dueCount ?> job)">
+                                                                    <i class="fas fa-clipboard-check text-xs"></i>
+                                                                    <span class="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[9px] font-black rounded-full min-w-[16px] h-4 px-0.5 flex items-center justify-center leading-none"><?= $dueCount ?></span>
+                                                                </button>
+                                                        <?php
+                                                            endif;
+                                                        endif;
+                                                        ?>
                                                     </div>
                                                 </td>
                                             </tr>
@@ -2842,89 +2977,151 @@ HTML;
                     // maintenance_status dikelola otomatis oleh server — tidak perlu diisi
                     showModal('prevEditModal');
                 }
-                // Report modal preventive
-                function showPrevReportModal(id, machineName) {
-                    document.getElementById('prev_report_schedule_id').value = id;
-                    document.getElementById('prevReportModalMachine').textContent = machineName;
-                    document.getElementById('prevReportForm').reset();
-                    document.getElementById('prev_report_actual_date').value = new Date().toISOString().split('T')[0];
-                    document.getElementById('prevPhotoNameLabel').classList.add('hidden');
-                    document.getElementById('prevReportAlert').classList.add('hidden');
-                    // Tombol selalu aktif (tidak ada kolom part_order/part_availability di preventive)
-                    const btn = document.getElementById('btnSubmitPrevReport');
-                    btn.disabled = false;
-                    btn.style.background = '#7a1355';
-                    btn.style.cursor = 'pointer';
-                    showModal('prevReportModal');
+                // Data job yang due/bisa direport, dikelompokkan per machine_name (dari PHP)
+                const prevDueJobsData = <?= json_encode($prevMachineDueJobs, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+
+                // Report modal preventive — per mesin, checklist multi-select
+                function showPrevMachineReportModal(machineName) {
+                    document.getElementById('prevMachineReportModalMachine').textContent = machineName;
+                    const jobs = prevDueJobsData[machineName] || [];
+                    const listEl = document.getElementById('prevMachineReportJobsList');
+                    const today = new Date().toISOString().split('T')[0];
+
+                    listEl.innerHTML = jobs.map((job, idx) => `
+                        <div class="border border-slate-200 rounded-xl overflow-hidden" data-job-card="${idx}">
+                            <label class="flex items-start gap-3 p-3 cursor-pointer hover:bg-slate-50 transition">
+                                <input type="checkbox" class="mt-1 w-4 h-4 accent-[#7a1355]" id="pmr_check_${idx}"
+                                    onchange="togglePrevJobDetail(${idx})">
+                                <div class="flex-1 min-w-0">
+                                    <p class="font-bold text-sm text-slate-800">${job.maintenance_point}</p>
+                                    <p class="text-xs text-slate-400 mt-0.5">Change Date Plan: ${job.change_date_plan ?? '-'} • Sisa ${job.remaining_day} hari</p>
+                                </div>
+                            </label>
+                            <div id="pmr_detail_${idx}" class="hidden border-t border-slate-100 bg-slate-50 p-4 space-y-3">
+                                <div>
+                                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tanggal Aktual Pekerjaan <span class="text-red-500">*</span></label>
+                                    <input type="date" id="pmr_date_${idx}" value="${today}"
+                                        class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Teknisi <span class="text-red-500">*</span></label>
+                                    <input type="text" id="pmr_teknisi_${idx}" placeholder="Nama teknisi yang mengerjakan..."
+                                        class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Keterangan / Note <span class="text-red-500">*</span></label>
+                                    <textarea id="pmr_note_${idx}" rows="2" placeholder="Tuliskan detail pekerjaan preventive maintenance..."
+                                        class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm resize-none"></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Foto Dokumentasi <span class="text-red-500">*</span></label>
+                                    <div class="border-2 border-dashed border-slate-200 rounded-lg p-2 text-center cursor-pointer hover:border-[#c97aad] hover:bg-white transition"
+                                        onclick="document.getElementById('pmr_photo_${idx}').click()">
+                                        <p class="text-xs text-slate-400 font-medium">Klik untuk pilih foto (.jpg .jpeg .png, maks 5MB)</p>
+                                        <p class="text-xs text-[#8b1a6b] font-bold mt-1 hidden" id="pmr_photo_label_${idx}"></p>
+                                    </div>
+                                    <input type="file" id="pmr_photo_${idx}" accept=".jpg,.jpeg,.png,.webp" class="hidden"
+                                        onchange="document.getElementById('pmr_photo_label_${idx}').textContent=this.files[0]?.name||''; document.getElementById('pmr_photo_label_${idx}').classList.toggle('hidden',!this.files[0])">
+                                </div>
+                            </div>
+                        </div>
+                    `).join('') || '<p class="text-center text-slate-400 text-sm py-6">Tidak ada job yang bisa direport saat ini.</p>';
+
+                    // simpan data job (id, dll) untuk dipakai saat submit
+                    listEl.dataset.jobs = JSON.stringify(jobs);
+
+                    document.getElementById('prevMachineReportAlert').classList.add('hidden');
+                    updatePrevMachineReportCount();
+                    showModal('prevMachineReportModal');
                 }
-                async function submitPrevReport() {
-                    // Validasi wajib isi
-                    const teknisi = document.getElementById('prev_report_teknisi')?.value?.trim();
-                    const note = document.querySelector('#prevReportForm textarea[name="note"]')?.value?.trim();
-                    const photo = document.getElementById('prev_report_photo')?.files[0];
-                    const actualDate = document.getElementById('prev_report_actual_date')?.value;
-                    const al = document.getElementById('prevReportAlert');
+
+                function togglePrevJobDetail(idx) {
+                    const checked = document.getElementById(`pmr_check_${idx}`).checked;
+                    document.getElementById(`pmr_detail_${idx}`).classList.toggle('hidden', !checked);
+                    updatePrevMachineReportCount();
+                }
+
+                function updatePrevMachineReportCount() {
+                    const listEl = document.getElementById('prevMachineReportJobsList');
+                    const jobs = JSON.parse(listEl.dataset.jobs || '[]');
+                    let count = 0;
+                    jobs.forEach((job, idx) => {
+                        const cb = document.getElementById(`pmr_check_${idx}`);
+                        if (cb && cb.checked) count++;
+                    });
+                    document.getElementById('prevMachineReportSelectedCount').textContent = count;
+                }
+
+                async function submitPrevMachineReport() {
+                    const listEl = document.getElementById('prevMachineReportJobsList');
+                    const jobs = JSON.parse(listEl.dataset.jobs || '[]');
+                    const al = document.getElementById('prevMachineReportAlert');
 
                     const showErr = (msg) => {
-                        al.className = 'rounded-xl p-3 mb-4 text-sm font-medium border bg-red-50 text-red-800 border-red-200';
+                        al.className = 'rounded-xl p-3 mt-4 text-sm font-medium border bg-red-50 text-red-800 border-red-200';
                         al.textContent = msg;
                         al.classList.remove('hidden');
                     };
 
-                    if (!actualDate) {
-                        showErr('❌ Tanggal aktual pekerjaan wajib diisi.');
-                        return;
+                    const fd = new FormData();
+                    fd.append('prev_action', 'prev_report_bulk');
+
+                    let selectedCount = 0;
+                    for (let idx = 0; idx < jobs.length; idx++) {
+                        const cb = document.getElementById(`pmr_check_${idx}`);
+                        if (!cb || !cb.checked) continue;
+
+                        const date = document.getElementById(`pmr_date_${idx}`)?.value;
+                        const teknisi = document.getElementById(`pmr_teknisi_${idx}`)?.value?.trim();
+                        const note = document.getElementById(`pmr_note_${idx}`)?.value?.trim();
+                        const photo = document.getElementById(`pmr_photo_${idx}`)?.files[0];
+
+                        if (!date || !teknisi || !note || !photo) {
+                            showErr(`❌ Lengkapi semua field (tanggal, teknisi, note, foto) untuk: ${jobs[idx].maintenance_point}`);
+                            return;
+                        }
+
+                        fd.append(`items[${selectedCount}][schedule_id]`, jobs[idx].id);
+                        fd.append(`items[${selectedCount}][actual_date]`, date);
+                        fd.append(`items[${selectedCount}][teknisi]`, teknisi);
+                        fd.append(`items[${selectedCount}][note]`, note);
+                        fd.append(`items[${selectedCount}][photo]`, photo);
+                        selectedCount++;
                     }
-                    if (!teknisi) {
-                        showErr('❌ Nama teknisi wajib diisi.');
-                        return;
-                    }
-                    if (!note) {
-                        showErr('❌ Keterangan / Note wajib diisi.');
-                        return;
-                    }
-                    if (!photo) {
-                        showErr('❌ Foto dokumentasi wajib dilampirkan.');
+
+                    if (selectedCount === 0) {
+                        showErr('❌ Pilih minimal 1 pekerjaan untuk direport.');
                         return;
                     }
 
-                    const fd = new FormData(document.getElementById('prevReportForm'));
-                    const btn = document.getElementById('btnSubmitPrevReport');
+                    const btn = document.getElementById('btnSubmitPrevMachineReport');
                     if (btn.disabled) return;
                     btn.disabled = true;
-                    btn.textContent = 'Menyimpan...';
+                    const originalHtml = btn.innerHTML;
+                    btn.innerHTML = 'Menyimpan...';
+
                     try {
                         const r = await (await fetch('', {
                             method: 'POST',
                             body: fd
                         })).json();
-                        const al = document.getElementById('prevReportAlert');
                         if (r.status === 'success') {
-                            al.className = 'rounded-xl p-3 mb-4 text-sm font-medium border bg-green-50 text-green-800 border-green-200';
+                            al.className = 'rounded-xl p-3 mt-4 text-sm font-medium border bg-green-50 text-green-800 border-green-200';
                             al.textContent = '✅ ' + r.message;
                             al.classList.remove('hidden');
                             setTimeout(() => {
-                                hideModal('prevReportModal');
+                                hideModal('prevMachineReportModal');
                                 location.reload();
-                            }, 1800);
+                            }, 1500);
                         } else {
-                            al.className = 'rounded-xl p-3 mb-4 text-sm font-medium border bg-red-50 text-red-800 border-red-200';
-                            al.textContent = '❌ ' + (r.message || 'Gagal');
-                            al.classList.remove('hidden');
+                            showErr('❌ ' + (r.message || 'Gagal'));
                             btn.disabled = false;
-                            btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> Submit Report';
-                            btn.style.background = '#7a1355';
-                            btn.style.cursor = 'pointer';
+                            btn.innerHTML = originalHtml;
                         }
                     } catch (err) {
-                        const al = document.getElementById('prevReportAlert');
-                        al.className = 'rounded-xl p-3 mb-4 text-sm font-medium border bg-red-50 text-red-800 border-red-200';
-                        al.textContent = '❌ Gagal: ' + err.message;
-                        al.classList.remove('hidden');
+                        showErr('❌ Gagal: ' + err.message);
                         btn.disabled = false;
-                        btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> Submit Report';
-                        btn.style.background = '#7a1355';
-                        btn.style.cursor = 'pointer';
+                        btn.innerHTML = originalHtml;
                     }
                 }
 
@@ -3118,60 +3315,28 @@ HTML;
             </div>
 
             <!-- =========================================================
-         MODAL — PREVENTIVE REPORT
+         MODAL — PREVENTIVE REPORT (PER MESIN, CHECKLIST MULTI-SELECT)
     ========================================================== -->
-            <div id="prevReportModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
-                <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden">
-                    <div class="px-5 py-4 flex justify-between items-center" style="background:linear-gradient(135deg,#7a1355,#8b1a6b);">
+            <div id="prevMachineReportModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
+                <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col" style="max-height:90vh;">
+                    <div class="px-5 py-4 flex justify-between items-center flex-shrink-0" style="background:linear-gradient(135deg,#7a1355,#8b1a6b);">
                         <div>
-                            <h3 class="text-base font-bold text-white"><i class="fas fa-clipboard-check mr-2"></i>Form Report Preventive</h3>
-                            <p class="text-[#f2d4e8] text-xs mt-0.5" id="prevReportModalMachine">—</p>
+                            <h3 class="text-base font-bold text-white"><i class="fas fa-clipboard-check mr-2"></i>Report Preventive — <span id="prevMachineReportModalMachine">—</span></h3>
+                            <p class="text-[#f2d4e8] text-xs mt-0.5">Centang pekerjaan yang ingin direport, lalu isi detailnya masing-masing.</p>
                         </div>
-                        <button onclick="hideModal('prevReportModal')" class="text-[#f2d4e8] hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition"><i class="fas fa-times"></i></button>
+                        <button onclick="hideModal('prevMachineReportModal')" class="text-[#f2d4e8] hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition flex-shrink-0"><i class="fas fa-times"></i></button>
                     </div>
-                    <form id="prevReportForm" class="p-5">
-                        <input type="hidden" name="prev_action" value="prev_report">
-                        <input type="hidden" name="schedule_id" id="prev_report_schedule_id">
-
-
-                        <div class="mb-3">
-                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tanggal Aktual Pekerjaan <span class="text-red-500">*</span></label>
-                            <input type="date" name="actual_date" id="prev_report_actual_date" required
-                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
-                            <p class="text-xs text-slate-400 mt-1">Last Change akan diperbarui ke tanggal ini, dan Next Change = tanggal ini + interval.</p>
-                        </div>
-                        <div class="mb-3">
-                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Teknisi <span class="text-red-500">*</span></label>
-                            <input type="text" name="teknisi" id="prev_report_teknisi" required
-                                placeholder="Nama teknisi yang mengerjakan..."
-                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
-                        </div>
-                        <div class="mb-3">
-                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Keterangan / Note <span class="text-red-500">*</span></label>
-                            <textarea name="note" rows="3" required placeholder="Tuliskan detail pekerjaan preventive maintenance..."
-                                class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm resize-none"></textarea>
-                        </div>
-                        <div class="mb-3">
-                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Foto Dokumentasi <span class="text-red-500">*</span></label>
-                            <div class="border-2 border-dashed border-slate-200 rounded-xl p-3 text-center cursor-pointer hover:border-[#c97aad] hover:bg-[#f9eef5]/30 transition"
-                                onclick="document.getElementById('prev_report_photo').click()">
-                                <i class="fas fa-image text-2xl text-slate-200 mb-1 block"></i>
-                                <p class="text-xs text-slate-400 font-medium">Klik untuk pilih foto</p>
-                                <p class="text-xs text-slate-300">.jpg .jpeg .png — maks 5MB</p>
-                                <p class="text-xs text-[#8b1a6b] font-bold mt-2 hidden" id="prevPhotoNameLabel"></p>
-                            </div>
-                            <input type="file" name="photo" id="prev_report_photo" accept=".jpg,.jpeg,.png,.webp" class="hidden"
-                                onchange="document.getElementById('prevPhotoNameLabel').textContent=this.files[0]?.name||''; document.getElementById('prevPhotoNameLabel').classList.toggle('hidden',!this.files[0])">
-                        </div>
-                        <div id="prevReportAlert" class="hidden rounded-xl p-3 mb-4 text-sm font-medium border"></div>
-                        <div class="flex justify-end gap-3">
-                            <button type="button" onclick="hideModal('prevReportModal')" class="px-6 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
-                            <button type="button" id="btnSubmitPrevReport" onclick="submitPrevReport()"
-                                class="btn-submit-prev text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm" style="background:#7a1355;">
-                                <i class="fas fa-paper-plane mr-1"></i> Submit Report
-                            </button>
-                        </div>
+                    <form id="prevMachineReportForm" class="p-5 overflow-y-auto" style="flex:1;">
+                        <div id="prevMachineReportJobsList" class="space-y-3"></div>
+                        <div id="prevMachineReportAlert" class="hidden rounded-xl p-3 mt-4 text-sm font-medium border"></div>
                     </form>
+                    <div class="px-5 py-4 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0 bg-white">
+                        <button type="button" onclick="hideModal('prevMachineReportModal')" class="px-6 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
+                        <button type="button" id="btnSubmitPrevMachineReport" onclick="submitPrevMachineReport()"
+                            class="btn-submit-prev text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm" style="background:#7a1355;">
+                            <i class="fas fa-paper-plane mr-1"></i> Submit Report (<span id="prevMachineReportSelectedCount">0</span>)
+                        </button>
+                    </div>
                 </div>
             </div>
 
