@@ -2422,6 +2422,44 @@ HTML;
                     });
                 }
 
+                // Render chip "Pilih Hari" untuk kategori Overdue: H0, H+1 ... H+7, dan >H+7.
+                // Hanya render chip untuk bucket yang benar-benar ada datanya.
+                // type: 'predictive' | 'preventive' — dipakai untuk key dayFilterState.
+                function renderOverdueDayChips(chipsContainerId, allItems, type, onFilterChange) {
+                    const container = document.getElementById(chipsContainerId);
+
+                    // Bucket: 0 → H0, 1..7 → H+1..H+7 (dari remaining_day -1..-7), 'over7' → lebih dari H+7
+                    const bucketOf = (remDay) => {
+                        const d = -remDay; // overdue → remaining_day negatif/0, ubah jadi angka hari lewat (positif)
+                        if (d <= 0) return 0;
+                        if (d <= 7) return d;
+                        return 'over7';
+                    };
+
+                    const bucketsPresent = [...new Set(allItems.map(r => bucketOf(parseInt(r.remaining_day))))];
+                    const orderedBuckets = [0, 1, 2, 3, 4, 5, 6, 7, 'over7'].filter(b => bucketsPresent.includes(b));
+
+                    const activeDay = dayFilterState[type];
+                    const chipBase = 'px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer border';
+                    const chipActive = 'bg-red-500 text-white border-red-500';
+                    const chipInactive = 'bg-white text-red-700 border-red-200 hover:bg-red-100';
+
+                    let html = `<span data-day="all" class="${chipBase} ${activeDay === 'all' ? chipActive : chipInactive}">Semua</span>`;
+                    orderedBuckets.forEach(b => {
+                        const isActive = String(activeDay) === String(b);
+                        const label = b === 0 ? 'H0' : (b === 'over7' ? '> H+7' : `H+${b}`);
+                        html += `<span data-day="${b}" class="${chipBase} ${isActive ? chipActive : chipInactive}">${label}</span>`;
+                    });
+                    container.innerHTML = html;
+
+                    container.querySelectorAll('[data-day]').forEach(chip => {
+                        chip.addEventListener('click', () => {
+                            dayFilterState[type] = chip.dataset.day;
+                            onFilterChange();
+                        });
+                    });
+                }
+
                 function openStatusModal(status) {
                     const cfg = STATUS_CFG[status] || {};
                     const allItems = SCHED_BY_STATUS[status] || [];
@@ -2911,22 +2949,33 @@ HTML;
                     const cfg = STATUS_CFG[status] || {};
                     const allItems = PREV_BY_STATUS[status] || [];
                     const isAlert = status === 'alert';
+                    const isOverdue = status === 'overdue';
                     dayFilterState.preventive = 'all';
 
                     document.getElementById('prevStatusModalHeader').style.background = cfg.bg || '#7a1355';
 
                     const dayFilterWrap = document.getElementById('prevStatusModalDayFilter');
                     const exportBtn = document.getElementById('prevStatusModalExportBtn');
-                    dayFilterWrap.classList.toggle('hidden', !isAlert);
+                    dayFilterWrap.classList.toggle('hidden', !(isAlert || isOverdue));
                     exportBtn.classList.toggle('hidden', !isAlert);
                     if (isAlert) exportBtn.classList.add('flex');
                     else exportBtn.classList.remove('flex');
 
+                    const overdueBucketOf = (remDay) => {
+                        const d = -remDay;
+                        if (d <= 0) return '0';
+                        if (d <= 7) return String(d);
+                        return 'over7';
+                    };
+
                     function refresh() {
                         const day = dayFilterState.preventive;
-                        const filtered = (isAlert && day !== 'all') ?
-                            allItems.filter(r => String(parseInt(r.remaining_day)) === String(day)) :
-                            allItems;
+                        let filtered = allItems;
+                        if (isAlert && day !== 'all') {
+                            filtered = allItems.filter(r => String(parseInt(r.remaining_day)) === String(day));
+                        } else if (isOverdue && day !== 'all') {
+                            filtered = allItems.filter(r => overdueBucketOf(parseInt(r.remaining_day)) === String(day));
+                        }
                         document.getElementById('prevStatusModalTitle').textContent = (cfg.label || status) + ' — ' + filtered.length + ' jadwal';
                         document.getElementById('prevStatusModalCount').textContent = filtered.length + ' jadwal ditemukan';
                         renderPrevStatusModalRows(filtered);
@@ -2934,6 +2983,7 @@ HTML;
                         // Sebelumnya chip hanya digambar sekali di awal, jadi walau data tabel sudah
                         // terfilter benar, tampilan chip tetap "Semua" terus karena tidak pernah digambar ulang.
                         if (isAlert) renderDayChips('prevStatusModalDayChips', allItems, 'preventive', refresh);
+                        else if (isOverdue) renderOverdueDayChips('prevStatusModalDayChips', allItems, 'preventive', refresh);
                     }
 
                     refresh();
@@ -3282,7 +3332,7 @@ HTML;
                         </div>
                         <button onclick="hideModal('prevStatusModal')" class="text-white/60 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition"><i class="fas fa-times"></i></button>
                     </div>
-                    <!-- Filter pilih hari (khusus kategori Alert, H-1 s.d H-7) -->
+                    <!-- Filter pilih hari (kategori Alert: H-1 s.d H-7, atau Overdue: H0 s.d H+7 dan >H+7) -->
                     <div id="prevStatusModalDayFilter" class="px-7 py-3 bg-amber-50 border-b border-amber-100 hidden">
                         <div class="flex items-center gap-2 flex-wrap">
                             <span class="text-[10px] font-black uppercase tracking-widest text-amber-700 mr-1"><i class="fas fa-calendar-day mr-1"></i>Pilih Hari:</span>
@@ -3718,4 +3768,4 @@ HTML;
 
 </body>
 
-</html>
+</html> 
