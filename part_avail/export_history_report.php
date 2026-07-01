@@ -60,8 +60,31 @@ $idToNo = [];
 foreach ($rows as $i => $r) {
     $idToNo[$r['id']] = $i + 1;
 }
+// Reverse map No → id, dipakai untuk hyperlink Chain ID (cari baris root by No)
+$noToId = array_flip($idToNo);
 
-// ── Helper: rujukan "Lanjutan Dari" harus menunjuk ke nomor urut "No" yang
+// Map id → row lengkap, dipakai untuk menelusuri rantai parent_id ke akar (root)
+$rowsById = [];
+foreach ($rows as $r) {
+    $rowsById[$r['id']] = $r;
+}
+
+// ── Helper: telusuri rantai parent_id sampai ke record akar (root), lalu
+// kembalikan "No" root tersebut — dipakai sebagai "Chain ID" supaya semua
+// record dalam satu rantai follow-up bisa di-filter/sort jadi satu grup,
+// terlepas dari posisi tanggal/barisnya di sheet.
+function findChainRootNo($row, array $rowsById, array $idToNo)
+{
+    $current = $row;
+    $guard   = 0; // safety guard, cegah infinite loop kalau data parent_id circular
+    while (!empty($current['parent_id']) && isset($rowsById[$current['parent_id']]) && $guard < 50) {
+        $current = $rowsById[$current['parent_id']];
+        $guard++;
+    }
+    return $idToNo[$current['id']] ?? null;
+}
+
+// ── Helper: rujukan "continuation of work from" harus menunjuk ke nomor urut "No" yang
 // tampil di sheet, bukan ID mentah di database — supaya konsisten dengan apa
 // yang dilihat user dan bisa langsung dicocokkan ke baris di atasnya.
 function buildLanjutanLabel($parentId, array $idToNo)
@@ -84,6 +107,36 @@ function statusLabel($status)
     return $status === 'selesai' ? 'Selesai' : 'Belum Selesai';
 }
 
+// ── Helper total durasi (untuk baris Total) ─────────────────────────────────────
+// Hanya menjumlahkan baris yang punya repair_start & repair_finish valid;
+// baris dengan durasi '—' (belum selesai / data kosong) diabaikan.
+function totalDurasiMenit(array $rows)
+{
+    $total = 0;
+    foreach ($rows as $r) {
+        $d = durasiMenit($r['repair_start'], $r['repair_finish']);
+        if (is_int($d)) $total += $d;
+    }
+    return $total;
+}
+
+function formatDurasi($menit)
+{
+    $jam       = intdiv($menit, 60);
+    $sisaMenit = $menit % 60;
+    return "{$menit} mnt ({$jam}j {$sisaMenit}m)";
+}
+
+// ── Helper: pasang hyperlink internal (dalam sheet yang sama) ke sel target,
+// supaya user tinggal klik "#N" untuk lompat langsung ke baris asal/root-nya
+// tanpa perlu scroll & cari manual.
+function setInternalLink($sheet, string $cellCoord, int $targetRow)
+{
+    $sheetName = $sheet->getTitle();
+    $sheet->getCell($cellCoord)->getHyperlink()->setUrl("sheet://'{$sheetName}'!A{$targetRow}");
+    $sheet->getStyle($cellCoord)->getFont()->setUnderline(true)->getColor()->setRGB('2563EB');
+}
+
 // ── Shared styles ─────────────────────────────────────────────────────────────
 $styleDivider = [
     'font'      => ['bold' => true, 'size' => 9, 'color' => ['rgb' => '64748B'], 'italic' => true],
@@ -98,44 +151,27 @@ $styleBorder = [
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
 ];
 
-// Kolom header — Detail (18 kolom, lengkap untuk analisis & arsip teknis)
+// Kolom header — Detail (19 kolom, lengkap untuk analisis & arsip teknis)
 $colHeaders = [
     'No',
     'Report Date',
     'Department',
     'Line',
     'OP',
+    'machine name',
+    'machine type',
     'Shift',
-    'Nama Mesin',
-    'Tipe Mesin',
     'Repair Start',
     'Repair Finish',
-    'Durasi (mnt)',
+    'duration (mnt)',
     'Reported By',
-    'PIC / Teknisi',
+    'PIC/Technician',
     'Problem / Alarm',
-    'Action / Perbaikan',
+    'Corrective Action',
+    'Chain ID',
+    'continuation of work from',
     'Status',
-    'Lanjutan Dari',
     'Submitted At'
-];
-
-// Kolom header — Summary (12 kolom, ringkas untuk rekap managerial)
-// Tidak menampilkan: OP, Machine Type, Action, PIC, Lanjutan, Submitted At
-// — dianggap terlalu teknis untuk kebutuhan baca cepat level manager.
-$colHeadersSummary = [
-    'No',
-    'Tanggal',
-    'Department',
-    'Line',
-    'Mesin',
-    'Shift',
-    'Problem / Alarm',
-    'Status',
-    'Repair Start',
-    'Repair Finish',
-    'Durasi (mnt)',
-    'Reported By',
 ];
 
 // ── Excel ─────────────────────────────────────────────────────────────────────
@@ -151,35 +187,20 @@ $colWidths = [
     'C' => 18,  // Department
     'D' => 14,  // Line
     'E' => 8,   // OP
-    'F' => 10,  // Shift
-    'G' => 24,  // Nama Mesin
-    'H' => 16,  // Tipe Mesin
+    'F' => 24,  // machine name
+    'G' => 16,  // machine type
+    'H' => 10,  // Shift
     'I' => 18,  // Repair Start
     'J' => 18,  // Repair Finish
-    'K' => 10,  // Durasi (mnt)
+    'K' => 10,  // duration (mnt)
     'L' => 16,  // Reported By
-    'M' => 16,  // PIC / Teknisi
+    'M' => 16,  // PIC/Technician
     'N' => 38,  // Problem / Alarm
-    'O' => 38,  // Action / Perbaikan
-    'P' => 14,  // Status
-    'Q' => 14,  // Lanjutan Dari
-    'R' => 18   // Submitted At
-];
-
-// Lebar kolom — Summary (A–L, 12 kolom)
-$colWidthsSummary = [
-    'A' => 5,   // No
-    'B' => 13,  // Tanggal
-    'C' => 18,  // Department
-    'D' => 14,  // Line
-    'E' => 24,  // Mesin
-    'F' => 10,  // Shift
-    'G' => 42,  // Problem / Alarm — paling lebar, inti rekap
-    'H' => 14,  // Status
-    'I' => 18,  // Repair Start
-    'J' => 18,  // Repair Finish
-    'K' => 10,  // Durasi (mnt)
-    'L' => 16,  // Reported By
+    'O' => 38,  // Corrective Action
+    'P' => 12,  // Chain ID
+    'Q' => 14,  // continuation of work from
+    'R' => 14,  // Status
+    'S' => 18   // Submitted At
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -199,13 +220,13 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet);
     }
 
-    $sheet->mergeCells('A1:R1');
+    $sheet->mergeCells('A1:S1');
     $sheet->setCellValue('A1', 'HISTORY E-REPORT MAINTENANCE');
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet->getRowDimension(1)->setRowHeight(45);
-    $sheet->mergeCells('A2:R2');
+    $sheet->mergeCells('A2:S2');
     $sheet->setCellValue('A2', $periodeLabel);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
@@ -218,10 +239,11 @@ if ($mode === 'daily') {
     $styleHdr = [
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
-        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
     ];
 
     $startRow = 4;
+    $idToActualRow = []; // id → actual row Excel tempat data record itu ditulis (khusus sheet ini)
     foreach ($rows as $idx => $r) {
         $infoRow  = $startRow;
         $infoText = sprintf(
@@ -234,7 +256,7 @@ if ($mode === 'daily') {
             $r['reported_by'],
             $r['created_at']
         );
-        $sheet->mergeCells("A{$infoRow}:R{$infoRow}");
+        $sheet->mergeCells("A{$infoRow}:S{$infoRow}");
         $sheet->setCellValue("A{$infoRow}", $infoText);
         $sheet->getStyle("A{$infoRow}")->applyFromArray($styleInfo);
         $sheet->getRowDimension($infoRow)->setRowHeight(18);
@@ -242,9 +264,12 @@ if ($mode === 'daily') {
 
         $hdrRow = $startRow;
         $sheet->fromArray($colHeaders, NULL, "A{$hdrRow}");
-        $sheet->getStyle("A{$hdrRow}:R{$hdrRow}")->applyFromArray($styleHdr);
-        $sheet->getRowDimension($hdrRow)->setRowHeight(16);
+        $sheet->getStyle("A{$hdrRow}:S{$hdrRow}")->applyFromArray($styleHdr);
+        // [FIX-WRAP-HDR] -1 = auto-height, supaya header yang wrap (2+ baris) full terlihat
+        $sheet->getRowDimension($hdrRow)->setRowHeight(-1);
         $startRow++;
+
+        $chainRootNo = findChainRootNo($r, $rowsById, $idToNo);
 
         $sheet->fromArray([
             $idx + 1,
@@ -252,9 +277,9 @@ if ($mode === 'daily') {
             $r['department']    ?? '—',
             $r['line']          ?? '—',
             $r['op']            ?? '—',
-            $r['shift']         ?? '—',
             $r['machine_name']  ?? '—',
             $r['machine_type']  ?? '—',
+            $r['shift']         ?? '—',
             $r['repair_start']  ? date('d-M-Y H:i', strtotime($r['repair_start']))   : '—',
             $r['repair_finish'] ? date('d-M-Y H:i', strtotime($r['repair_finish']))  : '—',
             durasiMenit($r['repair_start'], $r['repair_finish']),
@@ -262,21 +287,37 @@ if ($mode === 'daily') {
             $r['pic']           ?? '—',
             $r['problem']       ?? '—',
             $r['action']        ?? '—',
-            statusLabel($r['status']),
+            $chainRootNo !== null ? '#' . $chainRootNo : '—',
             buildLanjutanLabel($r['parent_id'], $idToNo),
+            statusLabel($r['status']),
             $r['created_at']    ? date('d-M-Y H:i', strtotime($r['created_at']))     : '—',
         ], NULL, "A{$startRow}");
-        $sheet->getStyle("A{$startRow}:R{$startRow}")->getAlignment()
+        $sheet->getStyle("A{$startRow}:S{$startRow}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
         // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
         $sheet->getRowDimension($startRow)->setRowHeight(-1);
 
-        foreach (['A', 'E', 'F', 'K', 'P', 'Q'] as $col) {
+        foreach (['A', 'E', 'H', 'K', 'P', 'Q', 'R'] as $col) {
             $sheet->getStyle("{$col}{$startRow}")
                 ->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         }
 
-        $sheet->getStyle("A{$infoRow}:R{$startRow}")->applyFromArray($styleBorder);
+        // ── Hyperlink klik-lompat: Chain ID → baris root, continuation of
+        // work from → baris parent langsung. Hanya dipasang kalau baris
+        // targetnya sudah pernah ditulis di sheet ini (root/parent selalu
+        // dibuat lebih dulu secara kronologis daripada follow-up-nya).
+        if ($chainRootNo !== null && isset($noToId[$chainRootNo], $idToActualRow[$noToId[$chainRootNo]])) {
+            $rootActualRow = $idToActualRow[$noToId[$chainRootNo]];
+            if ($rootActualRow !== $startRow) {
+                setInternalLink($sheet, "P{$startRow}", $rootActualRow);
+            }
+        }
+        if (!empty($r['parent_id']) && isset($idToActualRow[$r['parent_id']])) {
+            setInternalLink($sheet, "Q{$startRow}", $idToActualRow[$r['parent_id']]);
+        }
+        $idToActualRow[$r['id']] = $startRow;
+
+        $sheet->getStyle("A{$infoRow}:S{$startRow}")->applyFromArray($styleBorder);
         $startRow += 2;
     }
 
@@ -286,16 +327,13 @@ if ($mode === 'daily') {
     $sheet->freezePane('A4');
 
     // ═════════════════════════════════════════════════════════════════════════════
-    // MODE MONTHLY — 2 sheet, template identik checksheet_monthly
+    // MODE MONTHLY — 1 sheet, format Detail (18 kolom lengkap) dengan header
+    // warna hijau (eks-Summary) + baris Total (record & durasi) di paling bawah.
     // ═════════════════════════════════════════════════════════════════════════════
 } else {
 
-    // ══ SHEET 1: Summary ══════════════════════════════════════════════════════
-    // Ringkas — 12 kolom (A–L), fokus: siapa/di mana/mesin apa/masalah apa/
-    // status/durasi. Tidak menampilkan OP, Machine Type, Action, PIC,
-    // Lanjutan, Submitted At — dianggap terlalu teknis untuk rekap managerial.
-    $sheet1 = $spreadsheet->getActiveSheet();
-    $sheet1->setTitle("Summary");
+    $sheet = $spreadsheet->getActiveSheet();
+    $sheet->setTitle("Monthly E-Report");
 
     if (file_exists('assets/company_logo.jpg')) {
         $logo = new Drawing();
@@ -303,147 +341,59 @@ if ($mode === 'daily') {
         $logo->setPath('assets/company_logo.jpg');
         $logo->setHeight(55);
         $logo->setCoordinates('A1');
-        $logo->setWorksheet($sheet1);
+        $logo->setWorksheet($sheet);
     }
 
-    $sheet1->mergeCells('A1:L1');
-    $sheet1->setCellValue('A1', 'MONTHLY E-REPORT MAINTENANCE — SUMMARY');
-    $sheet1->getStyle('A1')->getFont()->setBold(true)->setSize(15);
-    $sheet1->getStyle('A1')->getAlignment()
+    $sheet->mergeCells('A1:S1');
+    $sheet->setCellValue('A1', 'MONTHLY E-REPORT MAINTENANCE');
+    $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
+    $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
-    $sheet1->getRowDimension(1)->setRowHeight(45);
-    $sheet1->mergeCells('A2:L2');
-    $sheet1->setCellValue('A2', $periodeLabel);
-    $sheet1->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-    $sheet1->getStyle('A2')->getFont()->setSize(11);
+    $sheet->getRowDimension(1)->setRowHeight(45);
+    $sheet->mergeCells('A2:S2');
+    $sheet->setCellValue('A2', $periodeLabel);
+    $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+    $sheet->getStyle('A2')->getFont()->setSize(11);
 
-    $sheet1->fromArray($colHeadersSummary, NULL, 'A4');
-    $sheet1->getStyle('A4:L4')->applyFromArray([
+    // Header kolom — warna hijau (198754), sama seperti sheet Summary sebelumnya
+    $sheet->fromArray($colHeaders, NULL, 'A4');
+    $sheet->getStyle('A4:S4')->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
-        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
     ]);
-    $sheet1->getRowDimension(4)->setRowHeight(18);
+    // [FIX-WRAP-HDR] -1 = auto-height, supaya header yang wrap (2+ baris) full terlihat
+    $sheet->getRowDimension(4)->setRowHeight(-1);
 
-    $row1       = 5;
-    $no1        = 1;
-    $prevDate   = '';
-    $dataRowsS1 = [];
-
-    foreach ($rows as $r) {
-        $curDate = substr($r['report_date'], 0, 10);
-
-        // Pemisah tanggal — identik checksheet monthly
-        if ($curDate !== $prevDate) {
-            $sheet1->mergeCells("A{$row1}:L{$row1}");
-            $sheet1->setCellValue("A{$row1}", "— " . date('d F Y', strtotime($curDate)) . " —");
-            $sheet1->getStyle("A{$row1}:L{$row1}")->applyFromArray($styleDivider);
-            $sheet1->getRowDimension($row1)->setRowHeight(14);
-            $row1++;
-            $prevDate = $curDate;
-        }
-
-        $sheet1->fromArray([
-            $no1++,
-            $r['report_date']   ? date('d-M-Y', strtotime($r['report_date']))        : '—',
-            $r['department']    ?? '—',
-            $r['line']          ?? '—',
-            $r['machine_name']  ?? '—',
-            $r['shift']         ?? '—',
-            $r['problem']       ?? '—',
-            statusLabel($r['status']),
-            $r['repair_start']  ? date('d-M-Y H:i', strtotime($r['repair_start']))   : '—',
-            $r['repair_finish'] ? date('d-M-Y H:i', strtotime($r['repair_finish']))  : '—',
-            durasiMenit($r['repair_start'], $r['repair_finish']),
-            $r['reported_by']   ?? '—',
-        ], NULL, "A{$row1}");
-
-        $dataRowsS1[] = $row1;
-        // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
-        $sheet1->getRowDimension($row1)->setRowHeight(-1);
-        $row1++;
-    }
-
-    // Alignment massal Sheet1
-    if (!empty($dataRowsS1)) {
-        $first = $dataRowsS1[0];
-        $last  = $dataRowsS1[count($dataRowsS1) - 1];
-        $sheet1->getStyle("A{$first}:L{$last}")->getAlignment()
-            ->setVertical(Alignment::VERTICAL_CENTER)
-            ->setHorizontal(Alignment::HORIZONTAL_CENTER)
-            ->setWrapText(true);
-        // Kolom teks (C, D, E, G, L) rata kiri — Department, Line, Mesin,
-        // Problem/Alarm, Reported By
-        foreach (['C', 'D', 'E', 'G', 'L'] as $col) {
-            $sheet1->getStyle("{$col}{$first}:{$col}{$last}")->getAlignment()
-                ->setHorizontal(Alignment::HORIZONTAL_LEFT);
-        }
-    }
-
-    // Grand Total row — identik checksheet monthly
-    $sheet1->mergeCells("A{$row1}:L{$row1}");
-    $sheet1->setCellValue("A{$row1}", "TOTAL : " . count($rows) . " record");
-    $sheet1->getStyle("A{$row1}:L{$row1}")->applyFromArray([
-        'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
-        'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
-        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
-    ]);
-    $sheet1->getRowDimension($row1)->setRowHeight(18);
-
-    $sheet1->getStyle("A4:L{$row1}")->applyFromArray($styleBorder);
-    foreach ($colWidthsSummary as $col => $w) {
-        $sheet1->getColumnDimension($col)->setWidth($w);
-    }
-    $sheet1->freezePane('A5');
-
-    // ══ SHEET 2: Detail ═══════════════════════════════════════════════════════
-    $sheet2 = $spreadsheet->createSheet();
-    $sheet2->setTitle("Detail");
-
-    $sheet2->mergeCells('A1:R1');
-    $sheet2->setCellValue('A1', 'MONTHLY E-REPORT MAINTENANCE — DETAIL');
-    $sheet2->getStyle('A1')->getFont()->setBold(true)->setSize(15);
-    $sheet2->getStyle('A1')->getAlignment()
-        ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
-    $sheet2->getRowDimension(1)->setRowHeight(45);
-    $sheet2->mergeCells('A2:R2');
-    $sheet2->setCellValue('A2', $periodeLabel);
-    $sheet2->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-
-    $sheet2->fromArray($colHeaders, NULL, 'A4');
-    $sheet2->getStyle('A4:R4')->applyFromArray([
-        'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
-        'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4F46E5']],
-        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
-    ]);
-    $sheet2->getRowDimension(4)->setRowHeight(18);
-
-    $row2       = 5;
-    $no2        = 1;
-    $prevDate   = '';
-    $dataRowsS2 = [];
+    $row           = 5;
+    $no            = 1;
+    $prevDate      = '';
+    $dataRows      = [];
+    $idToActualRow = []; // id → actual row Excel tempat data record itu ditulis (khusus sheet ini)
 
     foreach ($rows as $r) {
         $curDate = substr($r['report_date'], 0, 10);
 
         if ($curDate !== $prevDate) {
-            $sheet2->mergeCells("A{$row2}:R{$row2}");
-            $sheet2->setCellValue("A{$row2}", "— " . date('d F Y', strtotime($curDate)) . " —");
-            $sheet2->getStyle("A{$row2}:R{$row2}")->applyFromArray($styleDivider);
-            $sheet2->getRowDimension($row2)->setRowHeight(14);
-            $row2++;
+            $sheet->mergeCells("A{$row}:S{$row}");
+            $sheet->setCellValue("A{$row}", "— " . date('d F Y', strtotime($curDate)) . " —");
+            $sheet->getStyle("A{$row}:S{$row}")->applyFromArray($styleDivider);
+            $sheet->getRowDimension($row)->setRowHeight(14);
+            $row++;
             $prevDate = $curDate;
         }
 
-        $sheet2->fromArray([
-            $no2++,
+        $chainRootNo = findChainRootNo($r, $rowsById, $idToNo);
+
+        $sheet->fromArray([
+            $no++,
             $r['report_date']   ? date('d-M-Y', strtotime($r['report_date']))        : '—',
             $r['department']    ?? '—',
             $r['line']          ?? '—',
             $r['op']            ?? '—',
-            $r['shift']         ?? '—',
             $r['machine_name']  ?? '—',
             $r['machine_type']  ?? '—',
+            $r['shift']         ?? '—',
             $r['repair_start']  ? date('d-M-Y H:i', strtotime($r['repair_start']))   : '—',
             $r['repair_finish'] ? date('d-M-Y H:i', strtotime($r['repair_finish']))  : '—',
             durasiMenit($r['repair_start'], $r['repair_finish']),
@@ -451,36 +401,75 @@ if ($mode === 'daily') {
             $r['pic']           ?? '—',
             $r['problem']       ?? '—',
             $r['action']        ?? '—',
-            statusLabel($r['status']),
+            $chainRootNo !== null ? '#' . $chainRootNo : '—',
             buildLanjutanLabel($r['parent_id'], $idToNo),
+            statusLabel($r['status']),
             $r['created_at']    ? date('d-M-Y H:i', strtotime($r['created_at']))     : '—',
-        ], NULL, "A{$row2}");
+        ], NULL, "A{$row}");
 
-        $dataRowsS2[] = $row2;
+        // ── Hyperlink klik-lompat: Chain ID → baris root, continuation of
+        // work from → baris parent langsung. Root/parent selalu sudah
+        // ditulis lebih dulu di sheet ini (urutan kronologis).
+        if ($chainRootNo !== null && isset($noToId[$chainRootNo], $idToActualRow[$noToId[$chainRootNo]])) {
+            $rootActualRow = $idToActualRow[$noToId[$chainRootNo]];
+            if ($rootActualRow !== $row) {
+                setInternalLink($sheet, "P{$row}", $rootActualRow);
+            }
+        }
+        if (!empty($r['parent_id']) && isset($idToActualRow[$r['parent_id']])) {
+            setInternalLink($sheet, "Q{$row}", $idToActualRow[$r['parent_id']]);
+        }
+        $idToActualRow[$r['id']] = $row;
+
+        $dataRows[] = $row;
         // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
-        $sheet2->getRowDimension($row2)->setRowHeight(-1);
-        $row2++;
+        $sheet->getRowDimension($row)->setRowHeight(-1);
+        $row++;
     }
 
-    // Alignment massal Sheet2
-    if (!empty($dataRowsS2)) {
-        $first = $dataRowsS2[0];
-        $last  = $dataRowsS2[count($dataRowsS2) - 1];
-        $sheet2->getStyle("A{$first}:R{$last}")->getAlignment()
+    // Alignment massal — kolom angka/kode di tengah (No, OP, Shift, Durasi,
+    // Chain ID, continuation of work from, Status), sisanya rata kiri
+    // (default General) supaya teks panjang tetap enak dibaca dengan wrap text.
+    if (!empty($dataRows)) {
+        $first = $dataRows[0];
+        $last  = $dataRows[count($dataRows) - 1];
+        $sheet->getStyle("A{$first}:S{$last}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
-        $sheet2->getStyle("C{$first}:O{$last}")->getAlignment()
-            ->setHorizontal(Alignment::HORIZONTAL_LEFT);
+        foreach (['A', 'E', 'H', 'K', 'P', 'Q', 'R'] as $col) {
+            $sheet->getStyle("{$col}{$first}:{$col}{$last}")->getAlignment()
+                ->setHorizontal(Alignment::HORIZONTAL_CENTER);
+        }
     }
 
-    if ($row2 > 5) {
-        $sheet2->getStyle("A4:R" . ($row2 - 1))->applyFromArray($styleBorder);
+    if ($row > 5) {
+        $sheet->getStyle("A4:S" . ($row - 1))->applyFromArray($styleBorder);
     }
+
+    // AutoFilter di header — supaya user bisa filter/sort langsung by Chain ID
+    // untuk lihat seluruh rantai follow-up sekaligus, terlepas dari tanggalnya.
+    if (!empty($dataRows)) {
+        $sheet->setAutoFilter("A4:S" . $dataRows[count($dataRows) - 1]);
+    }
+
+    // ── Baris Total : total record + total durasi — style sama seperti baris
+    // Total di sheet Summary sebelumnya (dark fill, bold, putih)
+    $totalMenit = totalDurasiMenit($rows);
+    $sheet->mergeCells("A{$row}:S{$row}");
+    $sheet->setCellValue(
+        "A{$row}",
+        "TOTAL : " . count($rows) . " record   |   Total Durasi : " . formatDurasi($totalMenit)
+    );
+    $sheet->getStyle("A{$row}:S{$row}")->applyFromArray([
+        'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
+        'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
+    ]);
+    $sheet->getRowDimension($row)->setRowHeight(18);
+
     foreach ($colWidths as $col => $w) {
-        $sheet2->getColumnDimension($col)->setWidth($w);
+        $sheet->getColumnDimension($col)->setWidth($w);
     }
-    $sheet2->freezePane('A5');
-
-    $spreadsheet->setActiveSheetIndex(0);
+    $sheet->freezePane('A5');
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────────

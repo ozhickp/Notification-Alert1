@@ -23,20 +23,34 @@ use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
 
-$type = $_GET['type'] ?? '';
-$day  = $_GET['day'] ?? 'all';
+$type      = $_GET['type'] ?? '';
+$day       = $_GET['day'] ?? 'all';
+$condition = $_GET['condition'] ?? 'alert'; // 'alert' (H-1 s.d H-7) atau 'overdue' (H+0 dst)
 
 if (!in_array($type, ['predictive', 'preventive'], true)) {
     http_response_code(400);
     die('Parameter type tidak valid.');
 }
-if ($day !== 'all' && !ctype_digit((string)$day)) {
+if (!in_array($condition, ['alert', 'overdue'], true)) {
     http_response_code(400);
-    die('Parameter day tidak valid.');
+    die('Parameter condition tidak valid.');
 }
-if ($day !== 'all' && ((int)$day < 1 || (int)$day > 7)) {
-    http_response_code(400);
-    die('Parameter day harus antara 1 sampai 7 (sesuai rentang kategori Alert).');
+
+$validOverdueDays = ['all', '0', '1', '2', '3', '4', '5', '6', '7', 'over7'];
+if ($condition === 'alert') {
+    if ($day !== 'all' && !ctype_digit((string)$day)) {
+        http_response_code(400);
+        die('Parameter day tidak valid.');
+    }
+    if ($day !== 'all' && ((int)$day < 1 || (int)$day > 7)) {
+        http_response_code(400);
+        die('Parameter day harus antara 1 sampai 7 (sesuai rentang kategori Alert).');
+    }
+} else {
+    if (!in_array((string)$day, $validOverdueDays, true)) {
+        http_response_code(400);
+        die('Parameter day tidak valid untuk kondisi Overdue.');
+    }
 }
 
 // ── Selalu sinkronkan remaining_day dulu, supaya export tidak memuat data basi ──
@@ -44,11 +58,27 @@ $table = $type === 'predictive' ? 'schedules' : 'schedules_preventive';
 $pdo->exec("UPDATE {$table} SET remaining_day = DATEDIFF(change_date_plan, CURDATE()) WHERE change_date_plan IS NOT NULL");
 
 // ── Query data sesuai filter ──────────────────────────────────────────────────
-$where  = "remaining_day BETWEEN 1 AND 7";
 $params = [];
-if ($day !== 'all') {
-    $where   .= " AND remaining_day = :day";
-    $params[':day'] = (int)$day;
+if ($condition === 'alert') {
+    $where = "remaining_day BETWEEN 1 AND 7";
+    if ($day !== 'all') {
+        $where .= " AND remaining_day = :day";
+        $params[':day'] = (int)$day;
+    }
+} else {
+    // Overdue: remaining_day <= 0. Bucket hari: '0' = jatuh tempo hari ini,
+    // '1'..'7' = terlambat N hari (remaining_day = -N), 'over7' = terlambat > 7 hari.
+    $where = "remaining_day <= 0";
+    if ($day !== 'all') {
+        if ($day === '0') {
+            $where .= " AND remaining_day = 0";
+        } elseif ($day === 'over7') {
+            $where .= " AND remaining_day < -7";
+        } else {
+            $where .= " AND remaining_day = :day";
+            $params[':day'] = -1 * (int)$day;
+        }
+    }
 }
 
 $stmt = $pdo->prepare("
@@ -62,14 +92,29 @@ $stmt->execute($params);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ── Susun workbook ────────────────────────────────────────────────────────────
-$isPrev    = $type === 'preventive';
-$themeHex  = $isPrev ? '7A1355' : '124DA1'; // magenta utk preventive, biru utk predictive (konsisten dgn tema dashboard)
-$label     = $isPrev ? 'Preventive' : 'Predictive';
-$dayLabel  = $day === 'all' ? 'Semua Hari (H-1 s.d H-7)' : ('H-' . (int)$day);
+$isPrev         = $type === 'preventive';
+$isOverdue      = $condition === 'overdue';
+$themeHex       = $isOverdue ? 'B91C1C' : ($isPrev ? '7A1355' : '124DA1'); // merah utk overdue, magenta utk preventive, biru utk predictive
+$label          = $isPrev ? 'Preventive' : 'Predictive';
+$conditionLabel = $isOverdue ? 'Overdue' : 'Alert';
+
+if ($condition === 'alert') {
+    $dayLabel = $day === 'all' ? 'Semua Hari (H-1 s.d H-7)' : ('H-' . (int)$day);
+} else {
+    if ($day === 'all') {
+        $dayLabel = 'Semua (Overdue)';
+    } elseif ($day === '0') {
+        $dayLabel = 'H+0 (Jatuh Tempo Hari Ini)';
+    } elseif ($day === 'over7') {
+        $dayLabel = '> H+7 (Terlambat Lebih dari 7 Hari)';
+    } else {
+        $dayLabel = 'H+' . (int)$day . ' (Terlambat ' . (int)$day . ' Hari)';
+    }
+}
 
 $spreadsheet = new Spreadsheet();
 $sheet = $spreadsheet->getActiveSheet();
-$sheet->setTitle('Alert ' . $label);
+$sheet->setTitle($conditionLabel . ' ' . $label);
 
 if (file_exists('assets/company_logo.jpg')) {
     $logo = new Drawing();
@@ -81,7 +126,7 @@ if (file_exists('assets/company_logo.jpg')) {
 }
 
 // Judul laporan
-$sheet->setCellValue('A1', "RENCANA MAINTENANCE {$label} - ALERT ({$dayLabel})");
+$sheet->setCellValue('A1', "RENCANA MAINTENANCE {$label} - " . strtoupper($conditionLabel) . " ({$dayLabel})");
 $sheet->mergeCells('A1:K1');
 $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(13);
 $sheet->getStyle('A1')->getAlignment()
@@ -93,7 +138,7 @@ $sheet->mergeCells('A2:K2');
 $sheet->getStyle('A2')->getFont()->setItalic(true)->setSize(9)->setColor(new \PhpOffice\PhpSpreadsheet\Style\Color('FF64748B'));
 
 // Header tabel
-$headers = ['No', 'Department', 'Line', 'OP', 'Machine Name', 'Process Machine', 'Maintenance Point', 'Interval (Bulan)', 'Last Change', 'Change Date Plan', 'Remaining (Hari)'];
+$headers = ['No', 'Department', 'Line', 'OP', 'Machine Name', 'Process Machine', 'Maintenance Point', 'Interval (Bulan)', 'Last Change', 'Change Date Plan', $isOverdue ? 'Terlambat (Hari)' : 'Remaining (Hari)'];
 $headerRow = 4;
 foreach ($headers as $i => $h) {
     $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
@@ -118,7 +163,7 @@ foreach ($rows as $i => $row) {
     $sheet->setCellValue("H{$r}", $row['interval_month'] ?? '-');
     $sheet->setCellValueExplicit("I{$r}", $row['use_date'] ? formatDate($row['use_date']) : '-', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
     $sheet->setCellValueExplicit("J{$r}", $row['change_date_plan'] ? formatDate($row['change_date_plan']) : '-', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-    $sheet->setCellValue("K{$r}", (int)$row['remaining_day']);
+    $sheet->setCellValue("K{$r}", $isOverdue ? abs((int)$row['remaining_day']) : (int)$row['remaining_day']);
     $r++;
 }
 
@@ -147,9 +192,19 @@ $sheet->getStyle("G" . ($headerRow + 1) . ":G{$lastRow}")->getAlignment()->setWr
 $sheet->freezePane('A' . ($headerRow + 1));
 
 // ── Output ────────────────────────────────────────────────────────────────────
-$fileTag  = $isPrev ? 'Preventive' : 'Predictive';
-$dayTag   = $day === 'all' ? 'Semua' : ('H-' . (int)$day);
-$filename = "Alert_{$fileTag}_{$dayTag}_" . date('Ymd_His') . '.xlsx';
+$fileTag = $isPrev ? 'Preventive' : 'Predictive';
+if ($day === 'all') {
+    $dayTag = 'Semua';
+} elseif ($condition === 'alert') {
+    $dayTag = 'H-' . (int)$day;
+} elseif ($day === '0') {
+    $dayTag = 'H0';
+} elseif ($day === 'over7') {
+    $dayTag = 'Over7';
+} else {
+    $dayTag = 'H+' . (int)$day;
+}
+$filename = "{$conditionLabel}_{$fileTag}_{$dayTag}_" . date('Ymd_His') . '.xlsx';
 
 header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 header('Content-Disposition: attachment; filename="' . $filename . '"');

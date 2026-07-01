@@ -11,6 +11,36 @@ if (!function_exists('formatDate') || !function_exists('calculateRemainingDays')
     die("Error: Helper functions tidak ditemukan di config.php");
 }
 
+// ── Hitung tanggal Change Date Plan (jadwal berikutnya) berdasarkan basis pilihan user ──
+// $basis   : 'schedule' = dari Change Date Plan lama (jadwal awal, tidak bergeser),
+//            'actual'   = dari tanggal aktual pekerjaan (default),
+//            'report'   = dari tanggal pengisian laporan (hari ini).
+// $oldChangeDatePlan : Change Date Plan yang tersimpan sebelumnya di schedule (basis 'schedule').
+// $actualDate        : tanggal aktual pekerjaan yang diinput user di form report.
+if (!function_exists('computeNextChangeDate')) {
+    function computeNextChangeDate(string $basis, ?string $oldChangeDatePlan, string $actualDate, int $intervalMonth): ?string
+    {
+        if ($intervalMonth <= 0) return null;
+
+        switch ($basis) {
+            case 'schedule':
+                $baseDateStr = !empty($oldChangeDatePlan) ? $oldChangeDatePlan : $actualDate;
+                break;
+            case 'report':
+                $baseDateStr = date('Y-m-d');
+                break;
+            case 'actual':
+            default:
+                $baseDateStr = $actualDate;
+                break;
+        }
+
+        $dt = new DateTime($baseDateStr);
+        $dt->modify("+{$intervalMonth} months");
+        return $dt->format('Y-m-d');
+    }
+}
+
 $todayStr = date('Y-m-d');
 
 // Ambil nama user yang sedang login
@@ -369,15 +399,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
-            // ── Hitung use_date & change_date_plan baru dari tanggal aktual pekerjaan ──
+            // ── Hitung use_date & change_date_plan baru ──
+            // use_date (Last Change) selalu = tanggal aktual pekerjaan.
+            // change_date_plan (jadwal berikutnya) dihitung sesuai basis pilihan user:
+            // 'schedule' = dari Change Date Plan lama, 'actual' = dari tanggal aktual
+            // pekerjaan (default), 'report' = dari tanggal pengisian laporan (hari ini).
             $intervalMonth   = (int)($sched['interval_month'] ?? 0);
             $newUseDate      = $actualDate; // last change = tanggal aktual pekerjaan
-            $newChangePlan   = null;
-            if ($intervalMonth > 0) {
-                $dt = new DateTime($actualDate);
-                $dt->modify("+{$intervalMonth} months");
-                $newChangePlan = $dt->format('Y-m-d');
+            $nextBasis       = $_POST['next_basis'] ?? 'actual';
+            if (!in_array($nextBasis, ['schedule', 'actual', 'report'], true)) {
+                $nextBasis = 'actual';
             }
+            $newChangePlan   = computeNextChangeDate($nextBasis, $sched['change_date_plan'] ?? null, $actualDate, $intervalMonth);
             $newRemainingDay = $newChangePlan ? (int)(new DateTime())->diff(new DateTime($newChangePlan))->days * ((new DateTime($newChangePlan) >= new DateTime()) ? 1 : -1) : null;
             // Hitung ulang pakai DATEDIFF logic
             if ($newChangePlan) {
@@ -587,12 +620,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
             // ── Hitung use_date & change_date_plan baru ──
             $intervalMonth = (int)($sched['interval_month'] ?? 0);
             $newUseDate    = $actualDate;
-            $newChangePlan = null;
-            if ($intervalMonth > 0) {
-                $dt = new DateTime($actualDate);
-                $dt->modify("+{$intervalMonth} months");
-                $newChangePlan = $dt->format('Y-m-d');
+            $nextBasis     = $_POST['next_basis'] ?? 'actual';
+            if (!in_array($nextBasis, ['schedule', 'actual', 'report'], true)) {
+                $nextBasis = 'actual';
             }
+            $newChangePlan = computeNextChangeDate($nextBasis, $sched['change_date_plan'] ?? null, $actualDate, $intervalMonth);
             $newRemainingDay = null;
             if ($newChangePlan) {
                 $now = new DateTime('today');
@@ -688,12 +720,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                     // ── Hitung use_date & change_date_plan baru ──
                     $intervalMonth = (int)($sched['interval_month'] ?? 0);
                     $newUseDate    = $actualDate;
-                    $newChangePlan = null;
-                    if ($intervalMonth > 0) {
-                        $dt = new DateTime($actualDate);
-                        $dt->modify("+{$intervalMonth} months");
-                        $newChangePlan = $dt->format('Y-m-d');
+                    $itemNextBasis = $item['next_basis'] ?? 'actual';
+                    if (!in_array($itemNextBasis, ['schedule', 'actual', 'report'], true)) {
+                        $itemNextBasis = 'actual';
                     }
+                    $newChangePlan = computeNextChangeDate($itemNextBasis, $sched['change_date_plan'] ?? null, $actualDate, $intervalMonth);
                     $newRemainingDay = null;
                     if ($newChangePlan) {
                         $now = new DateTime('today');
@@ -2273,6 +2304,23 @@ HTML;
                                 class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-4 focus:ring-emerald-100 outline-none transition text-sm">
                         </div>
                         <div class="mb-3">
+                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Basis Jadwal Berikutnya <span class="text-red-500">*</span></label>
+                            <div class="space-y-1.5 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                                <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
+                                    <input type="radio" name="next_basis" value="actual" checked class="mt-0.5 accent-[#5f0f40]">
+                                    <span><strong>Sesuai Tanggal Pekerjaan</strong> — jadwal berikutnya = tanggal aktual pekerjaan + interval.</span>
+                                </label>
+                                <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
+                                    <input type="radio" name="next_basis" value="schedule" class="mt-0.5 accent-[#5f0f40]">
+                                    <span><strong>Sesuai Jadwal Awal</strong> — jadwal berikutnya = Change Date Plan semula + interval (tidak bergeser meski pekerjaan/laporan telat).</span>
+                                </label>
+                                <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
+                                    <input type="radio" name="next_basis" value="report" class="mt-0.5 accent-[#5f0f40]">
+                                    <span><strong>Sesuai Tanggal Pengisian Laporan</strong> — jadwal berikutnya = hari ini (saat laporan disubmit) + interval.</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mb-3">
                             <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Keterangan / Note <span class="text-red-500">*</span></label>
                             <textarea name="note" id="report_note" rows="2" required
                                 placeholder="Tuliskan detail pekerjaan maintenance yang dilakukan..."
@@ -2460,26 +2508,44 @@ HTML;
                     });
                 }
 
+                // Menyimpan kondisi (alert/overdue) yang sedang aktif per type, dipakai saat export.
+                const statusModalCondition = {
+                    predictive: 'alert',
+                    preventive: 'alert'
+                };
+
+                const overdueBucketOf = (remDay) => {
+                    const d = -remDay; // overdue → remaining_day negatif/0, ubah jadi angka hari lewat (positif)
+                    if (d <= 0) return '0';
+                    if (d <= 7) return String(d);
+                    return 'over7';
+                };
+
                 function openStatusModal(status) {
                     const cfg = STATUS_CFG[status] || {};
                     const allItems = SCHED_BY_STATUS[status] || [];
                     const isAlert = status === 'alert';
+                    const isOverdue = status === 'overdue';
+                    statusModalCondition.predictive = isOverdue ? 'overdue' : 'alert';
                     dayFilterState.predictive = 'all';
 
                     document.getElementById('statusModalHeader').style.background = cfg.bg || '#334155';
 
                     const dayFilterWrap = document.getElementById('statusModalDayFilter');
                     const exportBtn = document.getElementById('statusModalExportBtn');
-                    dayFilterWrap.classList.toggle('hidden', !isAlert);
-                    exportBtn.classList.toggle('hidden', !isAlert);
-                    if (isAlert) exportBtn.classList.add('flex');
+                    dayFilterWrap.classList.toggle('hidden', !(isAlert || isOverdue));
+                    exportBtn.classList.toggle('hidden', !(isAlert || isOverdue));
+                    if (isAlert || isOverdue) exportBtn.classList.add('flex');
                     else exportBtn.classList.remove('flex');
 
                     function refresh() {
                         const day = dayFilterState.predictive;
-                        const filtered = (isAlert && day !== 'all') ?
-                            allItems.filter(r => String(parseInt(r.remaining_day)) === String(day)) :
-                            allItems;
+                        let filtered = allItems;
+                        if (isAlert && day !== 'all') {
+                            filtered = allItems.filter(r => String(parseInt(r.remaining_day)) === String(day));
+                        } else if (isOverdue && day !== 'all') {
+                            filtered = allItems.filter(r => overdueBucketOf(parseInt(r.remaining_day)) === String(day));
+                        }
                         document.getElementById('statusModalTitle').textContent = (cfg.label || status) + ' — ' + filtered.length + ' jadwal';
                         document.getElementById('statusModalCount').textContent = filtered.length + ' jadwal ditemukan';
                         renderStatusModalRows('statusModalBody', filtered);
@@ -2487,17 +2553,19 @@ HTML;
                         // Sebelumnya chip hanya digambar sekali di awal, jadi walau data tabel sudah
                         // terfilter benar, tampilan chip tetap "Semua" terus karena tidak pernah digambar ulang.
                         if (isAlert) renderDayChips('statusModalDayChips', allItems, 'predictive', refresh);
+                        else if (isOverdue) renderOverdueDayChips('statusModalDayChips', allItems, 'predictive', refresh);
                     }
 
                     refresh();
                     showModal('statusModal');
                 }
 
-                // Memicu download export Excel sesuai filter hari yang sedang aktif di modal.
+                // Memicu download export Excel sesuai filter hari & kondisi (alert/overdue) yang sedang aktif di modal.
                 // type: 'predictive' | 'preventive'
                 function exportStatusModalExcel(type) {
                     const day = dayFilterState[type] || 'all';
-                    window.location.href = `export_alert_schedule.php?type=${type}&day=${encodeURIComponent(day)}`;
+                    const condition = statusModalCondition[type] || 'alert';
+                    window.location.href = `export_alert_schedule.php?type=${type}&day=${encodeURIComponent(day)}&condition=${encodeURIComponent(condition)}`;
                 }
 
                 function esc(s) {
@@ -2950,6 +3018,7 @@ HTML;
                     const allItems = PREV_BY_STATUS[status] || [];
                     const isAlert = status === 'alert';
                     const isOverdue = status === 'overdue';
+                    statusModalCondition.preventive = isOverdue ? 'overdue' : 'alert';
                     dayFilterState.preventive = 'all';
 
                     document.getElementById('prevStatusModalHeader').style.background = cfg.bg || '#7a1355';
@@ -2957,16 +3026,9 @@ HTML;
                     const dayFilterWrap = document.getElementById('prevStatusModalDayFilter');
                     const exportBtn = document.getElementById('prevStatusModalExportBtn');
                     dayFilterWrap.classList.toggle('hidden', !(isAlert || isOverdue));
-                    exportBtn.classList.toggle('hidden', !isAlert);
-                    if (isAlert) exportBtn.classList.add('flex');
+                    exportBtn.classList.toggle('hidden', !(isAlert || isOverdue));
+                    if (isAlert || isOverdue) exportBtn.classList.add('flex');
                     else exportBtn.classList.remove('flex');
-
-                    const overdueBucketOf = (remDay) => {
-                        const d = -remDay;
-                        if (d <= 0) return '0';
-                        if (d <= 7) return String(d);
-                        return 'over7';
-                    };
 
                     function refresh() {
                         const day = dayFilterState.preventive;
@@ -3059,6 +3121,23 @@ HTML;
                                         class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
                                 </div>
                                 <div>
+                                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Basis Jadwal Berikutnya <span class="text-red-500">*</span></label>
+                                    <div class="space-y-1 bg-white border border-slate-200 rounded-lg p-2.5">
+                                        <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
+                                            <input type="radio" name="pmr_basis_group_${idx}" id="pmr_basis_actual_${idx}" value="actual" checked class="mt-0.5 accent-[#7a1355]">
+                                            <span><strong>Sesuai Tanggal Pekerjaan</strong> — jadwal berikutnya = tanggal aktual pekerjaan + interval.</span>
+                                        </label>
+                                        <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
+                                            <input type="radio" name="pmr_basis_group_${idx}" value="schedule" class="mt-0.5 accent-[#7a1355]">
+                                            <span><strong>Sesuai Jadwal Awal</strong> — dari Change Date Plan semula + interval.</span>
+                                        </label>
+                                        <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
+                                            <input type="radio" name="pmr_basis_group_${idx}" value="report" class="mt-0.5 accent-[#7a1355]">
+                                            <span><strong>Sesuai Tanggal Pengisian Laporan</strong> — dari hari ini + interval.</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div>
                                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Keterangan / Note <span class="text-red-500">*</span></label>
                                     <textarea id="pmr_note_${idx}" rows="2" placeholder="Tuliskan detail pekerjaan preventive maintenance..."
                                         class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm resize-none"></textarea>
@@ -3125,6 +3204,8 @@ HTML;
                         const teknisi = document.getElementById(`pmr_teknisi_${idx}`)?.value?.trim();
                         const note = document.getElementById(`pmr_note_${idx}`)?.value?.trim();
                         const photo = document.getElementById(`pmr_photo_${idx}`)?.files[0];
+                        const basisEl = document.querySelector(`input[name="pmr_basis_group_${idx}"]:checked`);
+                        const basis = basisEl ? basisEl.value : 'actual';
 
                         if (!date || !teknisi || !note || !photo) {
                             showErr(`❌ Lengkapi semua field (tanggal, teknisi, note, foto) untuk: ${jobs[idx].maintenance_point}`);
@@ -3136,6 +3217,7 @@ HTML;
                         fd.append(`items[${selectedCount}][teknisi]`, teknisi);
                         fd.append(`items[${selectedCount}][note]`, note);
                         fd.append(`items[${selectedCount}][photo]`, photo);
+                        fd.append(`items[${selectedCount}][next_basis]`, basis);
                         selectedCount++;
                     }
 
@@ -3768,4 +3850,4 @@ HTML;
 
 </body>
 
-</html> 
+</html>
