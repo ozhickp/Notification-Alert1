@@ -1977,6 +1977,10 @@ HTML;
                                                     'maintenance_point' => $r['maintenance_point'],
                                                     'change_date_plan'  => $r['change_date_plan'],
                                                     'remaining_day'     => $rDays,
+                                                    'department'        => $r['department'] ?? '',
+                                                    'line'              => $r['line'] ?? '',
+                                                    'operation_process' => $r['operation_process'] ?? '',
+                                                    'machine_name'      => $r['machine_name'] ?? '',
                                                 ];
                                             }
                                         }
@@ -3093,68 +3097,110 @@ HTML;
                 const prevDueJobsData = <?= json_encode($prevMachineDueJobs, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
 
                 // Report modal preventive — per mesin, checklist multi-select
+                // Job dikelompokkan berdasarkan Department → Line → Operation Process
+                // agar user mudah mencari & urut.
                 function showPrevMachineReportModal(machineName) {
                     document.getElementById('prevMachineReportModalMachine').textContent = machineName;
                     const jobs = prevDueJobsData[machineName] || [];
                     const listEl = document.getElementById('prevMachineReportJobsList');
                     const today = new Date().toISOString().split('T')[0];
 
-                    listEl.innerHTML = jobs.map((job, idx) => `
+                    const jobCardHtml = (job, idx) => `
                         <div class="border border-slate-200 rounded-xl overflow-hidden" data-job-card="${idx}">
                             <label class="flex items-start gap-3 p-3 cursor-pointer hover:bg-slate-50 transition">
                                 <input type="checkbox" class="mt-1 w-4 h-4 accent-[#7a1355]" id="pmr_check_${idx}"
                                     onchange="togglePrevJobDetail(${idx})">
                                 <div class="flex-1 min-w-0">
-                                    <p class="font-bold text-sm text-slate-800">${job.maintenance_point}</p>
-                                    <p class="text-xs text-slate-400 mt-0.5">Change Date Plan: ${job.change_date_plan ?? '-'} • Sisa ${job.remaining_day} hari</p>
+                                    <p class="font-bold text-sm text-slate-800">${esc(job.maintenance_point)}</p>
+                                    <p class="text-xs text-slate-400 mt-0.5">Change Date Plan: ${esc(job.change_date_plan ?? '-')} • Sisa ${job.remaining_day} hari</p>
                                 </div>
                             </label>
                             <div id="pmr_detail_${idx}" class="hidden border-t border-slate-100 bg-slate-50 p-4 space-y-3">
                                 <div>
                                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tanggal Aktual Pekerjaan <span class="text-red-500">*</span></label>
-                                    <input type="date" id="pmr_date_${idx}" value="${today}"
+                                    <input type="date" id="pmr_date_${idx}" value="${today}" oninput="updatePrevMachineReportCount()"
                                         class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
                                 </div>
                                 <div>
                                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Teknisi <span class="text-red-500">*</span></label>
-                                    <input type="text" id="pmr_teknisi_${idx}" placeholder="Nama teknisi yang mengerjakan..."
+                                    <input type="text" id="pmr_teknisi_${idx}" placeholder="Nama teknisi yang mengerjakan..." oninput="updatePrevMachineReportCount()"
                                         class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
                                 </div>
                                 <div>
                                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Basis Jadwal Berikutnya <span class="text-red-500">*</span></label>
                                     <div class="space-y-1 bg-white border border-slate-200 rounded-lg p-2.5">
                                         <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
-                                            <input type="radio" name="pmr_basis_group_${idx}" id="pmr_basis_actual_${idx}" value="actual" checked class="mt-0.5 accent-[#7a1355]">
+                                            <input type="radio" name="pmr_basis_group_${idx}" id="pmr_basis_actual_${idx}" value="actual" checked class="mt-0.5 accent-[#7a1355]" onchange="updatePrevMachineReportCount()">
                                             <span><strong>Sesuai Tanggal Pekerjaan</strong> — jadwal berikutnya = tanggal aktual pekerjaan + interval.</span>
                                         </label>
                                         <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
-                                            <input type="radio" name="pmr_basis_group_${idx}" value="schedule" class="mt-0.5 accent-[#7a1355]">
+                                            <input type="radio" name="pmr_basis_group_${idx}" value="schedule" class="mt-0.5 accent-[#7a1355]" onchange="updatePrevMachineReportCount()">
                                             <span><strong>Sesuai Jadwal Awal</strong> — dari Change Date Plan semula + interval.</span>
                                         </label>
                                         <label class="flex items-start gap-2 text-xs text-slate-600 cursor-pointer">
-                                            <input type="radio" name="pmr_basis_group_${idx}" value="report" class="mt-0.5 accent-[#7a1355]">
+                                            <input type="radio" name="pmr_basis_group_${idx}" value="report" class="mt-0.5 accent-[#7a1355]" onchange="updatePrevMachineReportCount()">
                                             <span><strong>Sesuai Tanggal Pengisian Laporan</strong> — dari hari ini + interval.</span>
                                         </label>
                                     </div>
                                 </div>
                                 <div>
                                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Keterangan / Note <span class="text-red-500">*</span></label>
-                                    <textarea id="pmr_note_${idx}" rows="2" placeholder="Tuliskan detail pekerjaan preventive maintenance..."
+                                    <textarea id="pmr_note_${idx}" rows="2" placeholder="Tuliskan detail pekerjaan preventive maintenance..." oninput="updatePrevMachineReportCount()"
                                         class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm resize-none"></textarea>
-                                </div>
-                                <div>
-                                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Foto Dokumentasi <span class="text-red-500">*</span></label>
-                                    <div class="border-2 border-dashed border-slate-200 rounded-lg p-2 text-center cursor-pointer hover:border-[#c97aad] hover:bg-white transition"
-                                        onclick="document.getElementById('pmr_photo_${idx}').click()">
-                                        <p class="text-xs text-slate-400 font-medium">Klik untuk pilih foto (.jpg .jpeg .png, maks 5MB)</p>
-                                        <p class="text-xs text-[#8b1a6b] font-bold mt-1 hidden" id="pmr_photo_label_${idx}"></p>
-                                    </div>
-                                    <input type="file" id="pmr_photo_${idx}" accept=".jpg,.jpeg,.png,.webp" class="hidden"
-                                        onchange="document.getElementById('pmr_photo_label_${idx}').textContent=this.files[0]?.name||''; document.getElementById('pmr_photo_label_${idx}').classList.toggle('hidden',!this.files[0])">
                                 </div>
                             </div>
                         </div>
-                    `).join('') || '<p class="text-center text-slate-400 text-sm py-6">Tidak ada job yang bisa direport saat ini.</p>';
+                    `;
+
+                    if (jobs.length === 0) {
+                        listEl.innerHTML = '<p class="text-center text-slate-400 text-sm py-6">Tidak ada job yang bisa direport saat ini.</p>';
+                    } else {
+                        // ── Kelompokkan index job berdasarkan Department → Line → Operation Process ──
+                        const groups = {};
+                        jobs.forEach((job, idx) => {
+                            const dept = job.department || '-';
+                            const line = job.line || '-';
+                            const op = job.operation_process || '-';
+                            (groups[dept] ??= {});
+                            (groups[dept][line] ??= {});
+                            (groups[dept][line][op] ??= []).push(idx);
+                        });
+
+                        let html = '';
+                        Object.keys(groups).sort().forEach(dept => {
+                            html += `<div class="mb-4">
+                                <div class="flex items-center gap-1.5 mb-2">
+                                    <i class="fas fa-building text-[#7a1355] text-xs"></i>
+                                    <span class="text-xs font-black text-[#7a1355] uppercase tracking-widest">${esc(dept)}</span>
+                                </div>`;
+                            Object.keys(groups[dept]).sort().forEach(line => {
+                                html += `<div class="ml-3 pl-3 border-l-2 border-[#f2d4e8] mb-3">
+                                    <div class="flex items-center gap-1.5 mb-2">
+                                        <i class="fas fa-industry text-slate-400 text-[11px]"></i>
+                                        <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">${esc(line)}</span>
+                                    </div>`;
+                                Object.keys(groups[dept][line]).sort().forEach(op => {
+                                    const opIdxs = groups[dept][line][op];
+                                    html += `<details class="ml-1 mb-2 group border border-slate-200 rounded-xl overflow-hidden">
+                                        <summary class="flex items-center gap-2 cursor-pointer select-none list-none px-3 py-2.5 bg-[#f9eef5] hover:bg-[#f2d4e8] transition">
+                                            <i class="fas fa-chevron-right text-[#7a1355] text-[10px] transition-transform group-open:rotate-90"></i>
+                                            <span class="flex-1 min-w-0">
+                                                <span class="block text-sm font-black text-[#7a1355] leading-tight truncate">${esc(op)}</span>
+                                                <span class="block text-xs font-bold text-slate-500 leading-tight truncate"><i class="fas fa-industry mr-1 text-[10px]"></i>${esc(machineName)}</span>
+                                            </span>
+                                            <span class="flex-shrink-0 bg-[#7a1355] text-white text-[10px] font-black px-2 py-1 rounded-full">${opIdxs.length} job</span>
+                                        </summary>
+                                        <div class="space-y-2 p-3 bg-white">
+                                            ${opIdxs.map(idx => jobCardHtml(jobs[idx], idx)).join('')}
+                                        </div>
+                                    </details>`;
+                                });
+                                html += `</div>`;
+                            });
+                            html += `</div>`;
+                        });
+                        listEl.innerHTML = html;
+                    }
 
                     // simpan data job (id, dll) untuk dipakai saat submit
                     listEl.dataset.jobs = JSON.stringify(jobs);
@@ -3174,11 +3220,26 @@ HTML;
                     const listEl = document.getElementById('prevMachineReportJobsList');
                     const jobs = JSON.parse(listEl.dataset.jobs || '[]');
                     let count = 0;
+                    let allFilled = true;
                     jobs.forEach((job, idx) => {
                         const cb = document.getElementById(`pmr_check_${idx}`);
-                        if (cb && cb.checked) count++;
+                        if (cb && cb.checked) {
+                            count++;
+                            const date = document.getElementById(`pmr_date_${idx}`)?.value;
+                            const teknisi = document.getElementById(`pmr_teknisi_${idx}`)?.value?.trim();
+                            const note = document.getElementById(`pmr_note_${idx}`)?.value?.trim();
+                            if (!date || !teknisi || !note) allFilled = false;
+                        }
                     });
                     document.getElementById('prevMachineReportSelectedCount').textContent = count;
+
+                    // Submit hanya bisa diklik apabila minimal 1 job dicentang DAN
+                    // semua kolom pada setiap job yang dicentang sudah terisi lengkap.
+                    const btn = document.getElementById('btnSubmitPrevMachineReport');
+                    const canSubmit = count > 0 && allFilled;
+                    btn.disabled = !canSubmit;
+                    btn.classList.toggle('opacity-50', !canSubmit);
+                    btn.classList.toggle('cursor-not-allowed', !canSubmit);
                 }
 
                 async function submitPrevMachineReport() {
@@ -3203,12 +3264,11 @@ HTML;
                         const date = document.getElementById(`pmr_date_${idx}`)?.value;
                         const teknisi = document.getElementById(`pmr_teknisi_${idx}`)?.value?.trim();
                         const note = document.getElementById(`pmr_note_${idx}`)?.value?.trim();
-                        const photo = document.getElementById(`pmr_photo_${idx}`)?.files[0];
                         const basisEl = document.querySelector(`input[name="pmr_basis_group_${idx}"]:checked`);
                         const basis = basisEl ? basisEl.value : 'actual';
 
-                        if (!date || !teknisi || !note || !photo) {
-                            showErr(`❌ Lengkapi semua field (tanggal, teknisi, note, foto) untuk: ${jobs[idx].maintenance_point}`);
+                        if (!date || !teknisi || !note) {
+                            showErr(`❌ Lengkapi semua field (tanggal, teknisi, note) untuk: ${jobs[idx].maintenance_point}`);
                             return;
                         }
 
@@ -3216,7 +3276,6 @@ HTML;
                         fd.append(`items[${selectedCount}][actual_date]`, date);
                         fd.append(`items[${selectedCount}][teknisi]`, teknisi);
                         fd.append(`items[${selectedCount}][note]`, note);
-                        fd.append(`items[${selectedCount}][photo]`, photo);
                         fd.append(`items[${selectedCount}][next_basis]`, basis);
                         selectedCount++;
                     }
@@ -3464,8 +3523,8 @@ HTML;
                     </form>
                     <div class="px-5 py-4 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0 bg-white">
                         <button type="button" onclick="hideModal('prevMachineReportModal')" class="px-6 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
-                        <button type="button" id="btnSubmitPrevMachineReport" onclick="submitPrevMachineReport()"
-                            class="btn-submit-prev text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm" style="background:#7a1355;">
+                        <button type="button" id="btnSubmitPrevMachineReport" onclick="submitPrevMachineReport()" disabled
+                            class="btn-submit-prev text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm opacity-50 cursor-not-allowed" style="background:#7a1355;">
                             <i class="fas fa-paper-plane mr-1"></i> Submit Report (<span id="prevMachineReportSelectedCount">0</span>)
                         </button>
                     </div>
