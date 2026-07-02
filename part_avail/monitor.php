@@ -584,10 +584,25 @@ function partOrderBadge(string $v): string
             max-height: 520px;
         }
 
-        /* Schedule tables: fill remaining viewport height */
+        /* Schedule tables: pagination already caps rows shown per page
+           (jumlahnya dihitung otomatis agar tab+tabel+footer pas 1 layar
+           penuh — lihat computePageRows()), sehingga tidak perlu scroll
+           vertikal internal — biarkan menyesuaikan tinggi halaman aktif. */
         #schedPredTab .table-scroll,
         #schedPrevTab .table-scroll {
-            max-height: calc(100vh - 280px);
+            max-height: none;
+            overflow-y: visible;
+        }
+
+        /* ── Transisi perpindahan halaman tabel (pagination) ──
+           tbody di-wipe (clip-path) setiap kali isi baris berganti (ganti
+           halaman, ganti tab, filter, maupun refresh AJAX). Properti
+           transition sebenarnya di-set inline lewat JS (renderSchedPage)
+           supaya bisa "instan tutup → animasi buka", tapi dideklarasikan
+           di sini juga sebagai fallback/dokumentasi. */
+        #schedPredTab table tbody,
+        #schedPrevTab table tbody {
+            transition: clip-path .35s ease;
         }
 
         /* History tables: fill remaining viewport height (same logic as schedule) */
@@ -596,13 +611,43 @@ function partOrderBadge(string $v): string
             max-height: calc(100vh - 280px);
         }
 
+        /* ── Today's Schedule cards: capped at ~1 screen, independent scroll per card ── */
+        .today-scroll {
+            overflow-y: auto;
+            overflow-x: hidden;
+            max-height: calc(100vh - 350px);
+        }
+
+        .today-scroll::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .today-scroll::-webkit-scrollbar-thumb {
+            background: rgba(15, 76, 92, .25);
+            border-radius: 10px;
+        }
+
+        /* 2 items per row inside each Today's Schedule card */
+        .today-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: .375rem;
+        }
+
+        /* Predictive/Preventive columns must size independently — the empty one
+           should NOT stretch to match the taller one */
+        #todayScheduleSection .grid {
+            align-items: start;
+        }
+
         /* Predictive table: allow horizontal scroll if needed */
         #schedPredTab .table-scroll {
             overflow-x: auto;
         }
 
         /* Compact badge for tight columns */
-        #schedPredTab .badge {
+        #schedPredTab .badge,
+        #schedPrevTab .badge {
             padding: .15rem .45rem;
             font-size: .58rem;
             letter-spacing: .03em;
@@ -719,7 +764,7 @@ function partOrderBadge(string $v): string
                         </div>
 
                         <!-- Two-column layout: Predictive (left) | Preventive (right) -->
-                        <div class="grid gap-4" style="grid-template-columns:1fr 1fr;">
+                        <div class="grid gap-4" style="grid-template-columns:1fr 1fr;align-items:start;">
 
                             <!-- ── Predictive Column ── -->
                             <div class="rounded-2xl overflow-hidden" style="background:linear-gradient(135deg,#e8f4f8,#d4eaf0);border:1px solid #a8d3dc;">
@@ -728,16 +773,16 @@ function partOrderBadge(string $v): string
                                     <span class="text-[#0a2e38] font-bold text-sm">Predictive</span>
                                     <span id="todayPredCount" class="bg-[#0f4c5c] text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= $todayCount ?></span>
                                 </div>
-                                <div class="px-3 pb-3" id="todayPredList">
+                                <div class="px-3 pb-3 today-scroll" id="todayPredList">
                                     <?php if ($todayCount > 0): ?>
-                                        <div class="flex flex-col gap-1.5">
+                                        <div class="today-grid">
                                             <?php foreach ($todaySchedArr as $i => $td): ?>
                                                 <div class="bg-white/80 rounded-xl px-3 py-2 flex items-start gap-2 border border-[#a8d3dc]100 shadow-sm">
                                                     <div class="w-5 h-5 rounded-md bg-[#d4eaf0] flex items-center justify-center flex-shrink-0 mt-0.5">
                                                         <span class="text-[#0f4c5c] font-black" style="font-size:.55rem;"><?= $i + 1 ?></span>
                                                     </div>
                                                     <div class="min-w-0 flex-1">
-                                                        <p class="font-black text-[#072028] truncate" style="font-size:.72rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
+                                                        <p class="font-black text-[#072028] truncate" style="font-size:.72rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?><?= !empty($td['operation_process']) ? ' · ' . htmlspecialchars($td['operation_process']) : '' ?></p>
                                                         <p class="text-[#0f4c5c] mt-0.5" style="font-size:.63rem;line-height:1.4;"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
                                                         <?php if (!empty($td['department'])): ?>
                                                             <p class="text-[#3d8fa3] mt-0.5 truncate" style="font-size:.58rem;"><?= htmlspecialchars($td['department']) ?><?= !empty($td['line']) ? ' · ' . $td['line'] : '' ?></p>
@@ -763,16 +808,16 @@ function partOrderBadge(string $v): string
                                     <span class="text-indigo-800 font-bold text-sm">Preventive</span>
                                     <span id="todayPrevCount" class="bg-[#0d3d4a] text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= $prevTodayCount ?></span>
                                 </div>
-                                <div class="px-3 pb-3" id="todayPrevList">
+                                <div class="px-3 pb-3 today-scroll" id="todayPrevList">
                                     <?php if ($prevTodayCount > 0): ?>
-                                        <div class="flex flex-col gap-1.5">
+                                        <div class="today-grid">
                                             <?php foreach ($prevTodayArr as $i => $td): ?>
                                                 <div class="bg-white/80 rounded-xl px-3 py-2 flex items-start gap-2 border border-indigo-100 shadow-sm">
                                                     <div class="w-5 h-5 rounded-md bg-[#d4eaf0] flex items-center justify-center flex-shrink-0 mt-0.5">
                                                         <span class="text-[#0f4c5c] font-black" style="font-size:.55rem;"><?= $i + 1 ?></span>
                                                     </div>
                                                     <div class="min-w-0 flex-1">
-                                                        <p class="font-black text-indigo-900 truncate" style="font-size:.72rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?></p>
+                                                        <p class="font-black text-indigo-900 truncate" style="font-size:.72rem;" title="<?= htmlspecialchars($td['machine_name'] ?? '-') ?>"><?= htmlspecialchars($td['machine_name'] ?? '-') ?><?= !empty($td['operation_process']) ? ' · ' . htmlspecialchars($td['operation_process']) : '' ?></p>
                                                         <p class="text-[#0f4c5c] mt-0.5" style="font-size:.63rem;line-height:1.4;"><?= htmlspecialchars($td['maintenance_point'] ?? '-') ?></p>
                                                         <?php if (!empty($td['department'])): ?>
                                                             <p class="text-[#3d8fa3] mt-0.5 truncate" style="font-size:.58rem;"><?= htmlspecialchars($td['department']) ?><?= !empty($td['line']) ? ' · ' . $td['line'] : '' ?></p>
@@ -796,7 +841,7 @@ function partOrderBadge(string $v): string
 
 
                     <!-- Sub-tab (Predictive / Preventive) + Clock -->
-                    <div class="mb-5 flex items-center gap-3">
+                    <div id="schedSubtabBar" class="mb-3 flex items-center gap-3">
                         <div class="relative bg-slate-100 rounded-2xl p-1.5 flex gap-1 shadow-inner" style="max-width:520px;flex:1;">
                             <div id="schedTabIndicator" class="subtab-indicator"
                                 style="background:<?= $activeTab === 'preventive' ? 'linear-gradient(135deg,#0a2e38,#1a6b80)' : 'linear-gradient(135deg,#0f4c5c,#0d3d4a)' ?>;width:calc(50% - 4px);transform:<?= $activeTab === 'preventive' ? 'translateX(calc(100% + 4px))' : 'translateX(0)' ?>;"></div>
@@ -817,7 +862,7 @@ function partOrderBadge(string $v): string
                     <?php $todaySchedArrVal = array_values($todaySchedArr); ?>
                     <div id="schedPredTab" class="<?= $activeTab === 'preventive' ? 'hidden' : '' ?>">
                         <!-- ── Status Checkbox Filter — Predictive ── -->
-                        <div class="mb-1.5 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-1" style="font-size:.65rem;">
+                        <div id="predFilterBar" class="mb-1 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-0.5" style="font-size:.65rem;">
                             <span class="font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Filter:</span>
                             <label class="flex items-center gap-1 cursor-pointer select-none">
                                 <input type="checkbox" id="predCbOverdue" checked onchange="applyPredFilter()" class="w-3 h-3 accent-red-500">
@@ -858,16 +903,16 @@ function partOrderBadge(string $v): string
                                     </colgroup>
                                     <thead style="background:linear-gradient(135deg, #0a2e38, #0f4c5c);position:sticky;top:0;z-index:10;">
                                         <tr>
-                                            <th class="tbl-th px-2 py-2" style="font-size:.6rem;">No</th>
-                                            <th class="tbl-th px-2 py-2" style="font-size:.6rem;">Machine</th>
-                                            <th class="tbl-th px-2 py-2" style="font-size:.6rem;">Maint. Point</th>
-                                            <th class="tbl-th px-2 py-2 text-center" style="font-size:.6rem;">Last Change</th>
-                                            <th class="tbl-th px-2 py-2 text-center" style="font-size:.6rem;">Intv.</th>
-                                            <th class="tbl-th px-2 py-2 text-center" style="font-size:.6rem;">Plan Date</th>
-                                            <th class="tbl-th px-2 py-2 text-center" style="font-size:.6rem;">Rem. (d)</th>
-                                            <th class="tbl-th px-2 py-2 text-center" style="font-size:.6rem;">Part Order</th>
-                                            <th class="tbl-th px-2 py-2 text-center" style="font-size:.6rem;">Part Avail.</th>
-                                            <th class="tbl-th px-2 py-2 text-center" style="font-size:.6rem;">Status</th>
+                                            <th class="tbl-th px-2 py-1.5" style="font-size:.6rem;">No</th>
+                                            <th class="tbl-th px-2 py-1.5" style="font-size:.6rem;">Machine</th>
+                                            <th class="tbl-th px-2 py-1.5" style="font-size:.6rem;">Maint. Point</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Last Change</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Intv.</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Plan Date</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Rem. (d)</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Part Order</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Part Avail.</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -891,8 +936,8 @@ function partOrderBadge(string $v): string
                                                 else $rowStatus = 'secure';
                                             ?>
                                                 <tr class="pred-sched-row" data-status="<?= $rowStatus ?>">
-                                                    <td class="tbl-td text-slate-400 font-mono px-2 py-2" style="font-size:.68rem;"><?= $i + 1 ?></td>
-                                                    <td class="tbl-td px-2 py-2" style="overflow:hidden;">
+                                                    <td class="tbl-td text-slate-400 font-mono px-2 py-1.5" style="font-size:.68rem;"><?= $i + 1 ?></td>
+                                                    <td class="tbl-td px-2 py-1.5" style="overflow:hidden;">
                                                         <div class="font-bold text-slate-800 leading-tight" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="<?= htmlspecialchars($row['machine_name'] ?? '-') ?>"><?= htmlspecialchars($row['machine_name'] ?? '-') ?></div>
                                                         <?php if (!empty($row['process_machine'])): ?>
                                                             <div class="text-slate-500 mt-0.5" style="font-size:.65rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><?= htmlspecialchars($row['process_machine']) ?></div>
@@ -901,31 +946,40 @@ function partOrderBadge(string $v): string
                                                             <?= htmlspecialchars($row['department'] ?? '') ?><?= !empty($row['line']) ? ' · ' . htmlspecialchars($row['line']) : '' ?><?= !empty($row['operation_process']) ? ' · OP ' . htmlspecialchars($row['operation_process']) : '' ?>
                                                         </div>
                                                     </td>
-                                                    <td class="tbl-td px-2 py-2">
+                                                    <td class="tbl-td px-2 py-1.5">
                                                         <span style="font-size:.72rem;color:#334155;display:block;word-break:break-word;white-space:normal;line-height:1.4;" title="<?= htmlspecialchars($row['maintenance_point'] ?? '-') ?>"><?= htmlspecialchars($row['maintenance_point'] ?? '-') ?></span>
                                                         <?php if (!empty($row['name_unit'])): ?>
                                                             <div class="text-slate-400 italic mt-0.5" style="font-size:.62rem;word-break:break-word;white-space:normal;"><?= htmlspecialchars($row['name_unit']) ?></div>
                                                         <?php endif; ?>
                                                     </td>
-                                                    <td class="tbl-td text-center text-slate-500 px-1 py-2" style="font-size:.65rem;"><?= $useDate ?></td>
-                                                    <td class="tbl-td text-center px-1 py-2">
+                                                    <td class="tbl-td text-center text-slate-500 px-1 py-1.5" style="font-size:.65rem;"><?= $useDate ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5">
                                                         <span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded" style="font-size:.65rem;">
                                                             <?= (int)($row['interval_month'] ?? 0) ?>mo
                                                         </span>
                                                     </td>
-                                                    <td class="tbl-td text-center text-slate-600 font-semibold px-1 py-2" style="font-size:.65rem;"><?= $planDate ?></td>
-                                                    <td class="tbl-td text-center px-1 py-2 <?= $daysCls ?>" style="font-size:.75rem;"><?= $days ?></td>
-                                                    <td class="tbl-td text-center px-1 py-2"><?= partOrderBadge($row['part_order'] ?? 'close') ?></td>
-                                                    <td class="tbl-td text-center px-1 py-2"><?= partOrderBadge($row['part_availability'] ?? 'close') ?></td>
-                                                    <td class="tbl-td text-center px-1 py-2"><?= maintenanceStatusBadge($row['maintenance_status'] ?? '') ?></td>
+                                                    <td class="tbl-td text-center text-slate-600 font-semibold px-1 py-1.5" style="font-size:.65rem;"><?= $planDate ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5 <?= $daysCls ?>" style="font-size:.75rem;"><?= $days ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5"><?= partOrderBadge($row['part_order'] ?? 'close') ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5"><?= partOrderBadge($row['part_availability'] ?? 'close') ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5"><?= maintenanceStatusBadge($row['maintenance_status'] ?? '') ?></td>
                                                 </tr>
                                             <?php endforeach; ?>
                                         <?php endif; ?>
                                     </tbody>
                                 </table>
                             </div>
-                            <div class="px-5 py-3 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
+                            <div id="predFooterBar" class="px-5 py-2 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400 gap-3">
                                 <span><?= count($schedules) ?> jadwal predictive</span>
+                                <div class="flex items-center gap-2">
+                                    <button id="predPagePrev" onclick="predGoTo(-1)" class="w-6 h-6 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center" title="Halaman sebelumnya">
+                                        <i class="fas fa-chevron-left" style="font-size:.6rem;"></i>
+                                    </button>
+                                    <span id="predPageLabel" class="font-bold text-slate-500 whitespace-nowrap" style="font-size:.68rem;">Halaman 1 / 1</span>
+                                    <button id="predPageNext" onclick="predGoTo(1)" class="w-6 h-6 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center" title="Halaman berikutnya">
+                                        <i class="fas fa-chevron-right" style="font-size:.6rem;"></i>
+                                    </button>
+                                </div>
                                 <?php date_default_timezone_set('Asia/Jakarta'); ?>
                                 <span>Last updated: <?= date('d M Y H:i') ?></span>
                             </div>
@@ -936,7 +990,7 @@ function partOrderBadge(string $v): string
                     <?php $prevTodayArrVal = array_values($prevTodayArr); ?>
                     <div id="schedPrevTab" class="<?= $activeTab === 'predictive' ? 'hidden' : '' ?>">
                         <!-- ── Status Checkbox Filter — Preventive ── -->
-                        <div class="mb-1.5 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-1" style="font-size:.65rem;">
+                        <div id="prevFilterBar" class="mb-1 flex items-center gap-2 bg-white/80 border border-slate-200 rounded-lg px-2.5 py-0.5" style="font-size:.65rem;">
                             <span class="font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Filter:</span>
                             <label class="flex items-center gap-1 cursor-pointer select-none">
                                 <input type="checkbox" id="prevCbOverdue" checked onchange="applyPrevFilter()" class="w-3 h-3 accent-red-500">
@@ -965,14 +1019,14 @@ function partOrderBadge(string $v): string
                                 <table class="w-full text-left border-collapse" style="min-width:780px;">
                                     <thead style="background:linear-gradient(135deg, #0a2e38, #1a6b80);position:sticky;top:0;z-index:10;">
                                         <tr>
-                                            <th class="tbl-th" style="width:32px;">No</th>
-                                            <th class="tbl-th">Machine Information</th>
-                                            <th class="tbl-th">Maintenance Point</th>
-                                            <th class="tbl-th text-center">Last Change</th>
-                                            <th class="tbl-th text-center">Interval</th>
-                                            <th class="tbl-th text-center">Change Date Plan</th>
-                                            <th class="tbl-th text-center">Remaining (Day(s))</th>
-                                            <th class="tbl-th text-center">Maint. Status</th>
+                                            <th class="tbl-th px-2 py-1.5" style="width:32px;font-size:.6rem;">No</th>
+                                            <th class="tbl-th px-2 py-1.5" style="font-size:.6rem;">Machine Information</th>
+                                            <th class="tbl-th px-2 py-1.5" style="font-size:.6rem;">Maintenance Point</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Last Change</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Interval</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Change Date Plan</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Remaining (Day(s))</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Maint. Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -996,39 +1050,48 @@ function partOrderBadge(string $v): string
                                                 else $pRowStatus = 'secure';
                                             ?>
                                                 <tr class="prev-sched-row" data-status="<?= $pRowStatus ?>">
-                                                    <td class="tbl-td text-slate-400 text-xs font-mono"><?= $i + 1 ?></td>
-                                                    <td class="tbl-td" style="min-width:160px;">
-                                                        <div class="font-bold text-slate-800 text-sm leading-tight"><?= htmlspecialchars($row['machine_name'] ?? '-') ?></div>
+                                                    <td class="tbl-td text-slate-400 font-mono px-2 py-1.5" style="font-size:.68rem;"><?= $i + 1 ?></td>
+                                                    <td class="tbl-td px-2 py-1.5" style="min-width:160px;">
+                                                        <div class="font-bold text-slate-800 leading-tight" style="font-size:.72rem;"><?= htmlspecialchars($row['machine_name'] ?? '-') ?></div>
                                                         <?php if (!empty($row['process_machine'])): ?>
-                                                            <div class="text-xs text-slate-500 mt-0.5"><?= htmlspecialchars($row['process_machine']) ?></div>
+                                                            <div class="text-slate-500 mt-0.5" style="font-size:.65rem;"><?= htmlspecialchars($row['process_machine']) ?></div>
                                                         <?php endif; ?>
-                                                        <div class="text-[11px] text-slate-400 mt-0.5">
+                                                        <div class="text-slate-400 mt-0.5" style="font-size:.62rem;">
                                                             <?= htmlspecialchars($row['department'] ?? '') ?><?= !empty($row['line']) ? ' · ' . htmlspecialchars($row['line']) : '' ?><?= !empty($row['operation_process']) ? ' · OP ' . htmlspecialchars($row['operation_process']) : '' ?>
                                                         </div>
                                                     </td>
-                                                    <td class="tbl-td" style="min-width:160px;">
+                                                    <td class="tbl-td px-2 py-1.5" style="min-width:160px;">
                                                         <span style="font-size:.72rem;color:#334155;display:block;word-break:break-word;white-space:normal;line-height:1.4;"><?= htmlspecialchars($row['maintenance_point'] ?? '-') ?></span>
                                                         <?php if (!empty($row['name_unit'])): ?>
-                                                            <div class="text-xs text-slate-400 italic mt-0.5"><?= htmlspecialchars($row['name_unit']) ?></div>
+                                                            <div class="text-slate-400 italic mt-0.5" style="font-size:.62rem;"><?= htmlspecialchars($row['name_unit']) ?></div>
                                                         <?php endif; ?>
                                                     </td>
-                                                    <td class="tbl-td text-center text-xs text-slate-500 whitespace-nowrap"><?= $useDate ?></td>
-                                                    <td class="tbl-td text-center">
-                                                        <span class="bg-slate-100 text-slate-600 font-bold px-2.5 py-1 rounded-lg text-xs">
+                                                    <td class="tbl-td text-center text-slate-500 px-1 py-1.5 whitespace-nowrap" style="font-size:.65rem;"><?= $useDate ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5">
+                                                        <span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded" style="font-size:.65rem;">
                                                             <?= (int)($row['interval_month'] ?? 0) ?> mo
                                                         </span>
                                                     </td>
-                                                    <td class="tbl-td text-center text-xs whitespace-nowrap font-semibold text-slate-600"><?= $planDate ?></td>
-                                                    <td class="tbl-td text-center <?= $daysCls ?> whitespace-nowrap"><?= $days ?></td>
-                                                    <td class="tbl-td text-center"><?= maintenanceStatusBadge($row['maintenance_status'] ?? '') ?></td>
+                                                    <td class="tbl-td text-center text-slate-600 font-semibold px-1 py-1.5 whitespace-nowrap" style="font-size:.65rem;"><?= $planDate ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5 whitespace-nowrap <?= $daysCls ?>" style="font-size:.75rem;"><?= $days ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5"><?= maintenanceStatusBadge($row['maintenance_status'] ?? '') ?></td>
                                                 </tr>
                                             <?php endforeach; ?>
                                         <?php endif; ?>
                                     </tbody>
                                 </table>
                             </div>
-                            <div class="px-5 py-3 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
+                            <div id="prevFooterBar" class="px-5 py-2 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400 gap-3">
                                 <span><?= count($prevSchedules) ?> jadwal preventive</span>
+                                <div class="flex items-center gap-2">
+                                    <button id="prevPagePrev" onclick="prevGoTo(-1)" class="w-6 h-6 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center" title="Halaman sebelumnya">
+                                        <i class="fas fa-chevron-left" style="font-size:.6rem;"></i>
+                                    </button>
+                                    <span id="prevPageLabel" class="font-bold text-slate-500 whitespace-nowrap" style="font-size:.68rem;">Halaman 1 / 1</span>
+                                    <button id="prevPageNext" onclick="prevGoTo(1)" class="w-6 h-6 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center" title="Halaman berikutnya">
+                                        <i class="fas fa-chevron-right" style="font-size:.6rem;"></i>
+                                    </button>
+                                </div>
                                 <?php date_default_timezone_set('Asia/Jakarta'); ?>
                                 <span>Last updated: <?= date('d M Y H:i') ?></span>
                             </div>
@@ -1371,6 +1434,14 @@ function partOrderBadge(string $v): string
                 (!isPred ? 'bg-white/20 text-white' : 'bg-slate-300/60 text-slate-600');
 
             _schedTab = tab;
+
+            // Tinggi baris & filter bar predictive/preventive sedikit
+            // berbeda, jadi hitung ulang PAGE_ROWS untuk tab yang baru
+            // aktif supaya tabel tetap pas mengisi 1 layar penuh.
+            requestAnimationFrame(() => {
+                computePageRows();
+                renderSchedPage(isPred ? 'pred' : 'prev');
+            });
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1436,12 +1507,6 @@ function partOrderBadge(string $v): string
 
         // Kembalikan elemen scrollable pada view aktif
         function getActiveScrollEl() {
-            if (_activeSection === 'schedule') {
-                const tabEl = _schedTab === 'predictive' ?
-                    document.getElementById('schedPredTab') :
-                    document.getElementById('schedPrevTab');
-                return tabEl ? tabEl.querySelector('.table-scroll') : null;
-            }
             if (_activeSection === 'parts') {
                 return document.querySelector('#sectionParts .table-scroll');
             }
@@ -1546,7 +1611,66 @@ function partOrderBadge(string $v): string
 
         // ══════════════════════════════════════════════════════════════
         //  TODAY SCHEDULE — always visible, no toggle needed
+        //  Each card (predictive & preventive) auto-scrolls independently,
+        //  same bounce logic as the table engine above (down → pause → up →
+        //  pause → down → ...), and pauses together with it whenever the
+        //  cursor moves (shared `scrollPaused` flag).
         // ══════════════════════════════════════════════════════════════
+        function makeTodayScroller(elId) {
+            let dir = 1; // 1 = turun, -1 = naik
+            let raf = null;
+            let pauseT = null;
+
+            function step() {
+                const el = document.getElementById(elId);
+
+                if (scrollPaused || !el || el.scrollHeight <= el.clientHeight + 2) {
+                    raf = requestAnimationFrame(step);
+                    return;
+                }
+
+                const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+                const atTop = el.scrollTop <= 0;
+
+                if (dir === 1 && atBottom) {
+                    dir = -1;
+                    clearTimeout(pauseT);
+                    pauseT = setTimeout(() => {
+                        raf = requestAnimationFrame(step);
+                    }, SCROLL_PAUSE);
+                    return;
+                }
+                if (dir === -1 && atTop) {
+                    clearTimeout(pauseT);
+                    pauseT = setTimeout(() => {
+                        dir = 1;
+                        raf = requestAnimationFrame(step);
+                    }, SCROLL_PAUSE);
+                    return;
+                }
+
+                el.scrollTop += dir * SCROLL_SPEED;
+                raf = requestAnimationFrame(step);
+            }
+
+            return {
+                start() {
+                    raf = requestAnimationFrame(step);
+                },
+                stop() {
+                    cancelAnimationFrame(raf);
+                    clearTimeout(pauseT);
+                }
+            };
+        }
+
+        const todayPredScroller = makeTodayScroller('todayPredList');
+        const todayPrevScroller = makeTodayScroller('todayPrevList');
+
+        window.addEventListener('load', () => {
+            todayPredScroller.start();
+            todayPrevScroller.start();
+        });
 
         // ══════════════════════════════════════════════════════════════
         //  Live Digital Clock
@@ -1583,25 +1707,142 @@ function partOrderBadge(string $v): string
         })();
 
         // ══════════════════════════════════════════════════════════════
-        //  SCHEDULE STATUS CHECKBOX FILTER — Predictive
+        //  SCHEDULE TABLE — client-side pagination + status filter
+        //  (menggantikan scroll manual; mekanisme auto-advance-nya
+        //   mengikuti pola yang sama seperti engine scroll di atas:
+        //   idle → lanjut ke halaman berikutnya, sampai habis → ganti tab
+        //   predictive/preventive, lalu ulang dari halaman 1. Mouse gerak
+        //   → pause, otomatis lanjut lagi setelah idle (`scrollPaused`
+        //   flag yang sama dipakai supaya pause-nya serentak)
         // ══════════════════════════════════════════════════════════════
-        function applyPredFilter() {
+        let PAGE_ROWS = 10; // fallback awal — dihitung ulang otomatis di computePageRows()
+
+        // Hitung berapa baris muat supaya sub-tab + filter + tabel + footer
+        // pas mengisi 1 layar penuh (100vh). Today's Schedule di atasnya
+        // SENGAJA tidak dihitung — anggap sudah discroll ke bawah dan
+        // section tab/tabel ini berdiri sendiri sebagai "layar" tersendiri.
+        // Karena itu perhitungannya pakai offsetHeight tiap elemen "chrome"
+        // (bukan getBoundingClientRect relatif viewport), supaya hasilnya
+        // tidak berubah-ubah tergantung posisi scroll saat ini.
+        function computePageRows() {
+            // Ambil baris dari tab yang sedang TERLIHAT saja — kalau ambil
+            // dari tab yang lagi disembunyikan (display:none), tingginya
+            // akan terbaca 0 dan hasil perhitungan jadi salah.
+            const isPred = _schedTab === 'predictive';
+            const activeSel = isPred ? '.pred-sched-row' : '.prev-sched-row';
+            let row = document.querySelector(activeSel);
+            if (!row) row = document.querySelector('.pred-sched-row, .prev-sched-row');
+            if (!row) return;
+
+            const rowHeight = row.getBoundingClientRect().height;
+            if (!rowHeight || rowHeight < 10) return; // belum ter-render / tersembunyi, biarkan fallback
+
+            const table = row.closest('table');
+            const thead = table ? table.querySelector('thead') : null;
+            const subtabBar = document.getElementById('schedSubtabBar');
+            const filterBar = document.getElementById(isPred ? 'predFilterBar' : 'prevFilterBar');
+            const footerBar = document.getElementById(isPred ? 'predFooterBar' : 'prevFooterBar');
+
+            // Total tinggi elemen "tetap" di sekitar baris data (bukan Today's
+            // Schedule) — sub-tab bar (+ margin-bottom mb-3=12px), filter bar
+            // (+ margin-bottom mb-1=4px), header tabel, footer, dan sedikit
+            // jarak aman (10px) di akhir.
+            const chrome =
+                (subtabBar ? subtabBar.offsetHeight + 12 : 0) +
+                (filterBar ? filterBar.offsetHeight + 4 : 0) +
+                (thead ? thead.offsetHeight : 0) +
+                (footerBar ? footerBar.offsetHeight : 0) +
+                10;
+
+            const available = window.innerHeight - chrome;
+            PAGE_ROWS = Math.max(3, Math.floor(available / rowHeight));
+        }
+        const PAGE_SECONDS = 3; // detik tiap halaman sebelum auto-advance
+
+        let predPage = 1;
+        let prevPage = 1;
+
+        function getEligibleRows(rowSel, cb) {
             const checked = {
-                overdue: document.getElementById('predCbOverdue').checked,
-                alert: document.getElementById('predCbAlert').checked,
-                reminder: document.getElementById('predCbReminder').checked,
-                secure: document.getElementById('predCbSecure').checked,
+                overdue: document.getElementById(cb.overdue).checked,
+                alert: document.getElementById(cb.alert).checked,
+                reminder: document.getElementById(cb.reminder).checked,
+                secure: document.getElementById(cb.secure).checked,
             };
-            let shown = 0,
-                total = 0;
-            document.querySelectorAll('.pred-sched-row').forEach(tr => {
-                total++;
-                const vis = checked[tr.dataset.status] !== false && checked[tr.dataset.status];
-                tr.style.display = vis ? '' : 'none';
-                if (vis) shown++;
+            return Array.from(document.querySelectorAll(rowSel)).filter(tr => checked[tr.dataset.status]);
+        }
+
+        // Render halaman aktif untuk 'pred' atau 'prev'. Mengembalikan { page, totalPages }
+        function renderSchedPage(kind) {
+            const isPred = kind === 'pred';
+            const rowSel = isPred ? '.pred-sched-row' : '.prev-sched-row';
+            const cb = isPred ? {
+                overdue: 'predCbOverdue',
+                alert: 'predCbAlert',
+                reminder: 'predCbReminder',
+                secure: 'predCbSecure'
+            } : {
+                overdue: 'prevCbOverdue',
+                alert: 'prevCbAlert',
+                reminder: 'prevCbReminder',
+                secure: 'prevCbSecure'
+            };
+
+            const allRows = document.querySelectorAll(rowSel);
+            const eligible = getEligibleRows(rowSel, cb);
+            const totalPages = Math.max(1, Math.ceil(eligible.length / PAGE_ROWS));
+
+            let page = isPred ? predPage : prevPage;
+            if (page > totalPages) page = totalPages;
+            if (page < 1) page = 1;
+            if (isPred) predPage = page;
+            else prevPage = page;
+
+            const start = (page - 1) * PAGE_ROWS;
+            const visibleSet = new Set(eligible.slice(start, start + PAGE_ROWS));
+
+            // ── Transisi wipe saat baris berganti ──
+            // tbody di-clip instan (tanpa transisi) sebelum baris ditukar,
+            // lalu di-wipe dari kiri ke kanan di frame berikutnya. Hasilnya:
+            // efek "menyapu" tiap kali pindah halaman/tab/filter.
+            const tbody = (allRows[0] || document.querySelector(rowSel))?.closest('tbody')
+                || document.querySelector(isPred ? '#schedPredTab table tbody' : '#schedPrevTab table tbody');
+            if (tbody) {
+                tbody.style.transition = 'none';
+                tbody.style.clipPath = 'inset(0 100% 0 0)'; // tertutup penuh dari kanan
+            }
+
+            allRows.forEach(tr => {
+                tr.style.display = visibleSet.has(tr) ? '' : 'none';
             });
-            const cnt = document.getElementById('predFilterCount');
-            if (cnt) cnt.textContent = shown + ' / ' + total + ' jadwal';
+
+            if (tbody) {
+                requestAnimationFrame(() => {
+                    tbody.style.transition = 'clip-path .35s ease';
+                    tbody.style.clipPath = 'inset(0 0 0 0)'; // sapuan terbuka penuh
+                });
+            }
+
+            const cnt = document.getElementById(isPred ? 'predFilterCount' : 'prevFilterCount');
+            if (cnt) cnt.textContent = eligible.length + ' / ' + allRows.length + ' jadwal';
+
+            const label = document.getElementById(isPred ? 'predPageLabel' : 'prevPageLabel');
+            if (label) label.textContent = 'Halaman ' + page + ' / ' + totalPages;
+
+            const prevBtn = document.getElementById(isPred ? 'predPagePrev' : 'prevPagePrev');
+            const nextBtn = document.getElementById(isPred ? 'predPageNext' : 'prevPageNext');
+            if (prevBtn) prevBtn.disabled = page <= 1;
+            if (nextBtn) nextBtn.disabled = page >= totalPages;
+
+            return {
+                page,
+                totalPages
+            };
+        }
+
+        function applyPredFilter() {
+            predPage = 1;
+            renderSchedPage('pred');
         }
 
         function predCheckAll(val) {
@@ -1611,26 +1852,9 @@ function partOrderBadge(string $v): string
             applyPredFilter();
         }
 
-        // ══════════════════════════════════════════════════════════════
-        //  SCHEDULE STATUS CHECKBOX FILTER — Preventive
-        // ══════════════════════════════════════════════════════════════
         function applyPrevFilter() {
-            const checked = {
-                overdue: document.getElementById('prevCbOverdue').checked,
-                alert: document.getElementById('prevCbAlert').checked,
-                reminder: document.getElementById('prevCbReminder').checked,
-                secure: document.getElementById('prevCbSecure').checked,
-            };
-            let shown = 0,
-                total = 0;
-            document.querySelectorAll('.prev-sched-row').forEach(tr => {
-                total++;
-                const vis = checked[tr.dataset.status] !== false && checked[tr.dataset.status];
-                tr.style.display = vis ? '' : 'none';
-                if (vis) shown++;
-            });
-            const cnt = document.getElementById('prevFilterCount');
-            if (cnt) cnt.textContent = shown + ' / ' + total + ' jadwal';
+            prevPage = 1;
+            renderSchedPage('prev');
         }
 
         function prevCheckAll(val) {
@@ -1639,6 +1863,51 @@ function partOrderBadge(string $v): string
             });
             applyPrevFilter();
         }
+
+        // Navigasi manual (tombol Prev/Next). Reset jam auto-advance supaya
+        // halaman yang baru dibuka sempat kebaca dulu sebelum lanjut sendiri.
+        function predGoTo(delta) {
+            predPage += delta;
+            renderSchedPage('pred');
+            schedTickLeft = PAGE_SECONDS;
+        }
+
+        function prevGoTo(delta) {
+            prevPage += delta;
+            renderSchedPage('prev');
+            schedTickLeft = PAGE_SECONDS;
+        }
+
+        // ── Auto-advance engine (jalan tiap 1 detik, hanya aktif saat
+        //    section Schedule sedang ditampilkan) ──────────────────────
+        let schedTickLeft = PAGE_SECONDS;
+
+        setInterval(() => {
+            if (_activeSection !== 'schedule' || scrollPaused) return;
+
+            schedTickLeft--;
+            if (schedTickLeft > 0) return;
+            schedTickLeft = PAGE_SECONDS;
+
+            const kind = _schedTab === 'predictive' ? 'pred' : 'prev';
+            const {
+                page,
+                totalPages
+            } = renderSchedPage(kind);
+
+            if (page < totalPages) {
+                // Masih ada halaman berikutnya di tab ini
+                if (kind === 'pred') predPage++;
+                else prevPage++;
+                renderSchedPage(kind);
+            } else {
+                // Sudah halaman terakhir → ganti tab, mulai dari halaman 1 lagi
+                if (kind === 'pred') prevPage = 1;
+                else predPage = 1;
+                switchSchedTab(kind === 'pred' ? 'preventive' : 'predictive');
+                renderSchedPage(kind === 'pred' ? 'prev' : 'pred');
+            }
+        }, 1000);
 
         // ══════════════════════════════════════════════════════════════
         //  HISTORY MONTH FILTER
@@ -1685,9 +1954,21 @@ function partOrderBadge(string $v): string
 
         // Init filter counts on load
         document.addEventListener('DOMContentLoaded', function() {
+            computePageRows();
             applyPredFilter();
             applyPrevFilter();
             applyHistMonthFilter();
+        });
+
+        // Hitung ulang baris/halaman saat ukuran layar berubah (debounced)
+        let resizeRowsTimer = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeRowsTimer);
+            resizeRowsTimer = setTimeout(() => {
+                computePageRows();
+                renderSchedPage('pred');
+                renderSchedPage('prev');
+            }, 300);
         });
     </script>
 
@@ -1746,7 +2027,7 @@ function partOrderBadge(string $v): string
                     <span class="text-${color}-600 font-black" style="font-size:.55rem;">${idx + 1}</span>
                 </div>
                 <div class="min-w-0 flex-1">
-                    <p class="font-black text-${color}-900 truncate" style="font-size:.72rem;">${item.machine}</p>
+                    <p class="font-black text-${color}-900 truncate" style="font-size:.72rem;">${item.machine}${item.op ? ' · ' + item.op : ''}</p>
                     <p class="text-${color}-600 mt-0.5" style="font-size:.63rem;line-height:1.4;">${item.point}</p>
                     ${sub ? `<p class="text-${color}-400 mt-0.5 truncate" style="font-size:.58rem;">${sub}</p>` : ''}
                 </div>
@@ -1764,7 +2045,7 @@ function partOrderBadge(string $v): string
                 const predCount = document.getElementById('todayPredCount');
                 if (predList) {
                     if (today.predictive.length > 0) {
-                        predList.innerHTML = '<div class="flex flex-col gap-1.5">' +
+                        predList.innerHTML = '<div class="today-grid">' +
                             today.predictive.map((it, i) => makeTodayItem(it, i, 'blue')).join('') +
                             '</div>';
                     } else {
@@ -1778,7 +2059,7 @@ function partOrderBadge(string $v): string
                 const prevCount = document.getElementById('todayPrevCount');
                 if (prevList) {
                     if (today.preventive.length > 0) {
-                        prevList.innerHTML = '<div class="flex flex-col gap-1.5">' +
+                        prevList.innerHTML = '<div class="today-grid">' +
                             today.preventive.map((it, i) => makeTodayItem(it, i, 'indigo')).join('') +
                             '</div>';
                     } else {
@@ -1805,26 +2086,26 @@ function partOrderBadge(string $v): string
                 tbody.innerHTML = rows.map((r, i) => {
                     const cls = remainingCls(r.remaining);
                     return `<tr class="pred-sched-row" data-status="${r.status_cls}">
-                    <td class="tbl-td text-slate-400 font-mono px-2 py-2" style="font-size:.68rem;">${i + 1}</td>
-                    <td class="tbl-td px-2 py-2" style="overflow:hidden;">
+                    <td class="tbl-td text-slate-400 font-mono px-2 py-1.5" style="font-size:.68rem;">${i + 1}</td>
+                    <td class="tbl-td px-2 py-1.5" style="overflow:hidden;">
                         <div class="font-bold text-slate-800 leading-tight" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.machine}">${r.machine}</div>
                         ${r.process ? `<div class="text-slate-500 mt-0.5" style="font-size:.65rem;">${r.process}</div>` : ''}
                         <div class="text-slate-400 mt-0.5" style="font-size:.62rem;">${r.dept}${r.line ? ' · ' + r.line : ''}${r.op ? ' · OP ' + r.op : ''}</div>
                     </td>
-                    <td class="tbl-td px-2 py-2">
+                    <td class="tbl-td px-2 py-1.5">
                         <span style="font-size:.72rem;color:#334155;display:block;word-break:break-word;white-space:normal;line-height:1.4;">${r.point}</span>
                         ${r.unit ? `<div class="text-slate-400 italic mt-0.5" style="font-size:.62rem;">${r.unit}</div>` : ''}
                     </td>
-                    <td class="tbl-td text-center text-slate-500 px-1 py-2" style="font-size:.65rem;">${r.use_date}</td>
-                    <td class="tbl-td text-center px-1 py-2"><span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded" style="font-size:.65rem;">${r.interval}mo</span></td>
-                    <td class="tbl-td text-center text-slate-600 font-semibold px-1 py-2" style="font-size:.65rem;">${r.plan_date}</td>
-                    <td class="tbl-td text-center px-1 py-2 ${cls}" style="font-size:.75rem;">${r.remaining}</td>
-                    <td class="tbl-td text-center px-1 py-2">${badgePO(r.part_order)}</td>
-                    <td class="tbl-td text-center px-1 py-2">${badgePO(r.part_avail)}</td>
-                    <td class="tbl-td text-center px-1 py-2">${badgeMS(r.maint_status)}</td>
+                    <td class="tbl-td text-center text-slate-500 px-1 py-1.5" style="font-size:.65rem;">${r.use_date}</td>
+                    <td class="tbl-td text-center px-1 py-1.5"><span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded" style="font-size:.65rem;">${r.interval}mo</span></td>
+                    <td class="tbl-td text-center text-slate-600 font-semibold px-1 py-1.5" style="font-size:.65rem;">${r.plan_date}</td>
+                    <td class="tbl-td text-center px-1 py-1.5 ${cls}" style="font-size:.75rem;">${r.remaining}</td>
+                    <td class="tbl-td text-center px-1 py-1.5">${badgePO(r.part_order)}</td>
+                    <td class="tbl-td text-center px-1 py-1.5">${badgePO(r.part_avail)}</td>
+                    <td class="tbl-td text-center px-1 py-1.5">${badgeMS(r.maint_status)}</td>
                 </tr>`;
                 }).join('');
-                applyPredFilter();
+                renderSchedPage('pred'); // pertahankan halaman aktif, tidak reset ke 1
                 // Update count badge in tab
                 const badge = document.querySelector('#schedTabPred span');
                 if (badge) badge.textContent = rows.length;
@@ -1846,24 +2127,24 @@ function partOrderBadge(string $v): string
                 tbody.innerHTML = rows.map((r, i) => {
                     const cls = remainingCls(r.remaining);
                     return `<tr class="prev-sched-row" data-status="${r.status_cls}">
-                    <td class="tbl-td text-slate-400 text-xs font-mono">${i + 1}</td>
-                    <td class="tbl-td" style="min-width:160px;">
-                        <div class="font-bold text-slate-800 text-sm leading-tight">${r.machine}</div>
-                        ${r.process ? `<div class="text-xs text-slate-500 mt-0.5">${r.process}</div>` : ''}
-                        <div class="text-[11px] text-slate-400 mt-0.5">${r.dept}${r.line ? ' · ' + r.line : ''}${r.op ? ' · OP ' + r.op : ''}</div>
+                    <td class="tbl-td text-slate-400 font-mono px-2 py-1.5" style="font-size:.68rem;">${i + 1}</td>
+                    <td class="tbl-td px-2 py-1.5" style="min-width:160px;">
+                        <div class="font-bold text-slate-800 leading-tight" style="font-size:.72rem;">${r.machine}</div>
+                        ${r.process ? `<div class="text-slate-500 mt-0.5" style="font-size:.65rem;">${r.process}</div>` : ''}
+                        <div class="text-slate-400 mt-0.5" style="font-size:.62rem;">${r.dept}${r.line ? ' · ' + r.line : ''}${r.op ? ' · OP ' + r.op : ''}</div>
                     </td>
-                    <td class="tbl-td" style="min-width:160px;">
+                    <td class="tbl-td px-2 py-1.5" style="min-width:160px;">
                         <span style="font-size:.72rem;color:#334155;display:block;word-break:break-word;white-space:normal;line-height:1.4;">${r.point}</span>
-                        ${r.unit ? `<div class="text-xs text-slate-400 italic mt-0.5">${r.unit}</div>` : ''}
+                        ${r.unit ? `<div class="text-slate-400 italic mt-0.5" style="font-size:.62rem;">${r.unit}</div>` : ''}
                     </td>
-                    <td class="tbl-td text-center text-xs text-slate-500 whitespace-nowrap">${r.use_date}</td>
-                    <td class="tbl-td text-center"><span class="bg-slate-100 text-slate-600 font-bold px-2.5 py-1 rounded-lg text-xs">${r.interval} mo</span></td>
-                    <td class="tbl-td text-center text-xs whitespace-nowrap font-semibold text-slate-600">${r.plan_date}</td>
-                    <td class="tbl-td text-center ${cls} whitespace-nowrap">${r.remaining}</td>
-                    <td class="tbl-td text-center">${badgeMS(r.maint_status)}</td>
+                    <td class="tbl-td text-center text-slate-500 px-1 py-1.5 whitespace-nowrap" style="font-size:.65rem;">${r.use_date}</td>
+                    <td class="tbl-td text-center px-1 py-1.5"><span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded" style="font-size:.65rem;">${r.interval} mo</span></td>
+                    <td class="tbl-td text-center text-slate-600 font-semibold px-1 py-1.5 whitespace-nowrap" style="font-size:.65rem;">${r.plan_date}</td>
+                    <td class="tbl-td text-center px-1 py-1.5 whitespace-nowrap ${cls}" style="font-size:.75rem;">${r.remaining}</td>
+                    <td class="tbl-td text-center px-1 py-1.5">${badgeMS(r.maint_status)}</td>
                 </tr>`;
                 }).join('');
-                applyPrevFilter();
+                renderSchedPage('prev'); // pertahankan halaman aktif, tidak reset ke 1
                 // Update count badge in tab
                 const badge = document.querySelector('#schedTabPrev span');
                 if (badge) badge.textContent = rows.length;
