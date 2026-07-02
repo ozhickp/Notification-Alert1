@@ -49,6 +49,17 @@ $stmtUser->execute([$_SESSION['user_id']]);
 $currentUser = $stmtUser->fetch(PDO::FETCH_ASSOC);
 $displayName = $currentUser['username'] ?? 'User';
 
+// Ambil daftar teknisi aktif (dipakai untuk dropdown "Teknisi" di modal Report Preventive)
+$technicianList = [];
+try {
+    $stmtTech = $pdo->prepare("SELECT id, name FROM technician WHERE is_active = 1 ORDER BY name ASC");
+    $stmtTech->execute();
+    $technicianList = $stmtTech->fetchAll(PDO::FETCH_ASSOC);
+    $stmtTech->closeCursor();
+} catch (\Exception $e) {
+    error_log('[Dashboard] Gagal ambil data technician: ' . $e->getMessage());
+}
+
 // ── Step 1: Selalu update remaining_day setiap dashboard dibuka ──────────────
 try {
     $s1 = $pdo->prepare("
@@ -3095,6 +3106,7 @@ HTML;
                 }
                 // Data job yang due/bisa direport, dikelompokkan per machine_name (dari PHP)
                 const prevDueJobsData = <?= json_encode($prevMachineDueJobs, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+                const technicianListData = <?= json_encode($technicianList, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
 
                 // Report modal preventive — per mesin, checklist multi-select
                 // Job dikelompokkan berdasarkan Department → Line → Operation Process
@@ -3123,8 +3135,11 @@ HTML;
                                 </div>
                                 <div>
                                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Teknisi <span class="text-red-500">*</span></label>
-                                    <input type="text" id="pmr_teknisi_${idx}" placeholder="Nama teknisi yang mengerjakan..." oninput="updatePrevMachineReportCount()"
-                                        class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm">
+                                    <select id="pmr_teknisi_${idx}" onchange="updatePrevMachineReportCount()"
+                                        class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm bg-white">
+                                        <option value="">-- Pilih teknisi --</option>
+                                        ${technicianListData.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('')}
+                                    </select>
                                 </div>
                                 <div>
                                     <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Basis Jadwal Berikutnya <span class="text-red-500">*</span></label>
