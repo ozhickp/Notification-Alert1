@@ -480,6 +480,15 @@ function partOrderBadge(string $v): string
             background: transparent;
         }
 
+        .cal-day.cal-clickable {
+            cursor: pointer;
+        }
+
+        .cal-day.cal-clickable:not(.cal-has-sched):hover {
+            background: #ede9fe;
+            color: #6d28d9;
+        }
+
         .cal-day.cal-has-sched {
             cursor: pointer;
             color: #fff;
@@ -1273,7 +1282,7 @@ function partOrderBadge(string $v): string
                             <p class="font-bold text-red-700 flex items-center gap-1" style="font-size:.72rem;">
                                 <i class="fas fa-triangle-exclamation" style="font-size:.65rem;"></i> Overdue
                             </p>
-                            <p class="text-3xl font-black" style="color:#b91c1c;"><?= $calCntOverdue ?></p>
+                            <p class="text-3xl font-black" id="calCntOverdue" style="color:#b91c1c;"><?= $calCntOverdue ?></p>
                         </button>
                         <button onclick="filterCalByStatus('alert')" id="calCardAlert"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
@@ -1281,7 +1290,7 @@ function partOrderBadge(string $v): string
                             <p class="font-bold text-yellow-800 flex items-center gap-1" style="font-size:.72rem;">
                                 <i class="fas fa-bell" style="font-size:.65rem;"></i> Alert (≤7 hari)
                             </p>
-                            <p class="text-3xl font-black" style="color:#854d0e;"><?= $calCntAlert ?></p>
+                            <p class="text-3xl font-black" id="calCntAlert" style="color:#854d0e;"><?= $calCntAlert ?></p>
                         </button>
                         <button onclick="filterCalByStatus('reminder')" id="calCardReminder"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
@@ -1289,7 +1298,7 @@ function partOrderBadge(string $v): string
                             <p class="font-bold text-orange-800 flex items-center gap-1" style="font-size:.72rem;">
                                 <i class="fas fa-clock" style="font-size:.65rem;"></i> Reminder
                             </p>
-                            <p class="text-3xl font-black" style="color:#9a3412;"><?= $calCntReminder ?></p>
+                            <p class="text-3xl font-black" id="calCntReminder" style="color:#9a3412;"><?= $calCntReminder ?></p>
                         </button>
                         <button onclick="filterCalByStatus('secure')" id="calCardSecure"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
@@ -1297,7 +1306,7 @@ function partOrderBadge(string $v): string
                             <p class="font-bold text-emerald-800 flex items-center gap-1" style="font-size:.72rem;">
                                 <i class="fas fa-circle-check" style="font-size:.65rem;"></i> Aman
                             </p>
-                            <p class="text-3xl font-black" style="color:#15803d;"><?= $calCntSecure ?></p>
+                            <p class="text-3xl font-black" id="calCntSecure" style="color:#15803d;"><?= $calCntSecure ?></p>
                         </button>
                     </div>
 
@@ -2213,9 +2222,11 @@ function partOrderBadge(string $v): string
         // ══════════════════════════════════════════════════════════════
         //  CALENDAR & CATEGORY — data gabungan predictive + preventive,
         //  dipakai untuk kalender bulanan + daftar terfilter di menu
-        //  "Kalender & Kategori"
+        //  "Kalender & Kategori". Data ini di-refresh ulang setiap polling
+        //  AJAX (lihat blok <script> AJAX AUTO-REFRESH di bagian bawah),
+        //  jadi status & warna tanggal selalu ikut berubah tanpa reload.
         // ══════════════════════════════════════════════════════════════
-        const CAL_ITEMS = <?= json_encode($calendarItems, JSON_UNESCAPED_UNICODE) ?>;
+        let CAL_ITEMS = <?= json_encode($calendarItems, JSON_UNESCAPED_UNICODE) ?>;
         const CAL_STATUS_LABEL = {
             overdue: 'Overdue',
             alert: 'Alert',
@@ -2231,14 +2242,18 @@ function partOrderBadge(string $v): string
         const CAL_MONTHS_ID = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 
         // Peta tanggal ('YYYY-MM-DD') → status paling "genting" pada tanggal itu
-        const CAL_DATE_STATUS = {};
-        CAL_ITEMS.forEach(it => {
-            if (!it.planDate) return;
-            const cur = CAL_DATE_STATUS[it.planDate];
-            if (!cur || CAL_STATUS_PRIORITY[it.status] > CAL_STATUS_PRIORITY[cur]) {
-                CAL_DATE_STATUS[it.planDate] = it.status;
-            }
-        });
+        function calBuildDateStatus(items) {
+            const map = {};
+            items.forEach(it => {
+                if (!it.planDate) return;
+                const cur = map[it.planDate];
+                if (!cur || CAL_STATUS_PRIORITY[it.status] > CAL_STATUS_PRIORITY[cur]) {
+                    map[it.planDate] = it.status;
+                }
+            });
+            return map;
+        }
+        let CAL_DATE_STATUS = calBuildDateStatus(CAL_ITEMS);
 
         const today_ = new Date();
         let calYear = today_.getFullYear();
@@ -2282,14 +2297,15 @@ function partOrderBadge(string $v): string
                 const hasSched = !!status;
                 const isToday = dateKey === todayKey;
                 const isSelected = calFilter && calFilter.kind === 'date' && calFilter.value === dateKey;
-                const cls = ['cal-day'];
+                const cls = ['cal-day', 'cal-clickable'];
                 if (hasSched) {
                     cls.push('cal-has-sched');
                     cls.push('cal-status-' + status);
                 }
                 if (isToday) cls.push('cal-today');
                 if (isSelected) cls.push('cal-selected');
-                html += `<div class="${cls.join(' ')}" ${hasSched ? `onclick="filterCalByDate('${dateKey}')" title="${CAL_STATUS_LABEL[status]} — klik untuk lihat daftar"` : ''}>
+                const title = hasSched ? (CAL_STATUS_LABEL[status] + ' — klik untuk lihat daftar') : 'Tidak ada pekerjaan — klik untuk lihat detail';
+                html += `<div class="${cls.join(' ')}" onclick="filterCalByDate('${dateKey}')" title="${title}">
                     <span>${d}</span>
                     ${hasSched ? '<span class="cal-day-dot"></span>' : ''}
                 </div>`;
@@ -2365,11 +2381,11 @@ function partOrderBadge(string $v): string
             return groups;
         }
 
-        function renderGroupedCalList(items) {
+        function renderGroupedCalList(items, emptyMessage) {
             if (items.length === 0) {
                 return `<div class="text-center py-12 text-slate-400">
                     <i class="fas fa-calendar-xmark text-4xl block mb-3 text-slate-200"></i>
-                    <p class="font-semibold text-sm">Tidak ada jadwal untuk filter ini.</p>
+                    <p class="font-semibold text-sm">${emptyMessage || 'Tidak ada jadwal untuk filter ini.'}</p>
                 </div>`;
             }
 
@@ -2423,6 +2439,7 @@ function partOrderBadge(string $v): string
             const titleEl = document.getElementById('calListTitle');
             const subEl = document.getElementById('calListSubtitle');
             const resetBtn = document.getElementById('calResetBtn');
+            let emptyMessage = 'Tidak ada jadwal untuk filter ini.';
 
             if (calFilter && calFilter.kind === 'status') {
                 items = CAL_ITEMS.filter(it => it.status === calFilter.value);
@@ -2432,13 +2449,15 @@ function partOrderBadge(string $v): string
             } else if (calFilter && calFilter.kind === 'date') {
                 items = CAL_ITEMS.filter(it => it.planDate === calFilter.value);
                 const [y, m, d] = calFilter.value.split('-');
-                const dispDate = new Date(y, m - 1, d).toLocaleDateString('id-ID', {
+                const dispDateLong = new Date(y, m - 1, d).toLocaleDateString('id-ID', {
                     day: 'numeric',
                     month: 'long',
                     year: 'numeric'
                 });
-                titleEl.textContent = 'Tanggal: ' + dispDate;
+                const dispDateShort = calPad(d) + '-' + calPad(m) + '-' + y;
+                titleEl.textContent = 'Tanggal: ' + dispDateLong;
                 subEl.textContent = items.length + ' jadwal pada tanggal ini — dikelompokkan per Dept › Line › OP › Mesin';
+                emptyMessage = 'Tidak ada pekerjaan di tanggal ' + dispDateShort;
                 resetBtn.classList.remove('hidden');
             } else {
                 items = CAL_ITEMS;
@@ -2452,7 +2471,7 @@ function partOrderBadge(string $v): string
             items = [...items].sort((a, b) => a.remaining - b.remaining);
 
             const listGrid = document.getElementById('calListGrid');
-            listGrid.innerHTML = renderGroupedCalList(items);
+            listGrid.innerHTML = renderGroupedCalList(items, emptyMessage);
 
             const countEl = document.getElementById('calListCount');
             if (countEl) countEl.textContent = items.length + ' / ' + CAL_ITEMS.length + ' jadwal';
@@ -2742,6 +2761,81 @@ function partOrderBadge(string $v): string
                 });
             }
 
+            // ── Rebuild Calendar & Category data (live, no reload needed) ─
+            function buildCalItemsFromAjax(schedules, prevSchedules) {
+                const items = [];
+                (schedules || []).forEach(r => {
+                    items.push({
+                        type: 'predictive',
+                        typeLabel: 'Predictive',
+                        machine: r.machine,
+                        process: r.process,
+                        unit: r.unit,
+                        dept: r.dept,
+                        line: r.line,
+                        op: r.op,
+                        point: r.point,
+                        planDate: r.plan_date_raw || '',
+                        planDateDisp: r.plan_date,
+                        remaining: r.remaining,
+                        status: r.status_cls,
+                        interval: r.interval,
+                    });
+                });
+                (prevSchedules || []).forEach(r => {
+                    items.push({
+                        type: 'preventive',
+                        typeLabel: 'Preventive',
+                        machine: r.machine,
+                        process: r.process,
+                        unit: r.unit,
+                        dept: r.dept,
+                        line: r.line,
+                        op: r.op,
+                        point: r.point,
+                        planDate: r.plan_date_raw || '',
+                        planDateDisp: r.plan_date,
+                        remaining: r.remaining,
+                        status: r.status_cls,
+                        interval: r.interval,
+                    });
+                });
+                return items;
+            }
+
+            function updateCalStatCards(items) {
+                const counts = {
+                    overdue: 0,
+                    alert: 0,
+                    reminder: 0,
+                    secure: 0
+                };
+                items.forEach(it => {
+                    if (counts[it.status] !== undefined) counts[it.status]++;
+                });
+                const setText = (id, val) => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = val;
+                };
+                setText('calCntOverdue', counts.overdue);
+                setText('calCntAlert', counts.alert);
+                setText('calCntReminder', counts.reminder);
+                setText('calCntSecure', counts.secure);
+            }
+
+            function renderCalendarLive(data) {
+                if (!data.schedules || !data.prevSchedules) return;
+                // CAL_ITEMS/CAL_DATE_STATUS dideklarasikan di blok <script>
+                // "CALENDAR & CATEGORY" sebelumnya — di-refresh di sini supaya
+                // status (overdue/alert/reminder/secure) & warna tanggal ikut
+                // berubah otomatis tiap polling, tanpa perlu reload halaman.
+                CAL_ITEMS = buildCalItemsFromAjax(data.schedules, data.prevSchedules);
+                CAL_DATE_STATUS = calBuildDateStatus(CAL_ITEMS);
+                updateCalStatCards(CAL_ITEMS);
+                renderCalGrid();
+                renderCalList();
+            }
+
             // ── Main poll function ─────────────────────────────────────
             async function poll() {
                 setDot('loading');
@@ -2754,6 +2848,7 @@ function partOrderBadge(string $v): string
                     renderPredSchedule(data.schedules);
                     renderPrevSchedule(data.prevSchedules);
                     renderParts(data.parts);
+                    renderCalendarLive(data);
                     if (data.refreshed_at) updateTimestamps(data.refreshed_at);
 
                     setDot('ok');
