@@ -3,7 +3,7 @@ include 'config.php';
 
 // ── Active section & sub-tab ───────────────────────────────────────────────────
 $activeSection = $_GET['section'] ?? 'schedule';
-if (!in_array($activeSection, ['schedule', 'parts'])) $activeSection = 'schedule';
+if (!in_array($activeSection, ['schedule', 'calendar', 'parts'])) $activeSection = 'schedule';
 
 $activeTab = ($_GET['tab'] ?? 'predictive') === 'preventive' ? 'preventive' : 'predictive';
 
@@ -67,6 +67,65 @@ try {
 // Today's preventive
 $prevTodayArr = array_filter($prevSchedules, fn($r) => ($r['change_date_plan'] ?? '') === $todayStr);
 $prevTodayCount = count($prevTodayArr);
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  CALENDAR & CATEGORY DATA — gabungan predictive + preventive
+//  Dipakai oleh menu sidebar baru: "Kalender & Kategori"
+// ══════════════════════════════════════════════════════════════════════════════
+function classifyScheduleStatus(int $days, int $reminder = 30): string
+{
+    if ($days <= 0)         return 'overdue';
+    if ($days <= 7)         return 'alert';
+    if ($days <= $reminder) return 'reminder';
+    return                          'secure';
+}
+
+$calendarItems = [];
+foreach ($schedules as $row) {
+    $days     = (int)($row['remaining_day'] ?? 0);
+    $reminder = (int)($row['reminder_activity'] ?? 30);
+    $calendarItems[] = [
+        'type'         => 'predictive',
+        'typeLabel'    => 'Predictive',
+        'machine'      => $row['machine_name'] ?? '-',
+        'process'      => $row['process_machine'] ?? '',
+        'unit'         => $row['name_unit'] ?? '',
+        'dept'         => $row['department'] ?? '',
+        'line'         => $row['line'] ?? '',
+        'op'           => $row['operation_process'] ?? '',
+        'point'        => $row['maintenance_point'] ?? '-',
+        'planDate'     => !empty($row['change_date_plan']) ? date('Y-m-d', strtotime($row['change_date_plan'])) : '',
+        'planDateDisp' => !empty($row['change_date_plan']) ? date('d M Y', strtotime($row['change_date_plan'])) : '-',
+        'remaining'    => $days,
+        'status'       => classifyScheduleStatus($days, $reminder),
+        'interval'     => (int)($row['interval_month'] ?? 0),
+    ];
+}
+foreach ($prevSchedules as $row) {
+    $days     = (int)($row['remaining_day'] ?? 0);
+    $reminder = (int)($row['reminder_activity'] ?? 30);
+    $calendarItems[] = [
+        'type'         => 'preventive',
+        'typeLabel'    => 'Preventive',
+        'machine'      => $row['machine_name'] ?? '-',
+        'process'      => $row['process_machine'] ?? '',
+        'unit'         => $row['name_unit'] ?? '',
+        'dept'         => $row['department'] ?? '',
+        'line'         => $row['line'] ?? '',
+        'op'           => $row['operation_process'] ?? '',
+        'point'        => $row['maintenance_point'] ?? '-',
+        'planDate'     => !empty($row['change_date_plan']) ? date('Y-m-d', strtotime($row['change_date_plan'])) : '',
+        'planDateDisp' => !empty($row['change_date_plan']) ? date('d M Y', strtotime($row['change_date_plan'])) : '-',
+        'remaining'    => $days,
+        'status'       => classifyScheduleStatus($days, $reminder),
+        'interval'     => (int)($row['interval_month'] ?? 0),
+    ];
+}
+
+$calCntOverdue  = count(array_filter($calendarItems, fn($r) => $r['status'] === 'overdue'));
+$calCntAlert    = count(array_filter($calendarItems, fn($r) => $r['status'] === 'alert'));
+$calCntReminder = count(array_filter($calendarItems, fn($r) => $r['status'] === 'reminder'));
+$calCntSecure   = count(array_filter($calendarItems, fn($r) => $r['status'] === 'secure'));
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  PART AVAILABILITY DATA
@@ -378,6 +437,87 @@ function partOrderBadge(string $v): string
         .nav-pill.active-history .np-icon {
             background: #d97706;
             color: #fff;
+        }
+
+        .nav-pill.active-calendar {
+            color: #5b21b6;
+            border-color: #ddd6fe;
+            background: #f5f3ff;
+        }
+
+        .nav-pill.active-calendar .np-icon {
+            background: #6d28d9;
+            color: #fff;
+        }
+
+        /* ── Calendar & Category section ── */
+        .cal-stat-card {
+            cursor: pointer;
+        }
+
+        .cal-stat-card.is-active {
+            box-shadow: 0 0 0 2px rgba(109, 40, 217, .55);
+            transform: translateY(-1px);
+        }
+
+        .cal-day {
+            aspect-ratio: 1/1;
+            border-radius: .6rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            font-size: .72rem;
+            font-weight: 700;
+            color: #475569;
+            cursor: default;
+            position: relative;
+            background: #f8fafc;
+        }
+
+        .cal-day.cal-empty {
+            background: transparent;
+        }
+
+        .cal-day.cal-has-sched {
+            cursor: pointer;
+            color: #fff;
+        }
+
+        .cal-day.cal-has-sched:hover {
+            filter: brightness(1.08);
+        }
+
+        .cal-day.cal-status-overdue {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+        }
+
+        .cal-day.cal-status-alert {
+            background: linear-gradient(135deg, #eab308, #ca8a04);
+        }
+
+        .cal-day.cal-status-reminder {
+            background: linear-gradient(135deg, #f97316, #ea580c);
+        }
+
+        .cal-day.cal-status-secure {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+        }
+
+        .cal-day.cal-today {
+            box-shadow: 0 0 0 2px #6d28d9;
+        }
+
+        .cal-day.cal-selected {
+            box-shadow: 0 0 0 3px #6d28d9;
+        }
+
+        .cal-day .cal-day-dot {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, .85);
         }
 
         .nav-pill:not([class*="active"]):hover {
@@ -703,6 +843,11 @@ function partOrderBadge(string $v): string
                     class="nav-pill <?= $activeSection === 'schedule' ? 'active-schedule' : '' ?>">
                     <span class="np-icon"><i class="fas fa-calendar-check"></i></span>
                     <span class="np-label">Schedule</span>
+                </button>
+                <button onclick="switchSection('calendar')" id="navCalendar"
+                    class="nav-pill <?= $activeSection === 'calendar' ? 'active-calendar' : '' ?>">
+                    <span class="np-icon"><i class="fas fa-calendar-days"></i></span>
+                    <span class="np-label">Kalender & Kategori</span>
                 </button>
                 <button onclick="switchSection('parts')" id="navParts"
                     class="nav-pill <?= $activeSection === 'parts' ? 'active-parts' : '' ?>">
@@ -1102,6 +1247,114 @@ function partOrderBadge(string $v): string
 
 
                 <!-- ═══════════════════════════════════════════════════════════
+         SECTION: CALENDAR & CATEGORY
+         Kartu kategori (Overdue/Alert/Reminder/Secure) + kalender bulanan
+         dengan penanda tanggal yang ada jadwal, + daftar hasil filter.
+    ═══════════════════════════════════════════════════════════ -->
+                <div id="sectionCalendar" class="section-enter <?= $activeSection !== 'calendar' ? 'hidden' : '' ?>">
+
+                    <!-- Header -->
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-9 h-9 bg-gradient-to-br from-[#6d28d9] to-[#8b5cf6] rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm">
+                            <i class="fas fa-calendar-days text-white text-sm"></i>
+                        </div>
+                        <h2 class="font-extrabold text-slate-800 text-base leading-tight">Kalender &amp; Kategori Jadwal</h2>
+                        <p class="text-slate-400 font-semibold" style="font-size:.65rem;">Predictive + Preventive</p>
+                        <div class="ml-auto flex items-center gap-3 flex-shrink-0">
+                            <span class="live-clock-mirror font-mono font-black text-slate-800 tabular-nums" style="font-size:1.1rem;line-height:1;letter-spacing:-.02em;"></span>
+                        </div>
+                    </div>
+
+                    <!-- Category stat cards -->
+                    <div class="grid grid-cols-4 gap-3 mb-5">
+                        <button onclick="filterCalByStatus('overdue')" id="calCardOverdue"
+                            class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
+                            style="background:#fee2e2;border-color:#fca5a5;">
+                            <p class="font-bold text-red-700 flex items-center gap-1" style="font-size:.72rem;">
+                                <i class="fas fa-triangle-exclamation" style="font-size:.65rem;"></i> Overdue
+                            </p>
+                            <p class="text-3xl font-black" style="color:#b91c1c;"><?= $calCntOverdue ?></p>
+                        </button>
+                        <button onclick="filterCalByStatus('alert')" id="calCardAlert"
+                            class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
+                            style="background:#fef9c3;border-color:#fde047;">
+                            <p class="font-bold text-yellow-800 flex items-center gap-1" style="font-size:.72rem;">
+                                <i class="fas fa-bell" style="font-size:.65rem;"></i> Alert (≤7 hari)
+                            </p>
+                            <p class="text-3xl font-black" style="color:#854d0e;"><?= $calCntAlert ?></p>
+                        </button>
+                        <button onclick="filterCalByStatus('reminder')" id="calCardReminder"
+                            class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
+                            style="background:#ffedd5;border-color:#fdba74;">
+                            <p class="font-bold text-orange-800 flex items-center gap-1" style="font-size:.72rem;">
+                                <i class="fas fa-clock" style="font-size:.65rem;"></i> Reminder
+                            </p>
+                            <p class="text-3xl font-black" style="color:#9a3412;"><?= $calCntReminder ?></p>
+                        </button>
+                        <button onclick="filterCalByStatus('secure')" id="calCardSecure"
+                            class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
+                            style="background:#dcfce7;border-color:#86efac;">
+                            <p class="font-bold text-emerald-800 flex items-center gap-1" style="font-size:.72rem;">
+                                <i class="fas fa-circle-check" style="font-size:.65rem;"></i> Aman
+                            </p>
+                            <p class="text-3xl font-black" style="color:#15803d;"><?= $calCntSecure ?></p>
+                        </button>
+                    </div>
+
+                    <!-- Calendar + List two-column layout -->
+                    <div class="grid gap-4" style="grid-template-columns:400px 1fr;align-items:start;">
+
+                        <!-- ── Calendar ── -->
+                        <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                                <button onclick="calChangeMonth(-1)" class="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center">
+                                    <i class="fas fa-chevron-left" style="font-size:.65rem;"></i>
+                                </button>
+                                <span id="calMonthLabel" class="font-bold text-slate-800" style="font-size:.85rem;"></span>
+                                <button onclick="calChangeMonth(1)" class="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center">
+                                    <i class="fas fa-chevron-right" style="font-size:.65rem;"></i>
+                                </button>
+                            </div>
+                            <div class="px-4 pt-3 pb-1 grid grid-cols-7 gap-1 text-center">
+                                <?php foreach (['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'] as $d): ?>
+                                    <span class="text-slate-400 font-bold" style="font-size:.62rem;"><?= $d ?></span>
+                                <?php endforeach; ?>
+                            </div>
+                            <div id="calGrid" class="px-4 pb-4 grid grid-cols-7 gap-1"></div>
+                            <div class="px-4 pb-4 flex items-center flex-wrap gap-3" style="font-size:.6rem;">
+                                <span class="flex items-center gap-1 text-slate-400 font-semibold"><span style="width:8px;height:8px;border-radius:2px;background:#ef4444;display:inline-block;"></span> Overdue</span>
+                                <span class="flex items-center gap-1 text-slate-400 font-semibold"><span style="width:8px;height:8px;border-radius:2px;background:#eab308;display:inline-block;"></span> Alert</span>
+                                <span class="flex items-center gap-1 text-slate-400 font-semibold"><span style="width:8px;height:8px;border-radius:2px;background:#f97316;display:inline-block;"></span> Reminder</span>
+                                <span class="flex items-center gap-1 text-slate-400 font-semibold"><span style="width:8px;height:8px;border-radius:2px;background:#22c55e;display:inline-block;"></span> Aman</span>
+                            </div>
+                        </div>
+
+                        <!-- ── Filtered list ── -->
+                        <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+                                <div class="min-w-0">
+                                    <div id="calListTitle" class="text-sm font-bold text-slate-800">Semua Jadwal</div>
+                                    <div id="calListSubtitle" class="text-[10px] text-slate-400 font-medium">Klik kategori atau tanggal untuk memfilter</div>
+                                </div>
+                                <button onclick="calResetFilter()" id="calResetBtn" class="ml-auto hidden bg-slate-100 hover:bg-slate-200 text-slate-500 font-bold px-3 py-1.5 rounded-lg" style="font-size:.65rem;">
+                                    <i class="fas fa-xmark mr-1"></i>Reset Filter
+                                </button>
+                            </div>
+                            <div id="calListBody" class="table-scroll" style="max-height:520px;overflow-y:auto;">
+                                <div class="p-4 grid gap-2" id="calListGrid"></div>
+                            </div>
+                            <div class="px-5 py-2 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
+                                <span id="calListCount"><?= count($calendarItems) ?> jadwal</span>
+                                <?php date_default_timezone_set('Asia/Jakarta'); ?>
+                                <span>Last updated: <?= date('d M Y H:i') ?></span>
+                            </div>
+                        </div>
+
+                    </div>
+                </div><!-- /sectionCalendar -->
+
+
+                <!-- ═══════════════════════════════════════════════════════════
          SECTION: PART AVAILABILITY
     ═══════════════════════════════════════════════════════════ -->
                 <div id="sectionParts" class="section-enter <?= $activeSection !== 'parts' ? 'hidden' : '' ?>">
@@ -1377,6 +1630,11 @@ function partOrderBadge(string $v): string
                 nav: 'navSchedule',
                 el: 'sectionSchedule',
                 cls: 'active-schedule'
+            },
+            calendar: {
+                nav: 'navCalendar',
+                el: 'sectionCalendar',
+                cls: 'active-calendar'
             },
             parts: {
                 nav: 'navParts',
@@ -1805,8 +2063,8 @@ function partOrderBadge(string $v): string
             // tbody di-clip instan (tanpa transisi) sebelum baris ditukar,
             // lalu di-wipe dari kiri ke kanan di frame berikutnya. Hasilnya:
             // efek "menyapu" tiap kali pindah halaman/tab/filter.
-            const tbody = (allRows[0] || document.querySelector(rowSel))?.closest('tbody')
-                || document.querySelector(isPred ? '#schedPredTab table tbody' : '#schedPrevTab table tbody');
+            const tbody = (allRows[0] || document.querySelector(rowSel))?.closest('tbody') ||
+                document.querySelector(isPred ? '#schedPredTab table tbody' : '#schedPrevTab table tbody');
             if (tbody) {
                 tbody.style.transition = 'none';
                 tbody.style.clipPath = 'inset(0 100% 0 0)'; // tertutup penuh dari kanan
@@ -1952,12 +2210,295 @@ function partOrderBadge(string $v): string
             applyHistMonthFilter();
         }
 
+        // ══════════════════════════════════════════════════════════════
+        //  CALENDAR & CATEGORY — data gabungan predictive + preventive,
+        //  dipakai untuk kalender bulanan + daftar terfilter di menu
+        //  "Kalender & Kategori"
+        // ══════════════════════════════════════════════════════════════
+        const CAL_ITEMS = <?= json_encode($calendarItems, JSON_UNESCAPED_UNICODE) ?>;
+        const CAL_STATUS_LABEL = {
+            overdue: 'Overdue',
+            alert: 'Alert',
+            reminder: 'Reminder',
+            secure: 'Aman'
+        };
+        const CAL_STATUS_PRIORITY = {
+            overdue: 3,
+            alert: 2,
+            reminder: 1,
+            secure: 0
+        };
+        const CAL_MONTHS_ID = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+        // Peta tanggal ('YYYY-MM-DD') → status paling "genting" pada tanggal itu
+        const CAL_DATE_STATUS = {};
+        CAL_ITEMS.forEach(it => {
+            if (!it.planDate) return;
+            const cur = CAL_DATE_STATUS[it.planDate];
+            if (!cur || CAL_STATUS_PRIORITY[it.status] > CAL_STATUS_PRIORITY[cur]) {
+                CAL_DATE_STATUS[it.planDate] = it.status;
+            }
+        });
+
+        const today_ = new Date();
+        let calYear = today_.getFullYear();
+        let calMonth = today_.getMonth(); // 0-based
+        let calFilter = null; // {kind:'status'|'date', value:'...'}
+
+        function calPad(n) {
+            return String(n).padStart(2, '0');
+        }
+
+        function calChangeMonth(delta) {
+            calMonth += delta;
+            if (calMonth < 0) {
+                calMonth = 11;
+                calYear--;
+            } else if (calMonth > 11) {
+                calMonth = 0;
+                calYear++;
+            }
+            renderCalGrid();
+        }
+
+        function renderCalGrid() {
+            const label = document.getElementById('calMonthLabel');
+            if (label) label.textContent = CAL_MONTHS_ID[calMonth] + ' ' + calYear;
+
+            const grid = document.getElementById('calGrid');
+            if (!grid) return;
+
+            const firstDow = new Date(calYear, calMonth, 1).getDay(); // 0=Min
+            const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+            const todayKey = today_.getFullYear() + '-' + calPad(today_.getMonth() + 1) + '-' + calPad(today_.getDate());
+
+            let html = '';
+            for (let i = 0; i < firstDow; i++) {
+                html += '<div class="cal-day cal-empty"></div>';
+            }
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dateKey = calYear + '-' + calPad(calMonth + 1) + '-' + calPad(d);
+                const status = CAL_DATE_STATUS[dateKey];
+                const hasSched = !!status;
+                const isToday = dateKey === todayKey;
+                const isSelected = calFilter && calFilter.kind === 'date' && calFilter.value === dateKey;
+                const cls = ['cal-day'];
+                if (hasSched) {
+                    cls.push('cal-has-sched');
+                    cls.push('cal-status-' + status);
+                }
+                if (isToday) cls.push('cal-today');
+                if (isSelected) cls.push('cal-selected');
+                html += `<div class="${cls.join(' ')}" ${hasSched ? `onclick="filterCalByDate('${dateKey}')" title="${CAL_STATUS_LABEL[status]} — klik untuk lihat daftar"` : ''}>
+                    <span>${d}</span>
+                    ${hasSched ? '<span class="cal-day-dot"></span>' : ''}
+                </div>`;
+            }
+            grid.innerHTML = html;
+        }
+
+        function calUpdateCardHighlight() {
+            ['overdue', 'alert', 'reminder', 'secure'].forEach(s => {
+                const el = document.getElementById('calCard' + s.charAt(0).toUpperCase() + s.slice(1));
+                if (!el) return;
+                const active = calFilter && calFilter.kind === 'status' && calFilter.value === s;
+                el.classList.toggle('is-active', !!active);
+            });
+        }
+
+        function calEsc(str) {
+            return String(str ?? '').replace(/[&<>"']/g, c => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            } [c]));
+        }
+
+        const CAL_STATUS_COLOR = {
+            overdue: '#ef4444',
+            alert: '#eab308',
+            reminder: '#f97316',
+            secure: '#22c55e'
+        };
+
+        // Kartu "daun" — 1 baris kegiatan (maintenance point) di dalam grup mesin.
+        // Info dept/line/OP/mesin TIDAK diulang lagi di sini karena sudah
+        // tampil di header grup di atasnya — supaya tidak berulang dan
+        // tetap mudah dibaca.
+        function calLeafCard(it) {
+            const color = CAL_STATUS_COLOR[it.status] || '#94a3b8';
+            const typeBadge = it.type === 'predictive' ?
+                '<span class="bg-[#e8f4f8] text-[#0f4c5c] font-bold px-1.5 py-0.5 rounded" style="font-size:.56rem;">Predictive</span>' :
+                '<span class="bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.56rem;">Preventive</span>';
+            return `<div class="flex items-start gap-2 bg-white rounded-lg px-2.5 py-2 border border-slate-100">
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-1.5 flex-wrap mb-0.5">${typeBadge}${it.process ? `<span class="text-slate-400" style="font-size:.6rem;">${calEsc(it.process)}</span>` : ''}</div>
+                    <p class="text-slate-600 font-medium" style="font-size:.7rem;line-height:1.4;">${calEsc(it.point)}</p>
+                </div>
+                <div class="flex-shrink-0 text-right">
+                    <span class="inline-block px-2 py-0.5 rounded-full font-black uppercase tracking-wide" style="font-size:.56rem;background:${color}22;color:${color};">${CAL_STATUS_LABEL[it.status]}</span>
+                    <p class="text-slate-400 font-semibold mt-1" style="font-size:.6rem;">${it.planDateDisp}</p>
+                    <p class="text-slate-300 font-semibold" style="font-size:.56rem;">H${it.remaining >= 0 ? '-' : '+'}${Math.abs(it.remaining)}</p>
+                </div>
+            </div>`;
+        }
+
+        // Susun data menjadi struktur bertingkat: Department → Line → Operation
+        // Process → Nama Mesin, persis pola pengelompokan yang sudah dipakai
+        // di fitur Report Massal Preventive (dashboard_user.php) — supaya
+        // datanya gampang dibaca orang awam: langsung kelihatan lokasinya
+        // dulu (dept/line), baru OP-nya, baru mesin & aktivitasnya.
+        function calBuildGroups(items) {
+            const groups = {};
+            items.forEach(it => {
+                const dept = it.dept || 'Tanpa Departemen';
+                const line = it.line || 'Tanpa Line';
+                const op = it.op || 'Tanpa OP';
+                const machine = it.machine || 'Tanpa Nama Mesin';
+                (groups[dept] ??= {});
+                (groups[dept][line] ??= {});
+                (groups[dept][line][op] ??= {});
+                (groups[dept][line][op][machine] ??= []).push(it);
+            });
+            return groups;
+        }
+
+        function renderGroupedCalList(items) {
+            if (items.length === 0) {
+                return `<div class="text-center py-12 text-slate-400">
+                    <i class="fas fa-calendar-xmark text-4xl block mb-3 text-slate-200"></i>
+                    <p class="font-semibold text-sm">Tidak ada jadwal untuk filter ini.</p>
+                </div>`;
+            }
+
+            const groups = calBuildGroups(items);
+            let html = '';
+            Object.keys(groups).sort().forEach(dept => {
+                html += `<div class="mb-4">
+                    <div class="flex items-center gap-1.5 mb-2">
+                        <i class="fas fa-building text-[#6d28d9] text-xs"></i>
+                        <span class="text-xs font-black text-[#6d28d9] uppercase tracking-widest">${calEsc(dept)}</span>
+                    </div>`;
+                Object.keys(groups[dept]).sort().forEach(line => {
+                    html += `<div class="ml-3 pl-3 border-l-2 border-[#ede9fe] mb-3">
+                        <div class="flex items-center gap-1.5 mb-2">
+                            <i class="fas fa-industry text-slate-400 text-[11px]"></i>
+                            <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">${calEsc(line)}</span>
+                        </div>`;
+                    Object.keys(groups[dept][line]).sort().forEach(op => {
+                        const machines = groups[dept][line][op];
+                        const opCount = Object.values(machines).reduce((a, arr) => a + arr.length, 0);
+                        html += `<details class="ml-1 mb-2 group border border-slate-200 rounded-xl overflow-hidden">
+                            <summary class="flex items-center gap-2 cursor-pointer select-none list-none px-3 py-2.5 bg-[#f5f3ff] hover:bg-[#ede9fe] transition">
+                                <i class="fas fa-chevron-right text-[#6d28d9] text-[10px] transition-transform group-open:rotate-90"></i>
+                                <span class="flex-1 min-w-0 text-sm font-black text-[#6d28d9] leading-tight truncate">OP ${calEsc(op)}</span>
+                                <span class="flex-shrink-0 bg-[#6d28d9] text-white text-[10px] font-black px-2 py-1 rounded-full">${opCount} jadwal</span>
+                            </summary>
+                            <div class="space-y-2 p-3 bg-white">
+                                ${Object.keys(machines).sort().map(machine => `
+                                    <div class="rounded-lg border border-slate-100 overflow-hidden">
+                                        <div class="px-3 py-1.5 bg-slate-50 flex items-center gap-1.5">
+                                            <i class="fas fa-gear text-slate-400 text-[10px]"></i>
+                                            <span class="text-xs font-bold text-slate-600">${calEsc(machine)}</span>
+                                        </div>
+                                        <div class="p-2 space-y-1.5">
+                                            ${machines[machine].map(it => calLeafCard(it)).join('')}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </details>`;
+                    });
+                    html += `</div>`;
+                });
+                html += `</div>`;
+            });
+            return html;
+        }
+
+        function renderCalList() {
+            let items = CAL_ITEMS;
+            const titleEl = document.getElementById('calListTitle');
+            const subEl = document.getElementById('calListSubtitle');
+            const resetBtn = document.getElementById('calResetBtn');
+
+            if (calFilter && calFilter.kind === 'status') {
+                items = CAL_ITEMS.filter(it => it.status === calFilter.value);
+                titleEl.textContent = 'Kategori: ' + CAL_STATUS_LABEL[calFilter.value];
+                subEl.textContent = items.length + ' jadwal masuk kategori ini — dikelompokkan per Dept › Line › OP › Mesin';
+                resetBtn.classList.remove('hidden');
+            } else if (calFilter && calFilter.kind === 'date') {
+                items = CAL_ITEMS.filter(it => it.planDate === calFilter.value);
+                const [y, m, d] = calFilter.value.split('-');
+                const dispDate = new Date(y, m - 1, d).toLocaleDateString('id-ID', {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric'
+                });
+                titleEl.textContent = 'Tanggal: ' + dispDate;
+                subEl.textContent = items.length + ' jadwal pada tanggal ini — dikelompokkan per Dept › Line › OP › Mesin';
+                resetBtn.classList.remove('hidden');
+            } else {
+                items = CAL_ITEMS;
+                titleEl.textContent = 'Semua Jadwal';
+                subEl.textContent = 'Klik kategori atau tanggal untuk memfilter — dikelompokkan per Dept › Line › OP › Mesin';
+                resetBtn.classList.add('hidden');
+            }
+
+            // Urutkan supaya yang paling genting & paling dekat tampil duluan
+            // di dalam masing-masing grup mesin.
+            items = [...items].sort((a, b) => a.remaining - b.remaining);
+
+            const listGrid = document.getElementById('calListGrid');
+            listGrid.innerHTML = renderGroupedCalList(items);
+
+            const countEl = document.getElementById('calListCount');
+            if (countEl) countEl.textContent = items.length + ' / ' + CAL_ITEMS.length + ' jadwal';
+
+            calUpdateCardHighlight();
+        }
+
+        function filterCalByStatus(status) {
+            if (calFilter && calFilter.kind === 'status' && calFilter.value === status) {
+                calFilter = null; // toggle off kalau diklik ulang
+            } else {
+                calFilter = {
+                    kind: 'status',
+                    value: status
+                };
+            }
+            renderCalList();
+        }
+
+        function filterCalByDate(dateKey) {
+            if (calFilter && calFilter.kind === 'date' && calFilter.value === dateKey) {
+                calFilter = null;
+            } else {
+                calFilter = {
+                    kind: 'date',
+                    value: dateKey
+                };
+            }
+            renderCalGrid();
+            renderCalList();
+        }
+
+        function calResetFilter() {
+            calFilter = null;
+            renderCalGrid();
+            renderCalList();
+        }
+
         // Init filter counts on load
         document.addEventListener('DOMContentLoaded', function() {
             computePageRows();
             applyPredFilter();
             applyPrevFilter();
             applyHistMonthFilter();
+            renderCalGrid();
+            renderCalList();
         });
 
         // Hitung ulang baris/halaman saat ukuran layar berubah (debounced)
