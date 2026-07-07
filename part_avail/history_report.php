@@ -79,6 +79,26 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
         $params = array_merge($params, [$s, $s, $s, $s, $s, $s, $s]);
     }
 
+    // Sembunyikan baris "belum selesai" dari TABEL WEB jika rangkaiannya (root +
+    // seluruh follow-up-nya) sudah punya laporan lanjutan berstatus "selesai".
+    // Riwayat "belum selesai" itu tidak hilang secara data — tetap bisa dilihat
+    // lengkap lewat modal detail (endpoint ajax=thread) — hanya tidak ditampilkan
+    // sebagai baris terpisah di tabel utama supaya tidak dobel dengan followup-nya.
+    // Tidak berlaku untuk export Excel (file terpisah, tidak disentuh di sini).
+    $where .= "
+        AND NOT (
+            r.status = 'belum selesai'
+            AND EXISTS (
+                SELECT 1 FROM e_reports x
+                WHERE x.status = 'selesai'
+                  AND (
+                        x.id = COALESCE(r.parent_id, r.id)
+                     OR x.parent_id = COALESCE(r.parent_id, r.id)
+                  )
+            )
+        )
+    ";
+
     $stmtCount = $pdo->prepare("SELECT COUNT(*) FROM e_reports r $where");
     $stmtCount->execute($params);
     $total = (int)$stmtCount->fetchColumn();
