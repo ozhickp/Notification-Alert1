@@ -127,6 +127,20 @@ $calCntAlert    = count(array_filter($calendarItems, fn($r) => $r['status'] === 
 $calCntReminder = count(array_filter($calendarItems, fn($r) => $r['status'] === 'reminder'));
 $calCntSecure   = count(array_filter($calendarItems, fn($r) => $r['status'] === 'secure'));
 
+// Jumlah mesin unik (distinct) per status — dipakai untuk info "X mesin, Y jadwal" di tiap card
+function calMachineCount(array $items, string $status): int
+{
+    $machines = array_unique(array_map(
+        fn($r) => $r['machine'],
+        array_filter($items, fn($r) => $r['status'] === $status)
+    ));
+    return count($machines);
+}
+$calMachOverdue  = calMachineCount($calendarItems, 'overdue');
+$calMachAlert    = calMachineCount($calendarItems, 'alert');
+$calMachReminder = calMachineCount($calendarItems, 'reminder');
+$calMachSecure   = calMachineCount($calendarItems, 'secure');
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  PART AVAILABILITY DATA
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1283,6 +1297,7 @@ function partOrderBadge(string $v): string
                                 <i class="fas fa-triangle-exclamation" style="font-size:.65rem;"></i> Overdue
                             </p>
                             <p class="text-3xl font-black" id="calCntOverdue" style="color:#b91c1c;"><?= $calCntOverdue ?></p>
+                            <p class="font-semibold text-red-700" id="calMachOverdue" style="font-size:.62rem;opacity:.75;"><?= $calMachOverdue ?> mesin, <?= $calCntOverdue ?> jadwal</p>
                         </button>
                         <button onclick="filterCalByStatus('alert')" id="calCardAlert"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
@@ -1291,6 +1306,7 @@ function partOrderBadge(string $v): string
                                 <i class="fas fa-bell" style="font-size:.65rem;"></i> Alert (≤7 hari)
                             </p>
                             <p class="text-3xl font-black" id="calCntAlert" style="color:#854d0e;"><?= $calCntAlert ?></p>
+                            <p class="font-semibold text-yellow-800" id="calMachAlert" style="font-size:.62rem;opacity:.75;"><?= $calMachAlert ?> mesin, <?= $calCntAlert ?> jadwal</p>
                         </button>
                         <button onclick="filterCalByStatus('reminder')" id="calCardReminder"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
@@ -1299,14 +1315,16 @@ function partOrderBadge(string $v): string
                                 <i class="fas fa-clock" style="font-size:.65rem;"></i> Reminder
                             </p>
                             <p class="text-3xl font-black" id="calCntReminder" style="color:#9a3412;"><?= $calCntReminder ?></p>
+                            <p class="font-semibold text-orange-800" id="calMachReminder" style="font-size:.62rem;opacity:.75;"><?= $calMachReminder ?> mesin, <?= $calCntReminder ?> jadwal</p>
                         </button>
                         <button onclick="filterCalByStatus('secure')" id="calCardSecure"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
                             style="background:#dcfce7;border-color:#86efac;">
                             <p class="font-bold text-emerald-800 flex items-center gap-1" style="font-size:.72rem;">
-                                <i class="fas fa-circle-check" style="font-size:.65rem;"></i> Aman
+                                <i class="fas fa-circle-check" style="font-size:.65rem;"></i> Secure
                             </p>
                             <p class="text-3xl font-black" id="calCntSecure" style="color:#15803d;"><?= $calCntSecure ?></p>
+                            <p class="font-semibold text-emerald-800" id="calMachSecure" style="font-size:.62rem;opacity:.75;"><?= $calMachSecure ?> mesin, <?= $calCntSecure ?> jadwal</p>
                         </button>
                     </div>
 
@@ -2810,8 +2828,18 @@ function partOrderBadge(string $v): string
                     reminder: 0,
                     secure: 0
                 };
+                // Set per status untuk menghitung mesin unik (distinct)
+                const machineSets = {
+                    overdue: new Set(),
+                    alert: new Set(),
+                    reminder: new Set(),
+                    secure: new Set()
+                };
                 items.forEach(it => {
-                    if (counts[it.status] !== undefined) counts[it.status]++;
+                    if (counts[it.status] !== undefined) {
+                        counts[it.status]++;
+                        machineSets[it.status].add(it.machine);
+                    }
                 });
                 const setText = (id, val) => {
                     const el = document.getElementById(id);
@@ -2821,6 +2849,11 @@ function partOrderBadge(string $v): string
                 setText('calCntAlert', counts.alert);
                 setText('calCntReminder', counts.reminder);
                 setText('calCntSecure', counts.secure);
+
+                setText('calMachOverdue', machineSets.overdue.size + ' mesin, ' + counts.overdue + ' jadwal');
+                setText('calMachAlert', machineSets.alert.size + ' mesin, ' + counts.alert + ' jadwal');
+                setText('calMachReminder', machineSets.reminder.size + ' mesin, ' + counts.reminder + ' jadwal');
+                setText('calMachSecure', machineSets.secure.size + ' mesin, ' + counts.secure + ' jadwal');
             }
 
             function renderCalendarLive(data) {
