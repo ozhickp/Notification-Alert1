@@ -298,9 +298,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 process_machine = ?, name_unit = ?, maintenance_point = ?,
                 interval_month = ?, use_date = ?, change_date_plan = ?,
                 reminder_activity = ?, remaining_day = ?,
-                part_order = ?, part_availability = ?,
+                part_order = ?, part_availability = ?, part_qty_needed = ?,
                 maintenance_status = ?
                 WHERE id = ?");
+            $rawQty = $_POST['part_qty_needed'] ?? '';
+            $partQtyNeeded = ($rawQty === '' ? null : max(0, (int)$rawQty));
             $stmt->execute([
                 $_POST['dept_name']            ?? ($_POST['department'] ?? ''),
                 $_POST['line_name']            ?? ($_POST['line']       ?? ''),
@@ -316,6 +318,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $remaining_day,
                 $part_order,
                 $part_avail,
+                $partQtyNeeded,
                 $autoEditMaintStatus,
                 $editId,
             ]);
@@ -1704,6 +1707,7 @@ HTML;
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest text-center whitespace-nowrap">Remaining (Day(s))</th>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest text-center whitespace-nowrap">Part Order</th>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest text-center whitespace-nowrap">Part Availability</th>
+                                        <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest text-center whitespace-nowrap">Jml. Part</th>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest text-center whitespace-nowrap">Maint. Status</th>
                                         <th class="px-5 py-4 font-semibold text-[11px] uppercase tracking-widest text-center whitespace-nowrap">Action</th>
                                     </tr>
@@ -1773,6 +1777,13 @@ HTML;
                                                 <span class="badge <?= $paClass ?>"><?= strtoupper($pAvail) ?></span>
                                             </td>
                                             <td class="px-5 py-3 text-center">
+                                                <?php if ($row['part_qty_needed'] !== null && $row['part_qty_needed'] !== ''): ?>
+                                                    <span class="bg-slate-100 text-slate-700 font-bold px-2 py-1 rounded-lg text-xs"><?= (int)$row['part_qty_needed'] ?> pcs</span>
+                                                <?php else: ?>
+                                                    <span class="text-slate-300 text-xs">-</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td class="px-5 py-3 text-center">
                                                 <span class="badge <?= $msClass ?>"><?= strtoupper($maintSt) ?></span>
                                             </td>
                                             <td class="px-5 py-3 text-center">
@@ -1793,7 +1804,7 @@ HTML;
                                     <?php endforeach; ?>
                                     <?php if (empty($schedules)): ?>
                                         <tr>
-                                            <td colspan="11" class="px-6 py-16 text-center text-slate-400">
+                                            <td colspan="12" class="px-6 py-16 text-center text-slate-400">
                                                 <i class="fas fa-inbox text-4xl mb-3 block"></i>
                                                 <p class="font-medium">Belum ada data. Tambah manual atau import dari Excel.</p>
                                             </td>
@@ -2156,6 +2167,13 @@ HTML;
                                     <option value="close">close</option>
                                     <option value="open">open</option>
                                 </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Jumlah Barang Dibutuhkan</label>
+                                <input type="number" name="part_qty_needed" id="edit_part_qty_needed" min="0" step="1"
+                                    placeholder="Contoh: 5"
+                                    class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-amber-100 outline-none transition text-sm font-bold">
+                                <p class="text-[10px] text-slate-400 mt-1.5">Opsional — isi jumlah unit part yang dibutuhkan untuk pekerjaan ini.</p>
                             </div>
                         </div>
                         <div class="flex justify-end gap-3">
@@ -2714,6 +2732,8 @@ HTML;
                     const paSel = document.getElementById('edit_part_availability');
                     if (poSel) poSel.value = data.part_order || 'close';
                     if (paSel) paSel.value = data.part_availability || 'close';
+                    const qtySel = document.getElementById('edit_part_qty_needed');
+                    if (qtySel) qtySel.value = (data.part_qty_needed === null || data.part_qty_needed === undefined) ? '' : data.part_qty_needed;
                     document.getElementById('edit_machine_name').value = data.machine_name ?? '';
                     document.getElementById('edit_process_machine').value = data.process_machine ?? '';
                     document.getElementById('edit_name_unit').value = data.name_unit ?? '';

@@ -127,19 +127,38 @@ $calCntAlert    = count(array_filter($calendarItems, fn($r) => $r['status'] === 
 $calCntReminder = count(array_filter($calendarItems, fn($r) => $r['status'] === 'reminder'));
 $calCntSecure   = count(array_filter($calendarItems, fn($r) => $r['status'] === 'secure'));
 
-// Jumlah mesin unik (distinct) per status — dipakai untuk info "X mesin, Y jadwal" di tiap card
-function calMachineCount(array $items, string $status): int
+// Jumlah line & mesin unik (distinct) per status — dipakai untuk info "X line, Y mesin, Z jadwal" di tiap card
+function calUniqueCount(array $items, string $status, string $field): int
 {
-    $machines = array_unique(array_map(
-        fn($r) => $r['machine'],
+    $values = array_unique(array_map(
+        fn($r) => $r[$field],
         array_filter($items, fn($r) => $r['status'] === $status)
     ));
-    return count($machines);
+    return count($values);
 }
-$calMachOverdue  = calMachineCount($calendarItems, 'overdue');
-$calMachAlert    = calMachineCount($calendarItems, 'alert');
-$calMachReminder = calMachineCount($calendarItems, 'reminder');
-$calMachSecure   = calMachineCount($calendarItems, 'secure');
+
+// Mesin dihitung sebagai kombinasi unik Line + OP + Nama Mesin, BUKAN nama
+// mesin saja. Ini karena nama mesin (machine_name) di database bisa sama
+// persis di beberapa OP berbeda pada line yang sama (mis. OP 20 & OP 80),
+// padahal keduanya adalah unit/proses yang berbeda dan harus dihitung
+// terpisah supaya user tahu jumlah mesin yang benar-benar akan di-preventive.
+function calUniqueMachineCount(array $items, string $status): int
+{
+    $keys = array_unique(array_map(
+        fn($r) => ($r['line'] ?? '') . '||' . ($r['op'] ?? '') . '||' . ($r['machine'] ?? ''),
+        array_filter($items, fn($r) => $r['status'] === $status)
+    ));
+    return count($keys);
+}
+$calMachOverdue  = calUniqueMachineCount($calendarItems, 'overdue');
+$calMachAlert    = calUniqueMachineCount($calendarItems, 'alert');
+$calMachReminder = calUniqueMachineCount($calendarItems, 'reminder');
+$calMachSecure   = calUniqueMachineCount($calendarItems, 'secure');
+
+$calLineOverdue  = calUniqueCount($calendarItems, 'overdue', 'line');
+$calLineAlert    = calUniqueCount($calendarItems, 'alert', 'line');
+$calLineReminder = calUniqueCount($calendarItems, 'reminder', 'line');
+$calLineSecure   = calUniqueCount($calendarItems, 'secure', 'line');
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  PART AVAILABILITY DATA
@@ -957,6 +976,9 @@ function partOrderBadge(string $v): string
                                                         <?php endif; ?>
                                                     </div>
                                                     <span class="flex-shrink-0 bg-[#d4eaf0] text-[#0d3d4a] font-bold px-1.5 py-0.5 rounded" style="font-size:.58rem;"><?= (int)($td['interval_month'] ?? 0) ?>mo</span>
+                                                    <?php if (isset($td['part_qty_needed']) && $td['part_qty_needed'] !== null && $td['part_qty_needed'] !== ''): ?>
+                                                        <span class="flex-shrink-0 bg-amber-100 text-amber-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.58rem;"><?= (int)$td['part_qty_needed'] ?> pcs</span>
+                                                    <?php endif; ?>
                                                 </div>
                                             <?php endforeach; ?>
                                         </div>
@@ -1080,13 +1102,14 @@ function partOrderBadge(string $v): string
                                             <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Rem. (d)</th>
                                             <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Part Order</th>
                                             <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Part Avail.</th>
+                                            <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Jml. Part</th>
                                             <th class="tbl-th px-2 py-1.5 text-center" style="font-size:.6rem;">Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <?php if (empty($schedules)): ?>
                                             <tr>
-                                                <td colspan="10" class="tbl-td text-center py-16 text-slate-400">
+                                                <td colspan="11" class="tbl-td text-center py-16 text-slate-400">
                                                     <i class="fas fa-calendar-xmark text-4xl block mb-3 text-slate-200"></i>
                                                     <p class="font-semibold">Belum ada data schedule predictive.</p>
                                                 </td>
@@ -1130,6 +1153,13 @@ function partOrderBadge(string $v): string
                                                     <td class="tbl-td text-center px-1 py-1.5 <?= $daysCls ?>" style="font-size:.75rem;"><?= $days ?></td>
                                                     <td class="tbl-td text-center px-1 py-1.5"><?= partOrderBadge($row['part_order'] ?? 'close') ?></td>
                                                     <td class="tbl-td text-center px-1 py-1.5"><?= partOrderBadge($row['part_availability'] ?? 'close') ?></td>
+                                                    <td class="tbl-td text-center px-1 py-1.5">
+                                                        <?php if (isset($row['part_qty_needed']) && $row['part_qty_needed'] !== null && $row['part_qty_needed'] !== ''): ?>
+                                                            <span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded" style="font-size:.65rem;"><?= (int)$row['part_qty_needed'] ?> pcs</span>
+                                                        <?php else: ?>
+                                                            <span class="text-slate-300" style="font-size:.65rem;">-</span>
+                                                        <?php endif; ?>
+                                                    </td>
                                                     <td class="tbl-td text-center px-1 py-1.5"><?= maintenanceStatusBadge($row['maintenance_status'] ?? '') ?></td>
                                                 </tr>
                                             <?php endforeach; ?>
@@ -1297,7 +1327,7 @@ function partOrderBadge(string $v): string
                                 <i class="fas fa-triangle-exclamation" style="font-size:.65rem;"></i> Overdue
                             </p>
                             <p class="text-3xl font-black" id="calCntOverdue" style="color:#b91c1c;"><?= $calCntOverdue ?></p>
-                            <p class="font-semibold text-red-700" id="calMachOverdue" style="font-size:.62rem;opacity:.75;"><?= $calMachOverdue ?> mesin, <?= $calCntOverdue ?> jadwal</p>
+                            <p class="font-semibold text-red-700" id="calMachOverdue" style="font-size:.62rem;opacity:.75;"><?= $calLineOverdue ?> line, <?= $calMachOverdue ?> mesin, <?= $calCntOverdue ?> jadwal</p>
                         </button>
                         <button onclick="filterCalByStatus('alert')" id="calCardAlert"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
@@ -1306,7 +1336,7 @@ function partOrderBadge(string $v): string
                                 <i class="fas fa-bell" style="font-size:.65rem;"></i> Alert (≤7 hari)
                             </p>
                             <p class="text-3xl font-black" id="calCntAlert" style="color:#854d0e;"><?= $calCntAlert ?></p>
-                            <p class="font-semibold text-yellow-800" id="calMachAlert" style="font-size:.62rem;opacity:.75;"><?= $calMachAlert ?> mesin, <?= $calCntAlert ?> jadwal</p>
+                            <p class="font-semibold text-yellow-800" id="calMachAlert" style="font-size:.62rem;opacity:.75;"><?= $calLineAlert ?> line, <?= $calMachAlert ?> mesin, <?= $calCntAlert ?> jadwal</p>
                         </button>
                         <button onclick="filterCalByStatus('reminder')" id="calCardReminder"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
@@ -1315,7 +1345,7 @@ function partOrderBadge(string $v): string
                                 <i class="fas fa-clock" style="font-size:.65rem;"></i> Reminder
                             </p>
                             <p class="text-3xl font-black" id="calCntReminder" style="color:#9a3412;"><?= $calCntReminder ?></p>
-                            <p class="font-semibold text-orange-800" id="calMachReminder" style="font-size:.62rem;opacity:.75;"><?= $calMachReminder ?> mesin, <?= $calCntReminder ?> jadwal</p>
+                            <p class="font-semibold text-orange-800" id="calMachReminder" style="font-size:.62rem;opacity:.75;"><?= $calLineReminder ?> line, <?= $calMachReminder ?> mesin, <?= $calCntReminder ?> jadwal</p>
                         </button>
                         <button onclick="filterCalByStatus('secure')" id="calCardSecure"
                             class="cal-stat-card text-left rounded-2xl border px-4 py-3 transition"
@@ -1324,7 +1354,7 @@ function partOrderBadge(string $v): string
                                 <i class="fas fa-circle-check" style="font-size:.65rem;"></i> Secure
                             </p>
                             <p class="text-3xl font-black" id="calCntSecure" style="color:#15803d;"><?= $calCntSecure ?></p>
-                            <p class="font-semibold text-emerald-800" id="calMachSecure" style="font-size:.62rem;opacity:.75;"><?= $calMachSecure ?> mesin, <?= $calCntSecure ?> jadwal</p>
+                            <p class="font-semibold text-emerald-800" id="calMachSecure" style="font-size:.62rem;opacity:.75;"><?= $calLineSecure ?> line, <?= $calMachSecure ?> mesin, <?= $calCntSecure ?> jadwal</p>
                         </button>
                     </div>
 
@@ -1690,6 +1720,8 @@ function partOrderBadge(string $v): string
             window.history.replaceState({}, '', url);
             // Reset scroll state for new section
             resetScrollState();
+            // Indikator auto-scroll cuma relevan untuk Schedule & Part Availability
+            if (!isScrollableSection()) hideStatus();
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1780,7 +1812,14 @@ function partOrderBadge(string $v): string
         const statusDot = document.getElementById('scroll-dot');
         const statusLabel = document.getElementById('scroll-label');
 
+        // Section calendar tidak punya auto-scroll — indikator hanya relevan
+        // untuk Schedule (ticker per-tab) & Part Availability (tabel).
+        function isScrollableSection() {
+            return _activeSection === 'schedule' || _activeSection === 'parts';
+        }
+
         function showStatus(paused) {
+            if (!isScrollableSection()) return;
             statusEl.classList.add('visible');
             statusDot.style.background = paused ? '#f59e0b' : '#22c55e';
             statusLabel.textContent = paused ? 'Scroll dijeda (kursor aktif)' : 'Auto-scroll aktif';
@@ -1871,14 +1910,16 @@ function partOrderBadge(string $v): string
             scrollPaused = true;
             cancelAnimationFrame(scrollRAF);
             clearTimeout(pauseTimer);
-            showStatus(true);
+            if (isScrollableSection()) showStatus(true);
 
             clearTimeout(resumeTimer);
             resumeTimer = setTimeout(() => {
                 scrollPaused = false;
-                showStatus(false);
+                if (isScrollableSection()) {
+                    showStatus(false);
+                    setTimeout(hideStatus, 1500);
+                }
                 scrollRAF = requestAnimationFrame(doScroll);
-                setTimeout(hideStatus, 1500);
             }, RESUME_DELAY);
         }
 
@@ -1889,8 +1930,12 @@ function partOrderBadge(string $v): string
 
         // Mulai auto-scroll setelah page load
         window.addEventListener('load', () => {
-            showStatus(false);
-            setTimeout(hideStatus, 2000);
+            // Indikator auto-scroll cuma relevan untuk Schedule & Part Availability,
+            // tidak untuk Kalender & Kategori
+            if (isScrollableSection()) {
+                showStatus(false);
+                setTimeout(hideStatus, 2000);
+            }
             scrollRAF = requestAnimationFrame(doScroll);
         });
 
@@ -2600,6 +2645,9 @@ function partOrderBadge(string $v): string
             // ── Build a today card item ────────────────────────────────
             function makeTodayItem(item, idx, color) {
                 const sub = [item.dept, item.line ? '· ' + item.line : ''].filter(Boolean).join(' ');
+                const qtyBadge = (item.qty !== undefined && item.qty !== null) ?
+                    `<span class="flex-shrink-0 bg-amber-100 text-amber-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.58rem;">${item.qty} pcs</span>` :
+                    '';
                 return `<div class="bg-white/80 rounded-xl px-3 py-2 flex items-start gap-2 border border-${color}-100 shadow-sm">
                 <div class="w-5 h-5 rounded-md bg-${color}-100 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <span class="text-${color}-600 font-black" style="font-size:.55rem;">${idx + 1}</span>
@@ -2610,6 +2658,7 @@ function partOrderBadge(string $v): string
                     ${sub ? `<p class="text-${color}-400 mt-0.5 truncate" style="font-size:.58rem;">${sub}</p>` : ''}
                 </div>
                 <span class="flex-shrink-0 bg-${color}-100 text-${color}-700 font-bold px-1.5 py-0.5 rounded" style="font-size:.58rem;">${item.interval}mo</span>
+                ${qtyBadge}
             </div>`;
             }
 
@@ -2656,13 +2705,16 @@ function partOrderBadge(string $v): string
                 const tbody = document.querySelector('#schedPredTab table tbody');
                 if (!tbody || !rows) return;
                 if (rows.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="10" class="tbl-td text-center py-16 text-slate-400">
+                    tbody.innerHTML = `<tr><td colspan="11" class="tbl-td text-center py-16 text-slate-400">
                     <i class="fas fa-calendar-xmark text-4xl block mb-3 text-slate-200"></i>
                     <p class="font-semibold">Belum ada data schedule predictive.</p></td></tr>`;
                     return;
                 }
                 tbody.innerHTML = rows.map((r, i) => {
                     const cls = remainingCls(r.remaining);
+                    const qtyCell = (r.part_qty !== undefined && r.part_qty !== null) ?
+                        `<span class="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.5 rounded" style="font-size:.65rem;">${r.part_qty} pcs</span>` :
+                        `<span class="text-slate-300" style="font-size:.65rem;">-</span>`;
                     return `<tr class="pred-sched-row" data-status="${r.status_cls}">
                     <td class="tbl-td text-slate-400 font-mono px-2 py-1.5" style="font-size:.68rem;">${i + 1}</td>
                     <td class="tbl-td px-2 py-1.5" style="overflow:hidden;">
@@ -2680,6 +2732,7 @@ function partOrderBadge(string $v): string
                     <td class="tbl-td text-center px-1 py-1.5 ${cls}" style="font-size:.75rem;">${r.remaining}</td>
                     <td class="tbl-td text-center px-1 py-1.5">${badgePO(r.part_order)}</td>
                     <td class="tbl-td text-center px-1 py-1.5">${badgePO(r.part_avail)}</td>
+                    <td class="tbl-td text-center px-1 py-1.5">${qtyCell}</td>
                     <td class="tbl-td text-center px-1 py-1.5">${badgeMS(r.maint_status)}</td>
                 </tr>`;
                 }).join('');
@@ -2828,8 +2881,14 @@ function partOrderBadge(string $v): string
                     reminder: 0,
                     secure: 0
                 };
-                // Set per status untuk menghitung mesin unik (distinct)
+                // Set per status untuk menghitung line & mesin unik (distinct)
                 const machineSets = {
+                    overdue: new Set(),
+                    alert: new Set(),
+                    reminder: new Set(),
+                    secure: new Set()
+                };
+                const lineSets = {
                     overdue: new Set(),
                     alert: new Set(),
                     reminder: new Set(),
@@ -2838,7 +2897,10 @@ function partOrderBadge(string $v): string
                 items.forEach(it => {
                     if (counts[it.status] !== undefined) {
                         counts[it.status]++;
-                        machineSets[it.status].add(it.machine);
+                        // Kombinasi Line+OP+Mesin, bukan nama mesin saja — supaya OP
+                        // berbeda dengan nama mesin generik yang sama tetap dihitung terpisah
+                        machineSets[it.status].add((it.line || '') + '||' + (it.op || '') + '||' + (it.machine || ''));
+                        lineSets[it.status].add(it.line);
                     }
                 });
                 const setText = (id, val) => {
@@ -2850,10 +2912,10 @@ function partOrderBadge(string $v): string
                 setText('calCntReminder', counts.reminder);
                 setText('calCntSecure', counts.secure);
 
-                setText('calMachOverdue', machineSets.overdue.size + ' mesin, ' + counts.overdue + ' jadwal');
-                setText('calMachAlert', machineSets.alert.size + ' mesin, ' + counts.alert + ' jadwal');
-                setText('calMachReminder', machineSets.reminder.size + ' mesin, ' + counts.reminder + ' jadwal');
-                setText('calMachSecure', machineSets.secure.size + ' mesin, ' + counts.secure + ' jadwal');
+                setText('calMachOverdue', lineSets.overdue.size + ' line, ' + machineSets.overdue.size + ' mesin, ' + counts.overdue + ' jadwal');
+                setText('calMachAlert', lineSets.alert.size + ' line, ' + machineSets.alert.size + ' mesin, ' + counts.alert + ' jadwal');
+                setText('calMachReminder', lineSets.reminder.size + ' line, ' + machineSets.reminder.size + ' mesin, ' + counts.reminder + ' jadwal');
+                setText('calMachSecure', lineSets.secure.size + ' line, ' + machineSets.secure.size + ' mesin, ' + counts.secure + ' jadwal');
             }
 
             function renderCalendarLive(data) {

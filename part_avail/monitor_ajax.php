@@ -66,6 +66,7 @@ if ($type === 'today' || $type === 'all') {
                 'line'     => $r['line'] ?? '',
                 'op'       => $r['operation_process'] ?? '',
                 'interval' => (int)($r['interval_month'] ?? 0),
+                'qty'      => isset($r['part_qty_needed']) && $r['part_qty_needed'] !== null ? (int)$r['part_qty_needed'] : null,
             ];
         }
     } catch (Exception $e) {
@@ -136,6 +137,7 @@ if ($type === 'schedules' || $type === 'all') {
                 'status_cls'   => remainingClassStr($days, $reminder),
                 'part_order'   => $r['part_order'] ?? 'close',
                 'part_avail'   => $r['part_availability'] ?? 'close',
+                'part_qty'     => isset($r['part_qty_needed']) && $r['part_qty_needed'] !== null ? (int)$r['part_qty_needed'] : null,
                 'maint_status' => $r['maintenance_status'] ?? '',
             ];
         }
