@@ -1744,6 +1744,7 @@ HTML;
                                         $srch = strtolower(($row['machine_name'] ?? '') . ' ' . ($row['maintenance_point'] ?? '') . ' ' . ($row['department'] ?? '') . ' ' . ($row['line'] ?? '') . ' ' . ($row['operation_process'] ?? ''));
                                     ?>
                                         <tr class="sched-row transition-colors"
+                                            data-schedule-id="<?= $row['id'] ?>"
                                             data-line="<?= htmlspecialchars($row['line'] ?? '') ?>"
                                             data-search="<?= htmlspecialchars($srch) ?>">
                                             <td class="px-5 py-3">
@@ -1781,7 +1782,7 @@ HTML;
                                                 <?php endif; ?>
                                             </td>
                                             <td class="px-5 py-3 text-center">
-                                                <span class="badge <?= $msClass ?>"><?= strtoupper($maintSt) ?></span>
+                                                <span class="badge <?= $msClass ?>" data-ms-badge><?= strtoupper($maintSt) ?></span>
                                             </td>
                                             <td class="px-5 py-3 text-center">
                                                 <div class="flex items-center justify-center gap-1.5">
@@ -2029,6 +2030,7 @@ HTML;
                                             $srch = strtolower(($row['machine_name'] ?? '') . ' ' . ($row['maintenance_point'] ?? '') . ' ' . ($row['department'] ?? '') . ' ' . ($row['line'] ?? '') . ' ' . ($row['operation_process'] ?? ''));
                                     ?>
                                             <tr class="prev-sched-row transition-colors"
+                                                data-schedule-id="<?= $row['id'] ?>"
                                                 data-line="<?= htmlspecialchars($row['line'] ?? '') ?>"
                                                 data-search="<?= htmlspecialchars($srch) ?>">
                                                 <td class="px-5 py-3">
@@ -2051,7 +2053,7 @@ HTML;
                                                     <span class="badge <?= $bc ?>"><?= $days ?> DAYS (<?= $st ?>)</span>
                                                 </td>
                                                 <td class="px-5 py-3 text-center">
-                                                    <span class="badge <?= $msClass ?>"><?= strtoupper($maintSt) ?></span>
+                                                    <span class="badge <?= $msClass ?>" data-ms-badge><?= strtoupper($maintSt) ?></span>
                                                 </td>
                                                 <td class="px-5 py-3 text-center">
                                                     <div class="flex items-center justify-center gap-1.5">
@@ -2301,10 +2303,17 @@ HTML;
                         <div>
                             <h3 class="text-base font-bold text-white"><i class="fas fa-clipboard-check mr-2"></i>Form Report Predictive Maintenance</h3>
                             <p class="text-emerald-100 text-xs mt-0.5" id="reportModalMachine">—</p>
+                            <p class="text-emerald-100/80 text-[11px] mt-0.5" id="reportQueueCounter"></p>
                         </div>
                         <button onclick="hideModal('reportModal')" class="text-emerald-100 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition flex-shrink-0">
                             <i class="fas fa-times"></i>
                         </button>
+                    </div>
+                    <div id="reportQueueDone" class="hidden p-8 text-center flex-1 overflow-y-auto">
+                        <i class="fas fa-circle-check text-5xl text-emerald-500 mb-3 block"></i>
+                        <p class="font-bold text-slate-700">Semua pekerjaan sudah dilaporkan 🎉</p>
+                        <p class="text-sm text-slate-400 mt-1">Tidak ada lagi antrean report predictive saat ini.</p>
+                        <button onclick="hideModal('reportModal')" class="mt-4 px-6 py-2 font-bold text-white bg-[#5f0f40] hover:bg-[#4a0b31] rounded-xl transition text-sm">Tutup</button>
                     </div>
                     <form id="reportForm" class="p-5 overflow-y-auto" style="flex:1;">
                         <input type="hidden" name="action" value="submit_report">
@@ -2329,9 +2338,13 @@ HTML;
                         </div>
                         <div class="mb-3">
                             <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Teknisi <span class="text-red-500">*</span></label>
-                            <input type="text" name="teknisi" id="report_teknisi" required
-                                placeholder="Nama teknisi yang mengerjakan..."
-                                class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-4 focus:ring-emerald-100 outline-none transition text-sm">
+                            <select name="teknisi" id="report_teknisi" required
+                                class="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-4 focus:ring-emerald-100 outline-none transition text-sm bg-white">
+                                <option value="">-- Pilih teknisi --</option>
+                                <?php foreach ($technicianList as $tech): ?>
+                                    <option value="<?= htmlspecialchars($tech['name']) ?>"><?= htmlspecialchars($tech['name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
                         </div>
                         <div class="mb-3">
                             <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Basis Jadwal Berikutnya <span class="text-red-500">*</span></label>
@@ -2370,7 +2383,7 @@ HTML;
                         </div>
                         <div id="reportAlert" class="hidden rounded-xl p-3 mb-3 text-sm font-medium border"></div>
                     </form>
-                    <div class="px-5 py-4 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0 bg-white">
+                    <div id="reportModalFooter" class="px-5 py-4 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0 bg-white">
                         <button type="button" onclick="hideModal('reportModal')" class="px-6 py-2 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
                         <button type="button" id="btnSubmitReport" onclick="submitReport()"
                             class="bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-8 py-2 rounded-xl font-black shadow-lg transition text-sm">
@@ -2602,8 +2615,34 @@ HTML;
                     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                 }
 
-                // ── Report modal ──────────────────────────────────
+                // ── Report modal (predictive) ──────────────────────
+                // Antrean pekerjaan yang bisa direport, dibangun dari baris tabel yang
+                // sedang tampil saat modal pertama kali dibuka. Setelah submit sukses,
+                // modal TIDAK ditutup — otomatis lanjut ke job berikutnya di antrean.
+                let reportQueue = [];
+                let reportQueueIndex = -1;
+
+                function buildReportQueue(startId) {
+                    reportQueue = Array.from(document.querySelectorAll('#schedBody tr.sched-row'))
+                        .filter(row => row.querySelector('button[onclick^="showReportModal("]'))
+                        .map(row => ({
+                            id: row.getAttribute('data-schedule-id'),
+                            machineName: row.querySelector('button[onclick^="showReportModal("]')
+                                .getAttribute('onclick').match(/,\s*'([^']*)'/)?.[1] || ''
+                        }));
+                    reportQueueIndex = reportQueue.findIndex(j => String(j.id) === String(startId));
+                }
+
                 function showReportModal(id, machineName) {
+                    buildReportQueue(id);
+                    loadReportJobIntoModal(id, machineName);
+                    showModal('reportModal');
+                }
+
+                function loadReportJobIntoModal(id, machineName) {
+                    document.getElementById('reportQueueDone')?.classList.add('hidden');
+                    document.getElementById('reportForm')?.classList.remove('hidden');
+                    document.getElementById('reportModalFooter')?.classList.remove('hidden');
                     document.getElementById('report_schedule_id').value = id;
                     document.getElementById('reportModalMachine').textContent = machineName;
                     document.getElementById('reportForm').reset();
@@ -2612,6 +2651,7 @@ HTML;
                     document.getElementById('reportAlert').classList.add('hidden');
                     document.getElementById('reportPartWarning').classList.add('hidden');
                     document.getElementById('reportPartOk').classList.add('hidden');
+                    updateReportQueueCounter();
                     // Fetch part status dari server
                     fetch(`?get_schedule=${id}`)
                         .then(r => r.json())
@@ -2626,8 +2666,28 @@ HTML;
                                 'bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm';
                         })
                         .catch(() => {});
-                    showModal('reportModal');
                 }
+
+                function updateReportQueueCounter() {
+                    const el = document.getElementById('reportQueueCounter');
+                    if (!el) return;
+                    const remaining = reportQueue.length - reportQueueIndex - 1;
+                    el.textContent = remaining > 0 ? `${remaining} pekerjaan lagi setelah ini` : 'Pekerjaan terakhir di antrean';
+                }
+
+                function markRowDone(id) {
+                    const row = document.querySelector(`tr.sched-row[data-schedule-id="${id}"]`);
+                    if (row) {
+                        const msBadge = row.querySelector('[data-ms-badge]');
+                        if (msBadge) {
+                            msBadge.textContent = 'DONE';
+                            msBadge.className = 'badge ms-done';
+                        }
+                        const reportBtn = row.querySelector('button[onclick^="showReportModal("]');
+                        if (reportBtn) reportBtn.remove();
+                    }
+                }
+
                 async function submitReport() {
                     // Validasi wajib isi
                     const teknisi = document.getElementById('report_teknisi')?.value?.trim();
@@ -2663,11 +2723,25 @@ HTML;
                             body: fd
                         })).json();
                         if (r.status === 'success') {
-                            showAlert('reportAlert', 'success', '✅ ' + r.message);
-                            setTimeout(() => {
-                                hideModal('reportModal');
-                                location.reload();
-                            }, 1800);
+                            const doneId = document.getElementById('report_schedule_id').value;
+                            markRowDone(doneId);
+                            // Buang job yang baru selesai dari antrean, lalu lanjut ke job
+                            // berikutnya TANPA menutup modal.
+                            reportQueue.splice(reportQueueIndex, 1);
+                            if (reportQueueIndex >= reportQueue.length) reportQueueIndex = reportQueue.length - 1;
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> Submit Report';
+                            btn.className = 'bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm';
+                            if (reportQueue.length > 0) {
+                                const next = reportQueue[reportQueueIndex];
+                                showAlert('reportAlert', 'success', '✅ Tersimpan! Lanjut ke pekerjaan berikutnya...');
+                                setTimeout(() => loadReportJobIntoModal(next.id, next.machineName), 900);
+                            } else {
+                                // Semua pekerjaan di antrean sudah dilaporkan
+                                document.getElementById('reportForm')?.classList.add('hidden');
+                                document.getElementById('reportModalFooter')?.classList.add('hidden');
+                                document.getElementById('reportQueueDone')?.classList.remove('hidden');
+                            }
                         } else {
                             showAlert('reportAlert', 'error', '❌ ' + (r.message || 'Gagal'));
                             btn.disabled = false;
@@ -3289,6 +3363,7 @@ HTML;
                     fd.append('prev_action', 'prev_report_bulk');
 
                     let selectedCount = 0;
+                    const submittedIds = [];
                     for (let idx = 0; idx < jobs.length; idx++) {
                         const cb = document.getElementById(`pmr_check_${idx}`);
                         if (!cb || !cb.checked) continue;
@@ -3309,6 +3384,7 @@ HTML;
                         fd.append(`items[${selectedCount}][teknisi]`, teknisi);
                         fd.append(`items[${selectedCount}][note]`, note);
                         fd.append(`items[${selectedCount}][next_basis]`, basis);
+                        submittedIds.push(jobs[idx].id);
                         selectedCount++;
                     }
 
@@ -3330,12 +3406,34 @@ HTML;
                         })).json();
                         if (r.status === 'success') {
                             al.className = 'rounded-xl p-3 mt-4 text-sm font-medium border bg-green-50 text-green-800 border-green-200';
-                            al.textContent = '✅ ' + r.message;
+                            al.textContent = '✅ ' + r.message + ' Lanjut ke pekerjaan berikutnya...';
                             al.classList.remove('hidden');
+                            // Update baris tabel di belakang tanpa reload halaman.
+                            submittedIds.forEach(id => {
+                                const row = document.querySelector(`tr.prev-sched-row[data-schedule-id="${id}"]`);
+                                if (row) {
+                                    const msBadge = row.querySelector('[data-ms-badge]');
+                                    if (msBadge) {
+                                        msBadge.textContent = 'DONE';
+                                        msBadge.className = 'badge ms-done';
+                                    }
+                                }
+                            });
+                            // Buang job yang baru saja disubmit dari cache client, lalu
+                            // render ulang checklist di DALAM modal yang sama (modal TIDAK
+                            // ditutup) supaya job yang sudah dilaporkan otomatis hilang dan
+                            // user bisa langsung lanjut ke job berikutnya di mesin ini.
+                            const machineName = document.getElementById('prevMachineReportModalMachine').textContent;
+                            if (prevDueJobsData[machineName]) {
+                                prevDueJobsData[machineName] = prevDueJobsData[machineName].filter(j => !submittedIds.includes(j.id));
+                            }
                             setTimeout(() => {
-                                hideModal('prevMachineReportModal');
-                                location.reload();
-                            }, 1500);
+                                showPrevMachineReportModal(machineName);
+                                btn.innerHTML = originalHtml;
+                                // updatePrevMachineReportCount() (dipanggil di dalam
+                                // showPrevMachineReportModal) yang akan menentukan ulang
+                                // disabled/enabled-nya btn sesuai job yang masih dicentang.
+                            }, 900);
                         } else {
                             showErr('❌ ' + (r.message || 'Gagal'));
                             btn.disabled = false;
