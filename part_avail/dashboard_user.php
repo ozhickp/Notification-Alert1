@@ -2,10 +2,7 @@
 include 'config.php';
 session_start();
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
-    header('Location: login_user.php');
-    exit;
-}
+requireRole([ROLE_ADMIN_MAINTENANCE, ROLE_SUPERADMIN]);
 
 if (!function_exists('formatDate') || !function_exists('calculateRemainingDays')) {
     die("Error: Helper functions tidak ditemukan di config.php");
@@ -2169,7 +2166,7 @@ HTML;
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Jumlah Barang Dibutuhkan</label>
+                                <label class="block text-xs font-black text-slate-500 uppercase mb-2">Jumlah Barang Yang Tersedia</label>
                                 <input type="number" name="part_qty_needed" id="edit_part_qty_needed" min="0" step="1"
                                     placeholder="Contoh: 5"
                                     class="w-full border border-slate-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-amber-100 outline-none transition text-sm font-bold">
@@ -2299,17 +2296,17 @@ HTML;
 
             <!-- MODAL: FORM REPORT -->
             <div id="reportModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
-                <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden">
-                    <div class="bg-gradient-to-r from-[#5f0f40] to-[#7a1a5a] px-5 py-3  flex justify-between items-center">
+                <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col" style="max-height:90vh;">
+                    <div class="bg-gradient-to-r from-[#5f0f40] to-[#7a1a5a] px-5 py-3  flex justify-between items-center flex-shrink-0">
                         <div>
                             <h3 class="text-base font-bold text-white"><i class="fas fa-clipboard-check mr-2"></i>Form Report Predictive Maintenance</h3>
                             <p class="text-emerald-100 text-xs mt-0.5" id="reportModalMachine">—</p>
                         </div>
-                        <button onclick="hideModal('reportModal')" class="text-emerald-100 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition">
+                        <button onclick="hideModal('reportModal')" class="text-emerald-100 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition flex-shrink-0">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
-                    <form id="reportForm" class="p-5">
+                    <form id="reportForm" class="p-5 overflow-y-auto" style="flex:1;">
                         <input type="hidden" name="action" value="submit_report">
                         <input type="hidden" name="schedule_id" id="report_schedule_id">
 
@@ -2372,14 +2369,14 @@ HTML;
                                 onchange="document.getElementById('photoNameLabel').textContent=this.files[0]?.name||''; document.getElementById('photoNameLabel').classList.toggle('hidden',!this.files[0])">
                         </div>
                         <div id="reportAlert" class="hidden rounded-xl p-3 mb-3 text-sm font-medium border"></div>
-                        <div class="flex justify-end gap-3">
-                            <button type="button" onclick="hideModal('reportModal')" class="px-6 py-2 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
-                            <button type="button" id="btnSubmitReport" onclick="submitReport()"
-                                class="bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-8 py-2 rounded-xl font-black shadow-lg transition text-sm">
-                                <i class="fas fa-paper-plane mr-1"></i> Submit Report
-                            </button>
-                        </div>
                     </form>
+                    <div class="px-5 py-4 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0 bg-white">
+                        <button type="button" onclick="hideModal('reportModal')" class="px-6 py-2 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
+                        <button type="button" id="btnSubmitReport" onclick="submitReport()"
+                            class="bg-[#5f0f40] hover:bg-[#4a0b31] text-white px-8 py-2 rounded-xl font-black shadow-lg transition text-sm">
+                            <i class="fas fa-paper-plane mr-1"></i> Submit Report
+                        </button>
+                    </div>
                 </div>
             </div>
 

@@ -2,15 +2,30 @@
 session_start();
 require_once __DIR__ . '/config.php';
 
-// Whitelist halaman yang boleh dijadikan redirect tujuan
-$allowed_redirects = ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php', 'dashboard_report.php'];
-$redirect = trim($_GET['redirect'] ?? $_POST['redirect'] ?? '');
-if (!in_array($redirect, $allowed_redirects)) {
-    $redirect = 'dashboard_user.php';
+// Whitelist halaman yang boleh dijadikan redirect tujuan, per role.
+// admin_maintenance tetap seperti role 'user' lama (akses semua 4 halaman).
+// technician & admin_conrod cuma boleh masuk ke e-report.
+$redirect_map = [
+    ROLE_ADMIN_MAINTENANCE => ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php', 'dashboard_report.php'],
+    ROLE_TECHNICIAN        => ['dashboard_report.php'],
+    ROLE_ADMIN_CONROD      => ['dashboard_report.php'],
+];
+
+function resolveRedirect(string $role, string $requested, array $redirect_map): string
+{
+    $allowed = $redirect_map[$role] ?? ['dashboard_report.php'];
+    return in_array($requested, $allowed, true) ? $requested : $allowed[0];
 }
 
-if (isset($_SESSION['user_id'], $_SESSION['role']) && $_SESSION['role'] === 'user') {
-    header('Location: ' . $redirect);
+$requestedRedirect = trim($_GET['redirect'] ?? $_POST['redirect'] ?? '');
+$redirect = in_array($requestedRedirect, ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php', 'dashboard_report.php'], true)
+    ? $requestedRedirect
+    : 'dashboard_user.php'; // dipakai cuma buat isi hidden input form, nilai final tetap dihitung ulang lewat resolveRedirect()
+
+// Kalau sudah login sebagai salah satu role non-superadmin, langsung lempar
+// ke halaman yang sesuai izin rolenya (bukan sekadar $redirect mentah).
+if (isset($_SESSION['user_id'], $_SESSION['role']) && in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_ADMIN_CONROD], true)) {
+    header('Location: ' . resolveRedirect($_SESSION['role'], $requestedRedirect, $redirect_map));
     exit;
 }
 
@@ -23,12 +38,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($identifier) || empty($password)) {
         $error = 'Username/email dan password wajib diisi.';
     } else {
-        // Cari user berdasarkan username ATAU email, role = 'user'
+        // Cari user berdasarkan username ATAU email, role selain superadmin
         $stmt = $pdo->prepare("
             SELECT id, username, email_user, password, role, is_active
             FROM users
             WHERE (username = ? OR email_user = ?)
-              AND role = 'user'
+              AND role IN ('admin_maintenance', 'technician', 'admin_conrod')
             LIMIT 1
         ");
         $stmt->execute([$identifier, $identifier]);
@@ -46,7 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_id']   = $user['id'];
             $_SESSION['username']  = $user['username'];
             $_SESSION['role']      = $user['role'];
-            header('Location: ' . $redirect);
+            header('Location: ' . resolveRedirect($user['role'], $requestedRedirect, $redirect_map));
             exit;
         }
     }

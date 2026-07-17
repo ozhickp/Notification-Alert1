@@ -51,7 +51,7 @@ function getActiveAdmins(PDO $pdo): array
 {
   $stmt = $pdo->prepare("
         SELECT username, email_user FROM users
-        WHERE role = 'admin' AND is_active = 1
+        WHERE role = 'superadmin' AND is_active = 1
           AND email_user != '' AND email_user IS NOT NULL
     ");
   $stmt->execute();

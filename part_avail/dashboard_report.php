@@ -5,7 +5,9 @@ require_once __DIR__ . '/config.php';
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-if (!isset($_SESSION['user_id'])) {
+// E-Report bisa diakses semua role yang login: admin_maintenance, technician,
+// admin_conrod, dan superadmin.
+if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_ADMIN_CONROD, ROLE_SUPERADMIN], true)) {
     // Jika AJAX, kembalikan JSON error agar JS bisa handle
     if (isset($_GET['ajax'])) {
         header('Content-Type: application/json');

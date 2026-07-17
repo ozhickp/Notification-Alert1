@@ -2,10 +2,7 @@
 session_start();
 include 'config.php';
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
-    header('Location: login_user.php');
-    exit;
-}
+requireRole([ROLE_ADMIN_MAINTENANCE, ROLE_SUPERADMIN]);
 
 require 'vendor/autoload.php';
 

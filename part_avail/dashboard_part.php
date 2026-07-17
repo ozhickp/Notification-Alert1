@@ -2,10 +2,7 @@
 include 'config.php';
 session_start();
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
-    header('Location: login_user.php');
-    exit;
-}
+requireRole([ROLE_ADMIN_MAINTENANCE, ROLE_SUPERADMIN]);
 
 // Ambil nama user yang sedang login
 $stmtUser = $pdo->prepare("SELECT username FROM users WHERE id = ?");

@@ -1,12 +1,9 @@
 <?php
 session_start();
-
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    header('Location: login_admin.php');
-    exit;
-}
-
 include 'config.php';
+
+// [FIX] role 'admin' lama sekarang jadi 'superadmin'
+requireRole([ROLE_SUPERADMIN], 'login_admin.php');
 
 if (!function_exists('formatDate') || !function_exists('calculateRemainingDays')) {
     die("Error: Helper functions tidak ditemukan di config.php");
@@ -212,7 +209,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $_POST['username'] ?? '',
                 $_POST['email'] ?? '',
                 $hashedPass,
-                $_POST['role'] ?? 'user',
+                $_POST['role'] ?? 'admin_maintenance',
             ]);
             echo json_encode(['status' => 'success', 'message' => 'User berhasil ditambahkan']);
             exit;
@@ -358,14 +355,14 @@ try {
 
 $users = [];
 try {
-    $users = $pdo->query("SELECT id, username, email_user, role, is_active FROM users WHERE role = 'user' ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
+    $users = $pdo->query("SELECT id, username, email_user, role, is_active FROM users WHERE role IN ('admin_maintenance','technician','admin_conrod') ORDER BY id DESC")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log('Error fetching users: ' . $e->getMessage());
 }
 
 $notif_admins = [];
 try {
-    $notif_admins = $pdo->query("SELECT id, username AS name, email_user AS email FROM users WHERE role = 'admin' ORDER BY username ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $notif_admins = $pdo->query("SELECT id, username AS name, email_user AS email FROM users WHERE role = 'superadmin' ORDER BY username ASC")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     error_log('Error fetching admin notif: ' . $e->getMessage());
 }
@@ -1525,7 +1522,9 @@ $prevSchedByStatus = [
                 <div>
                     <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Role</label>
                     <select name="role" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none bg-white">
-                        <option value="user" selected>User</option>
+                        <option value="admin_maintenance" selected>Admin Maintenance</option>
+                        <option value="technician">Technician</option>
+                        <option value="admin_conrod">Admin Conrod</option>
                     </select>
                 </div>
                 <div class="flex justify-end gap-3 pt-2">
@@ -1561,8 +1560,10 @@ $prevSchedByStatus = [
                 <div>
                     <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Role</label>
                     <select name="role" id="eu_role" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none bg-white">
-                        <option value="user">User</option>
-                        <option value="admin">Admin</option>
+                        <option value="admin_maintenance">Admin Maintenance</option>
+                        <option value="technician">Technician</option>
+                        <option value="admin_conrod">Admin Conrod</option>
+                        <option value="superadmin">Superadmin</option>
                     </select>
                 </div>
                 <div class="flex justify-end gap-3 pt-2">

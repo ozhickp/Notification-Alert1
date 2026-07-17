@@ -6,7 +6,7 @@ ini_set('memory_limit', '512M'); // [FIX-1] Naikkan dari 256M
 session_start();
 include 'config.php';
 
-if (!isset($_SESSION['user_id'])) {
+if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_ADMIN_CONROD, ROLE_SUPERADMIN], true)) {
     header('Location: login_user.php');
     exit;
 }

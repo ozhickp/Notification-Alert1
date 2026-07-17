@@ -28,11 +28,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($stmt->fetch()) {
             $error = 'Username atau email sudah digunakan.';
         } else {
-            // Simpan user baru dengan role = 'user'
+            // Simpan user baru dengan role = 'admin_maintenance' (setara role 'user' lama)
             $hashed = password_hash($password, PASSWORD_BCRYPT);
             $stmt = $pdo->prepare("
                 INSERT INTO users (username, email_user, password, role, is_active, created_at)
-                VALUES (?, ?, ?, 'user', 1, NOW())
+                VALUES (?, ?, ?, 'admin_maintenance', 1, NOW())
             ");
             $stmt->execute([$username, $email, $hashed]);
             $success = 'Akun berhasil dibuat! Silakan login.';

@@ -30,10 +30,7 @@ function partJsonOut(array $data): void
     echo json_encode($data);
 }
 
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
-    partJsonOut(['status' => 'error', 'message' => 'Unauthorized']);
-    exit;
-}
+requireRoleJson([ROLE_ADMIN_MAINTENANCE, ROLE_SUPERADMIN], 'partJsonOut');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_FILES['excel_file'])) {
     partJsonOut(['status' => 'error', 'message' => 'Tidak ada file yang dikirim']);

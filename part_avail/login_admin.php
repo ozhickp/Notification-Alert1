@@ -4,7 +4,7 @@ session_start();
 require_once __DIR__ . '/config.php';
 
 // Redirect jika sudah login sebagai admin
-if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'admin') {
+if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'superadmin') {
     header('Location: dashboard_admin.php');
     exit;
 }
@@ -18,12 +18,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($identifier) || empty($password)) {
         $error = 'Username/email dan password wajib diisi.';
     } else {
-        // Cari user dengan role = 'admin'
+        // Cari user dengan role = 'superadmin'
         $stmt = $pdo->prepare("
             SELECT id, username, email_user, password, role, is_active
             FROM users
             WHERE (username = ? OR email_user = ?)
-              AND role = 'admin'
+              AND role = 'superadmin'
             LIMIT 1
         ");
         $stmt->execute([$identifier, $identifier]);
