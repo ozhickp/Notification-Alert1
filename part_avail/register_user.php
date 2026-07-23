@@ -11,9 +11,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email    = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
     $confirm  = $_POST['confirm_password'] ?? '';
+    $role     = trim($_POST['role'] ?? '');
+
+    // Whitelist role yang boleh dipilih lewat form publik ini
+    $allowedRoles = ['admin_maintenance', 'admin_conrod', 'technician'];
 
     // Validasi
-    if (empty($username) || empty($email) || empty($password)) {
+    if (empty($username) || empty($email) || empty($password) || empty($role)) {
         $error = 'Semua field wajib diisi.';
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $error = 'Format email tidak valid.';
@@ -21,6 +25,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Password minimal 6 karakter.';
     } elseif ($password !== $confirm) {
         $error = 'Konfirmasi password tidak cocok.';
+    } elseif (!in_array($role, $allowedRoles, true)) {
+        $error = 'Role tidak valid.';
     } else {
         // Cek duplikat username / email
         $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ? OR email_user = ? LIMIT 1");
@@ -28,14 +34,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($stmt->fetch()) {
             $error = 'Username atau email sudah digunakan.';
         } else {
-            // Simpan user baru dengan role = 'admin_maintenance' (setara role 'user' lama)
+            // Simpan user baru dengan role sesuai pilihan (admin_maintenance / admin_conrod / technician)
             $hashed = password_hash($password, PASSWORD_BCRYPT);
             $stmt = $pdo->prepare("
                 INSERT INTO users (username, email_user, password, role, is_active, created_at)
-                VALUES (?, ?, ?, 'admin_maintenance', 1, NOW())
+                VALUES (?, ?, ?, ?, 1, NOW())
             ");
-            $stmt->execute([$username, $email, $hashed]);
-            $success = 'Akun berhasil dibuat! Silakan login.';
+            $stmt->execute([$username, $email, $hashed, $role]);
+            header('Location: login_user.php?registered=1');
+            exit;
         }
     }
 }
@@ -219,6 +226,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         value="<?= htmlspecialchars($_POST['email'] ?? '') ?>"
                         placeholder="john@contoh.com"
                         class="input-field w-full rounded-xl px-4 py-3 text-sm text-slate-900" />
+                </div>
+
+                <!-- Role -->
+                <div>
+                    <label class="label-text block mb-1.5">Role</label>
+                    <select name="role" required
+                        class="input-field w-full rounded-xl px-4 py-3 text-sm text-slate-900">
+                        <option value="" disabled <?= empty($_POST['role']) ? 'selected' : '' ?>>— Pilih Role —</option>
+                        <option value="admin_maintenance" <?= (($_POST['role'] ?? '') === 'admin_maintenance') ? 'selected' : '' ?>>Admin Maintenance</option>
+                        <option value="technician" <?= (($_POST['role'] ?? '') === 'technician') ? 'selected' : '' ?>>Technician</option>
+                        <option value="admin_conrod" <?= (($_POST['role'] ?? '') === 'admin_conrod') ? 'selected' : '' ?>>Admin Conrod</option>
+                    </select>
                 </div>
 
                 <!-- Password -->

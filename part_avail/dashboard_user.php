@@ -815,6 +815,43 @@ $stmt->execute();
 $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $stmt->closeCursor();
 
+// ── FALLBACK TAMPILAN: beberapa baris lama menyimpan department/line ────────
+// sebagai ID angka (mis. "1") bukan nama string ("Connecting Rod", "Conrod 1").
+// Tanpa mengubah data di DB, terjemahkan ID → nama dengan mencocokkan
+// machine_name + operation_process ke machine_list (yang selalu berisi nama).
+// (Sama persis dengan fallback yang sudah ada untuk schedules_preventive di bawah.)
+$schedNeedsLookup = array_filter($schedules, function ($r) {
+    return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
+        || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
+});
+if (!empty($schedNeedsLookup)) {
+    $stmtMlSched = $pdo->prepare(
+        "SELECT department, `line`, machine_name, op
+         FROM machine_list
+         WHERE machine_name = ? AND op = ?
+         LIMIT 1"
+    );
+    foreach ($schedules as &$schedRow) {
+        $deptIsId = isset($schedRow['department']) && $schedRow['department'] !== '' && ctype_digit((string)$schedRow['department']);
+        $lineIsId = isset($schedRow['line']) && $schedRow['line'] !== '' && ctype_digit((string)$schedRow['line']);
+        if (!$deptIsId && !$lineIsId) {
+            continue;
+        }
+        $stmtMlSched->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '']);
+        $mlRowSched = $stmtMlSched->fetch(PDO::FETCH_ASSOC);
+        $stmtMlSched->closeCursor();
+        if ($mlRowSched) {
+            if ($deptIsId) {
+                $schedRow['department'] = $mlRowSched['department'];
+            }
+            if ($lineIsId) {
+                $schedRow['line'] = $mlRowSched['line'];
+            }
+        }
+    }
+    unset($schedRow);
+}
+
 // ── Preventive Maintenance data ───────────────────────────────────────────────
 // Setiap UPDATE dipisah ke try-catch sendiri agar jika kolom tidak ada (misal
 // part_order/part_availability tidak ada di tabel preventive), SELECT data tetap

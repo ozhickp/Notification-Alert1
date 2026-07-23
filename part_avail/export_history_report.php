@@ -11,6 +11,10 @@ if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role
     exit;
 }
 
+// admin_conrod cuma boleh export laporan yang dia buat sendiri.
+$isConrodOnly    = ($_SESSION['role'] === ROLE_ADMIN_CONROD);
+$currentUsername = $_SESSION['username'] ?? '';
+
 require 'vendor/autoload.php';
 
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -40,6 +44,11 @@ if ($mode === 'daily') {
     $filename     = 'History_EReport_monthly_' . implode('_', $dtParts) . '.xlsx';
 } else {
     die('Mode tidak valid.');
+}
+
+// admin_conrod cuma export laporan yang dia buat sendiri (format Excel tetap sama)
+if ($isConrodOnly) {
+    $whereDate .= " AND r.reported_by = " . $pdo->quote($currentUsername);
 }
 
 // ── Query ─────────────────────────────────────────────────────────────────────

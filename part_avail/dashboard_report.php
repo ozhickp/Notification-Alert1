@@ -18,6 +18,23 @@ if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role
     exit;
 }
 $reportedBy = $_SESSION['username'] ?? 'Unknown';
+$role       = $_SESSION['role'];
+
+// Label yang tampil di UI untuk role saat ini (topbar), supaya user selalu
+// tahu dia sedang login sebagai apa.
+$roleLabels = [
+    ROLE_SUPERADMIN        => 'Superadmin',
+    ROLE_ADMIN_MAINTENANCE => 'Admin Maintenance',
+    ROLE_TECHNICIAN        => 'Technician',
+    ROLE_ADMIN_CONROD      => 'Admin Conrod',
+];
+$roleLabel = $roleLabels[$role] ?? $role;
+
+// admin_conrod hanya mengisi laporan AWAL (Shift + Problem + Repair Start).
+// admin_maintenance, technician, & superadmin punya form penuh + tab "Lanjutan"
+// untuk menindaklanjuti laporan awal dari admin_conrod.
+$isConrodOnly = ($role === ROLE_ADMIN_CONROD);
+$canFollowUp  = in_array($role, [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_SUPERADMIN], true);
 
 // ─── AJAX ─────────────────────────────────────────────────────────────────────
 if (isset($_GET['ajax'])) {
@@ -28,18 +45,37 @@ if (isset($_GET['ajax'])) {
         echo json_encode($rows);
         exit;
     }
+    // Daftar foreman untuk dropdown admin_conrod — dari tabel master `foreman`.
+    if ($_GET['ajax'] === 'foremen') {
+        $rows = $pdo->query("SELECT id, name FROM foreman WHERE is_active = 1 ORDER BY name")->fetchAll();
+        echo json_encode($rows);
+        exit;
+    }
     if ($_GET['ajax'] === 'departments') {
+        if ($isConrodOnly) {
+            // admin_conrod cuma boleh isi laporan untuk department Connecting Rod
+            echo json_encode(['Connecting Rod']);
+            exit;
+        }
         $rows = $pdo->query("SELECT DISTINCT department FROM machine_list ORDER BY department")->fetchAll();
         echo json_encode(array_column($rows, 'department'));
         exit;
     }
     if ($_GET['ajax'] === 'lines' && isset($_GET['department'])) {
+        if ($isConrodOnly && strtolower(trim($_GET['department'])) !== 'connecting rod') {
+            echo json_encode([]);
+            exit;
+        }
         $stmt = $pdo->prepare("SELECT DISTINCT `line` FROM machine_list WHERE department = ? ORDER BY `line`");
         $stmt->execute([$_GET['department']]);
         echo json_encode(array_column($stmt->fetchAll(), 'line'));
         exit;
     }
     if ($_GET['ajax'] === 'ops' && isset($_GET['department'], $_GET['line'])) {
+        if ($isConrodOnly && strtolower(trim($_GET['department'])) !== 'connecting rod') {
+            echo json_encode([]);
+            exit;
+        }
         // Power House tidak memiliki OP — langsung kembalikan ['-']
         if (strtoupper(trim($_GET['department'])) === 'POWER HOUSE') {
             echo json_encode(['-']);
@@ -52,6 +88,10 @@ if (isset($_GET['ajax'])) {
         exit;
     }
     if ($_GET['ajax'] === 'machine_list' && isset($_GET['department'], $_GET['line'], $_GET['op'])) {
+        if ($isConrodOnly && strtolower(trim($_GET['department'])) !== 'connecting rod') {
+            echo json_encode([]);
+            exit;
+        }
         $stmt = $pdo->prepare("SELECT machine_name, machine_type FROM machine_list WHERE department = ? AND `line` = ? AND op = ? ORDER BY machine_name");
         $stmt->execute([$_GET['department'], $_GET['line'], $_GET['op']]);
         echo json_encode($stmt->fetchAll());
@@ -64,9 +104,14 @@ if (isset($_GET['ajax'])) {
     // laporan yang sudah dilanjutkan & ditutup oleh follow-up tidak ikut muncul di sini.
     if ($_GET['ajax'] === 'pending_followups') {
         $rows = $pdo->query("
-            SELECT r.id, r.department, r.line, r.op, r.machine_name, r.problem,
-                   r.reported_by, r.pic, r.report_date, r.created_at
+            SELECT r.id, r.department, r.line, r.op, r.machine_name, r.machine_type, r.problem,
+                   r.reported_by, r.pic, r.report_date, r.created_at, r.foreman,
+                   CASE
+                       WHEN r.foreman IS NOT NULL AND r.foreman <> '' THEN 'admin_conrod'
+                       ELSE COALESCE(u.role, 'admin_maintenance')
+                   END AS source_role
             FROM e_reports r
+            LEFT JOIN users u ON u.username = r.reported_by
             WHERE r.parent_id IS NULL
               AND r.status = 'belum selesai'
               AND NOT EXISTS (
@@ -78,6 +123,92 @@ if (isset($_GET['ajax'])) {
         echo json_encode($rows);
         exit;
     }
+
+    // ─── Tab "Lanjutan": simpan follow-up dari laporan awal admin_conrod ──────
+    // Hanya admin_maintenance / technician / superadmin yang boleh menutup/menindaklanjuti.
+    if ($_GET['ajax'] === 'add_followup' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (!$canFollowUp) {
+            echo json_encode(['success' => false, 'message' => 'Anda tidak memiliki akses untuk fitur ini.']);
+            exit;
+        }
+
+        $sourceId = (int)($_POST['source_id'] ?? 0);
+        if (!$sourceId) {
+            echo json_encode(['success' => false, 'message' => 'Pilih laporan pending yang ingin ditindaklanjuti.']);
+            exit;
+        }
+
+        $src = $pdo->prepare("SELECT department, `line`, op, machine_name, machine_type, report_date, parent_id FROM e_reports WHERE id = ?");
+        $src->execute([$sourceId]);
+        $orig = $src->fetch();
+        if (!$orig) {
+            echo json_encode(['success' => false, 'message' => 'Laporan sumber tidak ditemukan.']);
+            exit;
+        }
+
+        $startDate       = trim($_POST['start_date']  ?? '');
+        $startTime       = trim($_POST['start_time']  ?? '');
+        $finishDate      = trim($_POST['finish_date'] ?? '');
+        $finishTime      = trim($_POST['finish_time'] ?? '');
+        $shift           = trim($_POST['shift']       ?? '');
+        $pic             = trim($_POST['pic']         ?? '');
+        $problem         = trim($_POST['problem']     ?? '');
+        $action          = trim($_POST['action']      ?? '');
+        $status          = trim($_POST['status']      ?? '');
+        $durationMinutes = isset($_POST['duration_minutes']) && $_POST['duration_minutes'] !== ''
+            ? (int)$_POST['duration_minutes'] : null;
+
+        if (!$startDate || !$startTime || !$pic || !$problem || !$action || !$shift || !$status) {
+            echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib.']);
+            exit;
+        }
+        if (!in_array($shift, ['Shift 1', 'Shift 2', 'Shift 3'], true)) {
+            echo json_encode(['success' => false, 'message' => 'Shift tidak valid.']);
+            exit;
+        }
+        if (!in_array($status, ['selesai', 'belum selesai'], true)) {
+            echo json_encode(['success' => false, 'message' => 'Keterangan / status tidak valid.']);
+            exit;
+        }
+
+        $startDatetime  = $startDate . ' ' . $startTime . ':00';
+        $finishDatetime = ($finishDate && $finishTime) ? $finishDate . ' ' . $finishTime . ':00' : null;
+
+        // Root = laporan paling pertama dalam rangkaian ini.
+        $rootId = $orig['parent_id'] ?: $sourceId;
+
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO e_reports
+                  (parent_id, department, `line`, op, shift, machine_name, machine_type, report_date,
+                   repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ");
+            $stmt->execute([
+                $rootId,
+                $orig['department'],
+                $orig['line'],
+                $orig['op'],
+                $shift,
+                $orig['machine_name'],
+                $orig['machine_type'],
+                $orig['report_date'],
+                $startDatetime,
+                $finishDatetime,
+                $durationMinutes,
+                $reportedBy,
+                $pic,
+                $problem,
+                $action,
+                $status,
+            ]);
+            echo json_encode(['success' => true, 'message' => 'Informasi lanjutan berhasil disimpan.']);
+        } catch (\Exception $e) {
+            echo json_encode(['success' => false, 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
     echo json_encode(['error' => 'Unknown request']);
     exit;
 }
@@ -94,41 +225,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
     $reportDate      = trim($_POST['report_date']     ?? '');
     $startDate       = trim($_POST['start_date']      ?? '');
     $startTime       = trim($_POST['start_time']      ?? '');
-    $finishDate      = trim($_POST['finish_date']     ?? '');
-    $finishTime      = trim($_POST['finish_time']     ?? '');
-    $pic             = trim($_POST['pic']             ?? '');
     $problem         = trim($_POST['problem']         ?? '');
-    $action          = trim($_POST['action']          ?? '');
     $reportedBy      = trim($_POST['reported_by']     ?? '');
     $shift           = trim($_POST['shift']           ?? '');
-    $status          = trim($_POST['status']          ?? '');
-    $durationMinutes = isset($_POST['duration_minutes']) && $_POST['duration_minutes'] !== ''
-        ? (int)$_POST['duration_minutes'] : null;
 
-    if (!$dept || !$line || !$machineName || !$startTime || !$pic || !$problem || !$action || !$shift || !$status) {
-        echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib (termasuk Shift & Keterangan).']);
-        exit;
+    if ($isConrodOnly) {
+        // ── Laporan Awal (admin_conrod): Shift + Foreman + Problem + Repair Start saja ──
+        $foreman         = trim($_POST['foreman'] ?? '');
+        $pic             = null;
+        $action          = null;
+        $finishDatetime  = null;
+        $durationMinutes = null;
+        $status          = 'belum selesai'; // otomatis: laporan awal, belum ada tindakan
+
+        if (!$dept || !$line || !$machineName || !$startDate || !$startTime || !$problem || !$shift || !$foreman) {
+            echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib (Department, Line, Mesin, Waktu Kejadian, Shift, Foreman, Problem).']);
+            exit;
+        }
+        if (strtolower($dept) !== 'connecting rod') {
+            echo json_encode(['success' => false, 'message' => 'Admin Conrod hanya boleh membuat laporan untuk department Connecting Rod.']);
+            exit;
+        }
+        if (!in_array($shift, ['Shift 1', 'Shift 2', 'Shift 3'], true)) {
+            echo json_encode(['success' => false, 'message' => 'Shift tidak valid.']);
+            exit;
+        }
+        $startDatetime = $startDate . ' ' . $startTime . ':00';
+    } else {
+        // ── Form penuh (admin_maintenance / technician / superadmin) ──
+        $foreman         = null;
+        $finishDate      = trim($_POST['finish_date']     ?? '');
+        $finishTime      = trim($_POST['finish_time']     ?? '');
+        $pic             = trim($_POST['pic']             ?? '');
+        $action          = trim($_POST['action']          ?? '');
+        $status          = trim($_POST['status']          ?? '');
+        $durationMinutes = isset($_POST['duration_minutes']) && $_POST['duration_minutes'] !== ''
+            ? (int)$_POST['duration_minutes'] : null;
+
+        if (!$dept || !$line || !$machineName || !$startTime || !$pic || !$problem || !$action || !$shift || !$status) {
+            echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib (termasuk Shift & Keterangan).']);
+            exit;
+        }
+        if (!in_array($shift, ['Shift 1', 'Shift 2', 'Shift 3'], true)) {
+            echo json_encode(['success' => false, 'message' => 'Shift tidak valid.']);
+            exit;
+        }
+        if (!in_array($status, ['selesai', 'belum selesai'], true)) {
+            echo json_encode(['success' => false, 'message' => 'Keterangan / status tidak valid.']);
+            exit;
+        }
+
+        $startDatetime  = $startDate . ' ' . $startTime . ':00';
+        $finishDatetime = ($finishDate && $finishTime) ? $finishDate . ' ' . $finishTime . ':00' : null;
     }
-
-    if (!in_array($shift, ['Shift 1', 'Shift 2', 'Shift 3'], true)) {
-        echo json_encode(['success' => false, 'message' => 'Shift tidak valid.']);
-        exit;
-    }
-
-    if (!in_array($status, ['selesai', 'belum selesai'], true)) {
-        echo json_encode(['success' => false, 'message' => 'Keterangan / status tidak valid.']);
-        exit;
-    }
-
-    $startDatetime  = $startDate . ' ' . $startTime . ':00';
-    $finishDatetime = ($finishDate && $finishTime) ? $finishDate . ' ' . $finishTime . ':00' : null;
 
     try {
         $stmt = $pdo->prepare("
             INSERT INTO e_reports
               (department, `line`, op, shift, machine_name, machine_type, report_date,
-               repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+               repair_start, repair_finish, duration_minutes, reported_by, foreman, pic, problem, action, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
         $stmt->execute([
             $dept,
@@ -142,6 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             $finishDatetime,
             $durationMinutes,
             $reportedBy,
+            $foreman,
             $pic,
             $problem,
             $action,
@@ -511,6 +668,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             transform: scale(.98);
         }
 
+        /* ── Tab switcher: Laporan Baru / Lanjutan ──────────────────────────────── */
+        .report-tab-group {
+            display: flex;
+            gap: 4px;
+            background: #f1f5f9;
+            border-radius: 10px;
+            padding: 3px;
+        }
+
+        .report-tab-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 14px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: #64748b;
+            font-size: .78rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+            font-family: inherit;
+            white-space: nowrap;
+        }
+
+        .report-tab-btn:hover {
+            color: #1e293b;
+        }
+
+        .report-tab-btn.active {
+            background: #fff;
+            color: #1e293b;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .12);
+        }
+
         /* ── Choice button group (Shift & Keterangan) ───────────────────────────── */
         .choice-btn-group {
             display: flex;
@@ -730,6 +923,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             margin-top: 5px;
         }
 
+        .src-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 1px 7px;
+            border-radius: 999px;
+            font-size: .64rem;
+            font-weight: 800;
+            letter-spacing: .02em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .src-badge .sb-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+        }
+
         .pi-btn-selesaikan {
             display: inline-flex;
             align-items: center;
@@ -845,7 +1057,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                     <div class="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0" style="background:#fb8b24;">
                         <i class="fas fa-user text-white" style="font-size:.65rem;"></i>
                     </div>
-                    <span class="text-sm font-bold text-slate-700"><?= htmlspecialchars($reportedBy) ?></span>
+                    <div class="leading-tight">
+                        <div class="text-sm font-bold text-slate-700"><?= htmlspecialchars($reportedBy) ?></div>
+                        <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider"><?= htmlspecialchars($roleLabel) ?></div>
+                    </div>
                 </div>
                 <a href="logout_user.php" onclick="return confirm('Apakah Anda yakin ingin keluar?')"
                     class="bg-red-100 hover:bg-red-200 text-red-600 px-4 py-1.5 rounded-xl font-bold transition-all flex items-center gap-2 text-sm">
@@ -941,133 +1156,356 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                 <div class="flex-1 min-w-0">
                     <div class="right-panel h-full">
 
-                        <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2.5 flex-shrink-0">
+                        <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2.5 flex-shrink-0 flex-wrap">
                             <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#1e293b;">
                                 <i class="fas fa-file-medical-alt text-white text-xs"></i>
                             </div>
-                            <div>
-                                <div class="text-sm font-bold text-slate-800">Form E-Report</div>
-                                <div class="text-[11px] text-slate-400 font-medium">Isi detail kerusakan dan tindakan perbaikan</div>
+                            <div class="mr-auto">
+                                <div class="text-sm font-bold text-slate-800">
+                                    <?= $isConrodOnly ? 'Form E-Report — Laporan Awal' : 'Form E-Report' ?>
+                                </div>
+                                <div class="text-[11px] text-slate-400 font-medium">
+                                    <?= $isConrodOnly
+                                        ? 'Laporkan kerusakan mesin yang ditemukan'
+                                        : 'Isi detail kerusakan dan tindakan perbaikan' ?>
+                                </div>
                             </div>
+                            <?php if ($canFollowUp): ?>
+                                <div class="report-tab-group" id="report-tab-group">
+                                    <button type="button" class="report-tab-btn active" id="tab-btn-baru" onclick="switchReportTab('baru')">
+                                        <i class="fas fa-plus-circle"></i> Laporan Baru
+                                    </button>
+                                    <button type="button" class="report-tab-btn" id="tab-btn-lanjutan" onclick="switchReportTab('lanjutan')">
+                                        <i class="fas fa-link"></i> Lanjutan
+                                    </button>
+                                </div>
+                            <?php endif; ?>
                         </div>
 
-                        <div class="flex-1 overflow-y-auto p-5">
-                            <div class="grid grid-cols-3 gap-x-5 gap-y-4 max-w-3xl">
+                        <?php if ($isConrodOnly): ?>
+                            <!-- ═══ FORM LAPORAN AWAL (admin_conrod) ═══ -->
+                            <div class="flex-1 overflow-y-auto p-5" id="panel-awal">
+                                <div class="grid grid-cols-3 gap-x-5 gap-y-4 max-w-3xl">
 
-                                <!-- Repair Start -->
-                                <div class="col-span-2">
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-play-circle text-slate-300 mr-1"></i> Repair Start <span class="text-red-400">*</span>
-                                    </label>
-                                    <div class="flex gap-2">
-                                        <input type="date" id="inp-start-date" class="form-field" style="flex:1;" oninput="calcDuration()">
-                                        <input type="time" id="inp-start-time" class="form-field" style="flex:1;" oninput="calcDuration(); checkAllFieldsFilled();">
+                                    <!-- Repair Start (waktu kejadian) -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-play-circle text-slate-300 mr-1"></i> Waktu Kejadian <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="flex gap-2">
+                                            <input type="date" id="inp-start-date" class="form-field" style="flex:1;">
+                                            <input type="time" id="inp-start-time" class="form-field" style="flex:1;">
+                                        </div>
+                                        <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
                                     </div>
-                                    <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
-                                </div>
 
-                                <!-- Repair Finish -->
-                                <div class="col-span-2">
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-stop-circle text-slate-300 mr-1"></i> Repair Finish <span class="text-red-400">*</span>
-                                    </label>
-                                    <div class="flex gap-2">
-                                        <input type="date" id="inp-finish-date" class="form-field" style="flex:1;" oninput="calcDuration()">
-                                        <input type="time" id="inp-finish-time" class="form-field" style="flex:1;" oninput="calcDuration()">
+                                    <!-- Reported By -->
+                                    <div>
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user text-slate-300 mr-1"></i> Reported By
+                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
+                                        </label>
+                                        <input type="text" id="inp-reported-by" class="form-field"
+                                            value="<?= htmlspecialchars($reportedBy) ?>" readonly>
                                     </div>
-                                    <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
-                                </div>
 
-                                <!-- Durasi + Reported By + PIC — 3 kolom dalam 1 baris -->
-                                <div>
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-clock text-slate-300 mr-1"></i> Durasi
-                                        <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
-                                    </label>
-                                    <input type="text" id="inp-duration-display" class="form-field" readonly
-                                        placeholder="—" style="cursor:default;font-variant-numeric:tabular-nums;">
-                                    <input type="hidden" id="inp-duration-minutes">
-                                    <div class="text-[10px] text-slate-400 mt-1">Dari Start &amp; Finish</div>
-                                </div>
-
-                                <!-- Reported By -->
-                                <div>
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-user text-slate-300 mr-1"></i> Reported By
-                                        <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
-                                    </label>
-                                    <input type="text" id="inp-reported-by" class="form-field"
-                                        value="<?= htmlspecialchars($reportedBy) ?>" readonly>
-                                </div>
-
-                                <!-- PIC / Technician -->
-                                <div>
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-user-cog text-slate-300 mr-1"></i> PIC / Technician <span class="text-red-400">*</span>
-                                    </label>
-                                    <select id="inp-pic" class="form-field">
-                                        <option value="">— Pilih Teknisi —</option>
-                                    </select>
-                                </div>
-
-                                <!-- Shift -->
-                                <div class="col-span-3">
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-user-clock text-slate-300 mr-1"></i> Shift <span class="text-red-400">*</span>
-                                    </label>
-                                    <div class="choice-btn-group" id="shift-btn-group" style="max-width:420px;">
-                                        <button type="button" class="choice-btn" data-val="Shift 1" onclick="setShift(this)">Shift 1</button>
-                                        <button type="button" class="choice-btn" data-val="Shift 2" onclick="setShift(this)">Shift 2</button>
-                                        <button type="button" class="choice-btn" data-val="Shift 3" onclick="setShift(this)">Shift 3</button>
+                                    <!-- Shift -->
+                                    <div>
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user-clock text-slate-300 mr-1"></i> Shift <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="choice-btn-group" id="shift-btn-group">
+                                            <button type="button" class="choice-btn" data-val="Shift 1" onclick="setShift(this)">Shift 1</button>
+                                            <button type="button" class="choice-btn" data-val="Shift 2" onclick="setShift(this)">Shift 2</button>
+                                            <button type="button" class="choice-btn" data-val="Shift 3" onclick="setShift(this)">Shift 3</button>
+                                        </div>
+                                        <input type="hidden" id="inp-shift" value="">
                                     </div>
-                                    <input type="hidden" id="inp-shift" value="">
-                                </div>
 
-                                <!-- Problem / Alarm — full width -->
-                                <div class="col-span-2">
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm <span class="text-red-400">*</span>
-                                    </label>
-                                    <textarea id="inp-problem" class="form-field"
-                                        placeholder="Deskripsi masalah atau kode alarm yang muncul..."
-                                        style="min-height:80px;"></textarea>
-                                </div>
-
-                                <!-- Action — full width, bigger -->
-                                <div class="col-span-2">
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-tools text-slate-300 mr-1"></i> Action / Perbaikan <span class="text-red-400">*</span>
-                                    </label>
-                                    <textarea id="inp-action" class="form-field"
-                                        placeholder="Jelaskan langkah-langkah perbaikan yang dilakukan secara detail. Sertakan part yang diganti, settingan yang diubah, hasil pengujian, dan catatan penting lainnya..."
-                                        style="min-height:130px;"></textarea>
-                                </div>
-
-                                <!-- Keterangan (status selesai / belum selesai) -->
-                                <div class="col-span-3">
-                                    <label class="form-label block mb-1.5">
-                                        <i class="fas fa-flag text-slate-300 mr-1"></i> Keterangan Pekerjaan<span class="text-red-400">*</span>
-                                    </label>
-                                    <div class="choice-btn-group" id="status-btn-group" style="max-width:420px;">
-                                        <button type="button" class="choice-btn" data-val="selesai" onclick="setStatus(this)">
-                                            <i class="fas fa-check-circle"></i> Selesai
-                                        </button>
-                                        <button type="button" class="choice-btn" data-val="belum selesai" onclick="setStatus(this)">
-                                            <i class="fas fa-clock"></i> Belum Selesai
-                                        </button>
+                                    <!-- Foreman (mengisi sisa ruang di samping Shift) -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user-hard-hat text-slate-300 mr-1"></i> Foreman <span class="text-red-400">*</span>
+                                        </label>
+                                        <select id="inp-foreman" class="form-field" onchange="checkAllFieldsFilled()">
+                                            <option value="">— Pilih Foreman —</option>
+                                        </select>
                                     </div>
-                                    <input type="hidden" id="inp-status" value="">
-                                </div>
 
+                                    <!-- Problem / Alarm -->
+                                    <div class="col-span-3">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm <span class="text-red-400">*</span>
+                                        </label>
+                                        <textarea id="inp-problem" class="form-field"
+                                            placeholder="Deskripsi masalah atau kode alarm yang muncul..."
+                                            style="min-height:110px;"></textarea>
+                                    </div>
+
+                                </div>
                             </div>
-                        </div>
 
-                        <!-- Submit -->
-                        <div class="px-5 py-4 border-t border-slate-100 flex-shrink-0">
-                            <button class="btn-submit" id="btn-submit" disabled>
-                                <i class="fas fa-paper-plane"></i> Submit E-Report
-                            </button>
-                        </div>
+                            <!-- Submit -->
+                            <div class="px-5 py-4 border-t border-slate-100 flex-shrink-0">
+                                <button class="btn-submit" id="btn-submit" disabled>
+                                    <i class="fas fa-paper-plane"></i> Submit Laporan Awal
+                                </button>
+                            </div>
+
+                        <?php else: ?>
+                            <!-- ═══ PANEL: LAPORAN BARU (form penuh, tidak berubah) ═══ -->
+                            <div class="flex-1 overflow-y-auto p-5" id="panel-baru">
+                                <div class="grid grid-cols-3 gap-x-5 gap-y-4 max-w-3xl">
+
+                                    <!-- Repair Start -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-play-circle text-slate-300 mr-1"></i> Repair Start <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="flex gap-2">
+                                            <input type="date" id="inp-start-date" class="form-field" style="flex:1;" oninput="calcDuration()">
+                                            <input type="time" id="inp-start-time" class="form-field" style="flex:1;" oninput="calcDuration(); checkAllFieldsFilled();">
+                                        </div>
+                                        <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
+                                    </div>
+
+                                    <!-- Repair Finish -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-stop-circle text-slate-300 mr-1"></i> Repair Finish <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="flex gap-2">
+                                            <input type="date" id="inp-finish-date" class="form-field" style="flex:1;" oninput="calcDuration()">
+                                            <input type="time" id="inp-finish-time" class="form-field" style="flex:1;" oninput="calcDuration()">
+                                        </div>
+                                        <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
+                                    </div>
+
+                                    <!-- Durasi + Reported By + PIC — 3 kolom dalam 1 baris -->
+                                    <div>
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-clock text-slate-300 mr-1"></i> Durasi
+                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
+                                        </label>
+                                        <input type="text" id="inp-duration-display" class="form-field" readonly
+                                            placeholder="—" style="cursor:default;font-variant-numeric:tabular-nums;">
+                                        <input type="hidden" id="inp-duration-minutes">
+                                        <div class="text-[10px] text-slate-400 mt-1">Dari Start &amp; Finish</div>
+                                    </div>
+
+                                    <!-- Reported By -->
+                                    <div>
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user text-slate-300 mr-1"></i> Reported By
+                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
+                                        </label>
+                                        <input type="text" id="inp-reported-by" class="form-field"
+                                            value="<?= htmlspecialchars($reportedBy) ?>" readonly>
+                                    </div>
+
+                                    <!-- PIC / Technician -->
+                                    <div>
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user-cog text-slate-300 mr-1"></i> PIC / Technician <span class="text-red-400">*</span>
+                                        </label>
+                                        <select id="inp-pic" class="form-field">
+                                            <option value="">— Pilih Teknisi —</option>
+                                        </select>
+                                    </div>
+
+                                    <!-- Shift -->
+                                    <div class="col-span-3">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user-clock text-slate-300 mr-1"></i> Shift <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="choice-btn-group" id="shift-btn-group" style="max-width:420px;">
+                                            <button type="button" class="choice-btn" data-val="Shift 1" onclick="setShift(this)">Shift 1</button>
+                                            <button type="button" class="choice-btn" data-val="Shift 2" onclick="setShift(this)">Shift 2</button>
+                                            <button type="button" class="choice-btn" data-val="Shift 3" onclick="setShift(this)">Shift 3</button>
+                                        </div>
+                                        <input type="hidden" id="inp-shift" value="">
+                                    </div>
+
+                                    <!-- Problem / Alarm — full width -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm <span class="text-red-400">*</span>
+                                        </label>
+                                        <textarea id="inp-problem" class="form-field"
+                                            placeholder="Deskripsi masalah atau kode alarm yang muncul..."
+                                            style="min-height:80px;"></textarea>
+                                    </div>
+
+                                    <!-- Action — full width, bigger -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-tools text-slate-300 mr-1"></i> Action / Perbaikan <span class="text-red-400">*</span>
+                                        </label>
+                                        <textarea id="inp-action" class="form-field"
+                                            placeholder="Jelaskan langkah-langkah perbaikan yang dilakukan secara detail. Sertakan part yang diganti, settingan yang diubah, hasil pengujian, dan catatan penting lainnya..."
+                                            style="min-height:130px;"></textarea>
+                                    </div>
+
+                                    <!-- Keterangan (status selesai / belum selesai) -->
+                                    <div class="col-span-3">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-flag text-slate-300 mr-1"></i> Keterangan Pekerjaan<span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="choice-btn-group" id="status-btn-group" style="max-width:420px;">
+                                            <button type="button" class="choice-btn" data-val="selesai" onclick="setStatus(this)">
+                                                <i class="fas fa-check-circle"></i> Selesai
+                                            </button>
+                                            <button type="button" class="choice-btn" data-val="belum selesai" onclick="setStatus(this)">
+                                                <i class="fas fa-clock"></i> Belum Selesai
+                                            </button>
+                                        </div>
+                                        <input type="hidden" id="inp-status" value="">
+                                    </div>
+
+                                </div>
+                            </div>
+
+                            <!-- ═══ PANEL: LANJUTAN (follow-up dari laporan awal conrod) ═══ -->
+                            <div class="flex-1 overflow-y-auto p-5" id="panel-lanjutan" style="display:none;">
+                                <div class="grid grid-cols-3 gap-x-5 gap-y-4 max-w-3xl">
+
+                                    <!-- Pilih laporan pending -->
+                                    <div class="col-span-3">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-list-check text-slate-300 mr-1"></i> Laporan Pending (dari Conrod) <span class="text-red-400">*</span>
+                                        </label>
+                                        <select id="sel-followup-source" class="form-field" onchange="onFollowupSourceChange()">
+                                            <option value="">— Pilih Laporan Pending —</option>
+                                        </select>
+                                    </div>
+
+                                    <!-- Problem awal (read-only, referensi) -->
+                                    <div class="col-span-3">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm Awal
+                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(laporan sumber)</span>
+                                            <span id="fu-source-badge" style="display:none;"></span>
+                                        </label>
+                                        <textarea id="fu-original-problem" class="form-field" readonly style="min-height:60px;background:#f8fafc;color:#64748b;"></textarea>
+                                    </div>
+
+                                    <!-- Repair Start -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-play-circle text-slate-300 mr-1"></i> Repair Start <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="flex gap-2">
+                                            <input type="date" id="fu-start-date" class="form-field" style="flex:1;" oninput="calcDurationFu()">
+                                            <input type="time" id="fu-start-time" class="form-field" style="flex:1;" oninput="calcDurationFu(); checkFollowupFieldsFilled();">
+                                        </div>
+                                        <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
+                                    </div>
+
+                                    <!-- Repair Finish -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-stop-circle text-slate-300 mr-1"></i> Repair Finish <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="flex gap-2">
+                                            <input type="date" id="fu-finish-date" class="form-field" style="flex:1;" oninput="calcDurationFu()">
+                                            <input type="time" id="fu-finish-time" class="form-field" style="flex:1;" oninput="calcDurationFu()">
+                                        </div>
+                                        <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
+                                    </div>
+
+                                    <!-- Durasi + Reported By + PIC -->
+                                    <div>
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-clock text-slate-300 mr-1"></i> Durasi
+                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
+                                        </label>
+                                        <input type="text" id="fu-duration-display" class="form-field" readonly
+                                            placeholder="—" style="cursor:default;font-variant-numeric:tabular-nums;">
+                                        <input type="hidden" id="fu-duration-minutes">
+                                        <div class="text-[10px] text-slate-400 mt-1">Dari Start &amp; Finish</div>
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user text-slate-300 mr-1"></i> Reported By
+                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis)</span>
+                                        </label>
+                                        <input type="text" class="form-field" value="<?= htmlspecialchars($reportedBy) ?>" readonly>
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user-cog text-slate-300 mr-1"></i> PIC / Technician <span class="text-red-400">*</span>
+                                        </label>
+                                        <select id="fu-pic" class="form-field" onchange="checkFollowupFieldsFilled()">
+                                            <option value="">— Pilih Teknisi —</option>
+                                        </select>
+                                    </div>
+
+                                    <!-- Shift -->
+                                    <div class="col-span-3">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user-clock text-slate-300 mr-1"></i> Shift <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="choice-btn-group" id="fu-shift-btn-group" style="max-width:420px;">
+                                            <button type="button" class="choice-btn" data-val="Shift 1" onclick="setShiftFu(this)">Shift 1</button>
+                                            <button type="button" class="choice-btn" data-val="Shift 2" onclick="setShiftFu(this)">Shift 2</button>
+                                            <button type="button" class="choice-btn" data-val="Shift 3" onclick="setShiftFu(this)">Shift 3</button>
+                                        </div>
+                                        <input type="hidden" id="fu-shift" value="">
+                                    </div>
+
+                                    <!-- Problem (kondisi terkini) -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm <span class="text-red-400">*</span>
+                                        </label>
+                                        <textarea id="fu-problem" class="form-field"
+                                            placeholder="Deskripsi masalah saat ini (boleh sama dengan laporan awal)..."
+                                            style="min-height:80px;"></textarea>
+                                    </div>
+
+                                    <!-- Action -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-tools text-slate-300 mr-1"></i> Action / Perbaikan <span class="text-red-400">*</span>
+                                        </label>
+                                        <textarea id="fu-action" class="form-field"
+                                            placeholder="Jelaskan langkah-langkah perbaikan yang dilakukan secara detail..."
+                                            style="min-height:130px;"></textarea>
+                                    </div>
+
+                                    <!-- Keterangan -->
+                                    <div class="col-span-3">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-flag text-slate-300 mr-1"></i> Keterangan Pekerjaan<span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="choice-btn-group" id="fu-status-btn-group" style="max-width:420px;">
+                                            <button type="button" class="choice-btn" data-val="selesai" onclick="setStatusFu(this)">
+                                                <i class="fas fa-check-circle"></i> Selesai
+                                            </button>
+                                            <button type="button" class="choice-btn" data-val="belum selesai" onclick="setStatusFu(this)">
+                                                <i class="fas fa-clock"></i> Belum Selesai
+                                            </button>
+                                        </div>
+                                        <input type="hidden" id="fu-status" value="">
+                                    </div>
+
+                                </div>
+                            </div>
+
+                            <!-- Submit -->
+                            <div class="px-5 py-4 border-t border-slate-100 flex-shrink-0" id="submit-bar-baru">
+                                <button class="btn-submit" id="btn-submit" disabled>
+                                    <i class="fas fa-paper-plane"></i> Submit E-Report
+                                </button>
+                            </div>
+                            <div class="px-5 py-4 border-t border-slate-100 flex-shrink-0" id="submit-bar-lanjutan" style="display:none;">
+                                <button class="btn-submit" id="btn-submit-fu" disabled>
+                                    <i class="fas fa-paper-plane"></i> Submit Lanjutan
+                                </button>
+                            </div>
+                        <?php endif; ?>
 
                     </div>
                 </div>
@@ -1080,6 +1518,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
     <script>
         const BASE = '<?= basename(__FILE__) ?>';
+        const IS_CONROD_ONLY = <?= $isConrodOnly ? 'true' : 'false' ?>;
+        const CAN_FOLLOWUP = <?= $canFollowUp ? 'true' : 'false' ?>;
 
         // ── Sidebar ───────────────────────────────────────────────────────────────────
         function toggleSidebar() {
@@ -1142,6 +1582,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const d = document.createElement('div');
             d.textContent = s ?? '';
             return d.innerHTML;
+        }
+
+        // ── Label & warna badge sesuai asal laporan (siapa yang pertama isi) ────────────
+        function sourceRoleMeta(role) {
+            switch (role) {
+                case 'admin_conrod':
+                    return {
+                        label: 'Conrod', bg: '#fef3c7', text: '#92400e', dot: '#f59e0b'
+                    };
+                case 'technician':
+                    return {
+                        label: 'Technician', bg: '#dbeafe', text: '#1e40af', dot: '#3b82f6'
+                    };
+                case 'superadmin':
+                    return {
+                        label: 'Superadmin', bg: '#ede9fe', text: '#5b21b6', dot: '#8b5cf6'
+                    };
+                case 'admin_maintenance':
+                default:
+                    return {
+                        label: 'Maintenance', bg: '#d1fae5', text: '#065f46', dot: '#10b981'
+                    };
+            }
         }
 
         const PENDING_POS_KEY = 'pending_widget_pos';
@@ -1344,12 +1807,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                     const loc = [item.department, item.line, item.op && item.op !== '-' ? item.op : null]
                         .filter(Boolean).join(' / ');
                     const dateFmt = item.report_date ? item.report_date.slice(0, 10) : '—';
+                    const meta = sourceRoleMeta(item.source_role);
+                    const srcBadge = `<span class="src-badge" style="background:${meta.bg};color:${meta.text};"><span class="sb-dot" style="background:${meta.dot};"></span>${meta.label}</span>`;
                     return `
                         <div class="pending-item">
                             <div class="pi-top">
-                                <span class="pi-dot"></span>
+                                <span class="pi-dot" style="background:${meta.dot};"></span>
                                 <span class="pi-main">${escText(item.machine_name || '—')}</span>
                                 <span class="pi-meta">${escText(loc)}</span>
+                                ${srcBadge}
                             </div>
                             <div class="pi-sub">${escText(item.problem || '')}</div>
                             <div class="pi-sub">PIC: ${escText(item.pic || '—')} · ${dateFmt}</div>
@@ -1471,13 +1937,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const machine = getCurrentMachineName();
             const startDate = document.getElementById('inp-start-date').value;
             const startTime = document.getElementById('inp-start-time').value;
-            const pic = document.getElementById('inp-pic').value;
             const problem = document.getElementById('inp-problem').value.trim();
-            const action = document.getElementById('inp-action').value.trim();
+            const shift = document.getElementById('inp-shift').value;
 
+            if (IS_CONROD_ONLY) {
+                // Form ringkas: tanpa PIC/Action/Finish/Status, tapi wajib Foreman
+                const foreman = document.getElementById('inp-foreman').value;
+                const ready = !!(dept && line && machine && startDate && startTime && problem && shift && foreman);
+                setSubmitEnabled(ready);
+                return;
+            }
+
+            const pic = document.getElementById('inp-pic').value;
+            const action = document.getElementById('inp-action').value.trim();
             const finishDate = document.getElementById('inp-finish-date').value;
             const finishTime = document.getElementById('inp-finish-time').value;
-            const shift = document.getElementById('inp-shift').value;
             const status = document.getElementById('inp-status').value;
 
             const ready = !!(dept && line && machine && startDate && startTime && finishDate && finishTime && pic && problem && action && shift && status) && !durationError;
@@ -1498,17 +1972,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
         // Attach listeners ke semua field wajib (kecuali dropdown cascade yang punya handler sendiri)
         document.addEventListener('DOMContentLoaded', () => {
-            ['inp-start-date', 'inp-start-time', 'inp-finish-date', 'inp-finish-time', 'inp-problem', 'inp-action'].forEach(id => {
-                document.getElementById(id).addEventListener('input', checkAllFieldsFilled);
+            const fieldIds = IS_CONROD_ONLY ? ['inp-start-date', 'inp-start-time', 'inp-problem'] : ['inp-start-date', 'inp-start-time', 'inp-finish-date', 'inp-finish-time', 'inp-problem', 'inp-action'];
+            fieldIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', checkAllFieldsFilled);
             });
-            document.getElementById('inp-pic').addEventListener('change', checkAllFieldsFilled);
+            const picEl = document.getElementById('inp-pic');
+            if (picEl) picEl.addEventListener('change', checkAllFieldsFilled);
+
+            if (CAN_FOLLOWUP) {
+                ['fu-start-date', 'fu-start-time', 'fu-finish-date', 'fu-finish-time', 'fu-problem', 'fu-action'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.addEventListener('input', checkFollowupFieldsFilled);
+                });
+                const fuPic = document.getElementById('fu-pic');
+                if (fuPic) fuPic.addEventListener('change', checkFollowupFieldsFilled);
+            }
         });
 
         // ── Technicians ───────────────────────────────────────────────────────────────
         fetch(`${BASE}?ajax=technicians`)
             .then(r => r.json())
             .then(data => {
-                const sel = document.getElementById('inp-pic');
+                ['inp-pic', 'fu-pic'].forEach(id => {
+                    const sel = document.getElementById(id);
+                    if (!sel) return;
+                    data.forEach(t => {
+                        const o = document.createElement('option');
+                        o.value = t.name;
+                        o.textContent = t.name;
+                        sel.appendChild(o);
+                    });
+                });
+            })
+            .catch(e => console.error('Fetch technicians failed:', e));
+
+        // ── Foreman (khusus admin_conrod) ───────────────────────────────────────────────
+        fetch(`${BASE}?ajax=foremen`)
+            .then(r => r.json())
+            .then(data => {
+                const sel = document.getElementById('inp-foreman');
+                if (!sel) return;
                 data.forEach(t => {
                     const o = document.createElement('option');
                     o.value = t.name;
@@ -1516,24 +2020,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                     sel.appendChild(o);
                 });
             })
-            .catch(e => console.error('Fetch technicians failed:', e));
+            .catch(e => console.error('Fetch foremen failed:', e));
 
         // ── Department ────────────────────────────────────────────────────────────────
-        fetch(`${BASE}?ajax=departments`)
-            .then(r => r.json())
-            .then(data => {
-                if (data.error) {
-                    console.error('AJAX error:', data.error);
-                    return;
-                }
-                const sel = document.getElementById('sel-dept');
-                data.forEach(d => {
-                    const o = document.createElement('option');
-                    o.value = o.textContent = d;
-                    sel.appendChild(o);
-                });
-            })
-            .catch(e => console.error('Fetch departments failed:', e));
+        function loadDepartmentOptions() {
+            const sel = document.getElementById('sel-dept');
+            sel.innerHTML = '<option value="">— Pilih Department —</option>';
+            return fetch(`${BASE}?ajax=departments`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error('AJAX error:', data.error);
+                        return;
+                    }
+                    data.forEach(d => {
+                        const o = document.createElement('option');
+                        o.value = o.textContent = d;
+                        sel.appendChild(o);
+                    });
+                    if (IS_CONROD_ONLY && data.length === 1) {
+                        // Cuma ada 1 department (Connecting Rod) — auto-pilih & kunci,
+                        // supaya user tidak perlu (dan tidak bisa) pilih department lain.
+                        sel.value = data[0];
+                        sel.disabled = true;
+                        loadLines();
+                    }
+                })
+                .catch(e => console.error('Fetch departments failed:', e));
+        }
+        loadDepartmentOptions();
 
         function loadLines() {
             const dept = document.getElementById('sel-dept').value;
@@ -1644,6 +2159,314 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             document.getElementById('inp-type').value = '';
         }
 
+        // ── Helper: ambil value elemen jika ada, kosong jika tidak ada di DOM ──────────
+        function valOf(id) {
+            const el = document.getElementById(id);
+            return el ? el.value : '';
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // ── Tab switcher: Laporan Baru <-> Lanjutan (khusus admin_maintenance dkk) ──
+        // ═══════════════════════════════════════════════════════════════════════════
+        let followupSources = {};
+
+        function switchReportTab(tab) {
+            if (!CAN_FOLLOWUP) return;
+            const isBaru = tab === 'baru';
+
+            document.getElementById('panel-baru').style.display = isBaru ? '' : 'none';
+            document.getElementById('panel-lanjutan').style.display = isBaru ? 'none' : '';
+            document.getElementById('submit-bar-baru').style.display = isBaru ? '' : 'none';
+            document.getElementById('submit-bar-lanjutan').style.display = isBaru ? 'none' : '';
+            document.getElementById('tab-btn-baru').classList.toggle('active', isBaru);
+            document.getElementById('tab-btn-lanjutan').classList.toggle('active', !isBaru);
+
+            if (isBaru) {
+                unlockLeftPanel();
+            } else {
+                resetLeftPanelLockedEmpty();
+                loadFollowupSources();
+            }
+        }
+
+        // ── Kunci panel kiri (Identitas Mesin) dengan data dari laporan yang dipilih ──
+        function lockLeftPanelWithSource(src) {
+            const selDept = document.getElementById('sel-dept');
+            const selLine = document.getElementById('sel-line');
+            const selOp = document.getElementById('sel-op');
+            [
+                [selDept, src.department],
+                [selLine, src.line],
+                [selOp, src.op || '-']
+            ].forEach(([sel, val]) => {
+                sel.innerHTML = '';
+                const o = document.createElement('option');
+                o.value = val;
+                o.textContent = val;
+                sel.appendChild(o);
+                sel.value = val;
+                sel.disabled = true;
+            });
+            document.getElementById('inp-type').value = src.machine_type || '';
+            document.getElementById('machine-field-container').innerHTML =
+                `<input type="text" id="inp-mesin" class="form-field" value="${escHtml(src.machine_name || '')}" readonly>`;
+        }
+
+        // ── Kosongkan & kunci panel kiri (belum ada laporan pending yang dipilih) ──────
+        function resetLeftPanelLockedEmpty() {
+            const selDept = document.getElementById('sel-dept');
+            const selLine = document.getElementById('sel-line');
+            const selOp = document.getElementById('sel-op');
+            selDept.innerHTML = '<option value="">—</option>';
+            selLine.innerHTML = '<option value="">—</option>';
+            selOp.innerHTML = '<option value="">—</option>';
+            selDept.disabled = selLine.disabled = selOp.disabled = true;
+            document.getElementById('inp-type').value = '';
+            clearMachineField();
+        }
+
+        // ── Kembalikan panel kiri ke mode input manual (tab "Laporan Baru") ────────────
+        function unlockLeftPanel() {
+            const selDept = document.getElementById('sel-dept');
+            const selLine = document.getElementById('sel-line');
+            const selOp = document.getElementById('sel-op');
+            selDept.disabled = false;
+            selLine.innerHTML = '<option value="">— Pilih Line —</option>';
+            selOp.innerHTML = '<option value="">— Pilih OP —</option>';
+            selLine.disabled = true;
+            selOp.disabled = true;
+            document.getElementById('inp-type').value = '';
+            clearMachineField();
+            loadDepartmentOptions();
+            checkAllFieldsFilled();
+        }
+
+        // ── Daftar laporan pending untuk dropdown tab Lanjutan ─────────────────────────
+        function loadFollowupSources() {
+            const sel = document.getElementById('sel-followup-source');
+            sel.innerHTML = '<option value="">Memuat...</option>';
+            fetch(`${BASE}?ajax=pending_followups`)
+                .then(r => r.json())
+                .then(data => {
+                    followupSources = {};
+                    sel.innerHTML = '<option value="">— Pilih Laporan Pending —</option>';
+                    if (!Array.isArray(data) || data.length === 0) {
+                        sel.innerHTML = '<option value="">— Tidak ada laporan pending —</option>';
+                        return;
+                    }
+
+                    // Kelompokkan per sumber laporan (Conrod / Technician / Maintenance / Superadmin)
+                    // supaya kelihatan jelas asalnya, bukan cuma daftar rata tanpa pembeda.
+                    const groups = {};
+                    const order = ['admin_conrod', 'technician', 'admin_maintenance', 'superadmin'];
+                    data.forEach(item => {
+                        followupSources[item.id] = item;
+                        const role = item.source_role || 'admin_maintenance';
+                        if (!groups[role]) groups[role] = [];
+                        groups[role].push(item);
+                    });
+
+                    order.filter(role => groups[role] && groups[role].length).forEach(role => {
+                        const meta = sourceRoleMeta(role);
+                        const og = document.createElement('optgroup');
+                        og.label = `● Dari ${meta.label} (${groups[role].length})`;
+                        groups[role].forEach(item => {
+                            const loc = [item.department, item.line, item.op && item.op !== '-' ? item.op : null]
+                                .filter(Boolean).join(' / ');
+                            const dateFmt = item.report_date ? item.report_date.slice(0, 10) : '—';
+                            const o = document.createElement('option');
+                            o.value = item.id;
+                            o.style.color = meta.text;
+                            o.textContent = `${item.machine_name || '—'} — ${loc} (${dateFmt})`;
+                            og.appendChild(o);
+                        });
+                        sel.appendChild(og);
+                    });
+                })
+                .catch(e => {
+                    console.error('Gagal memuat laporan pending:', e);
+                    sel.innerHTML = '<option value="">— Gagal memuat —</option>';
+                });
+        }
+
+        function onFollowupSourceChange() {
+            const id = document.getElementById('sel-followup-source').value;
+            const box = document.getElementById('fu-original-problem');
+            const badge = document.getElementById('fu-source-badge');
+            if (!id || !followupSources[id]) {
+                box.value = '';
+                badge.style.display = 'none';
+                resetLeftPanelLockedEmpty();
+                checkFollowupFieldsFilled();
+                return;
+            }
+            const src = followupSources[id];
+            lockLeftPanelWithSource(src);
+            box.value = src.problem || '';
+            const meta = sourceRoleMeta(src.source_role);
+            badge.className = 'src-badge';
+            badge.style.cssText = `display:inline-flex;background:${meta.bg};color:${meta.text};margin-left:6px;`;
+            badge.innerHTML = `<span class="sb-dot" style="background:${meta.dot};"></span>${meta.label}`;
+            checkFollowupFieldsFilled();
+        }
+
+        // ── Durasi otomatis untuk form Lanjutan ────────────────────────────────────────
+        let durationErrorFu = false;
+
+        function calcDurationFu() {
+            const startDate = document.getElementById('fu-start-date').value;
+            const startTime = document.getElementById('fu-start-time').value;
+            const finishDate = document.getElementById('fu-finish-date').value;
+            const finishTime = document.getElementById('fu-finish-time').value;
+
+            const dispEl = document.getElementById('fu-duration-display');
+            const minEl = document.getElementById('fu-duration-minutes');
+
+            if (!startDate || !startTime || !finishDate || !finishTime) {
+                dispEl.value = '';
+                dispEl.style.color = '';
+                minEl.value = '';
+                durationErrorFu = false;
+                checkFollowupFieldsFilled();
+                return;
+            }
+
+            const start = new Date(`${startDate}T${startTime}`);
+            const finish = new Date(`${finishDate}T${finishTime}`);
+            const diffMs = finish - start;
+
+            if (diffMs <= 0) {
+                dispEl.value = 'Finish harus setelah Start';
+                dispEl.style.color = '#dc2626';
+                minEl.value = '';
+                durationErrorFu = true;
+                checkFollowupFieldsFilled();
+                return;
+            }
+
+            const totalMin = Math.round(diffMs / 60000);
+            const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
+            const mm = String(totalMin % 60).padStart(2, '0');
+            dispEl.value = `${hh}:${mm}:00`;
+            dispEl.style.color = '';
+            minEl.value = totalMin;
+            durationErrorFu = false;
+            checkFollowupFieldsFilled();
+        }
+
+        function setShiftFu(btn) {
+            document.querySelectorAll('#fu-shift-btn-group .choice-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('fu-shift').value = btn.getAttribute('data-val');
+            checkFollowupFieldsFilled();
+        }
+
+        function setStatusFu(btn) {
+            document.querySelectorAll('#fu-status-btn-group .choice-btn').forEach(b => b.classList.remove('active-done', 'active-pending'));
+            const val = btn.getAttribute('data-val');
+            btn.classList.add(val === 'selesai' ? 'active-done' : 'active-pending');
+            document.getElementById('fu-status').value = val;
+            checkFollowupFieldsFilled();
+        }
+
+        function checkFollowupFieldsFilled() {
+            const sourceId = document.getElementById('sel-followup-source').value;
+            const startDate = document.getElementById('fu-start-date').value;
+            const startTime = document.getElementById('fu-start-time').value;
+            const finishDate = document.getElementById('fu-finish-date').value;
+            const finishTime = document.getElementById('fu-finish-time').value;
+            const pic = document.getElementById('fu-pic').value;
+            const problem = document.getElementById('fu-problem').value.trim();
+            const action = document.getElementById('fu-action').value.trim();
+            const shift = document.getElementById('fu-shift').value;
+            const status = document.getElementById('fu-status').value;
+
+            const ready = !!(sourceId && startDate && startTime && finishDate && finishTime && pic && problem && action && shift && status) && !durationErrorFu;
+            const btn = document.getElementById('btn-submit-fu');
+            btn.disabled = !ready;
+            if (ready) {
+                btn.classList.add('ready');
+                btn.onclick = submitFollowup;
+            } else {
+                btn.classList.remove('ready');
+                btn.onclick = null;
+            }
+        }
+
+        function submitFollowup() {
+            const sourceId = document.getElementById('sel-followup-source').value;
+            const startDate = document.getElementById('fu-start-date').value;
+            const startTime = document.getElementById('fu-start-time').value;
+            const finishDate = document.getElementById('fu-finish-date').value;
+            const finishTime = document.getElementById('fu-finish-time').value;
+            const pic = document.getElementById('fu-pic').value;
+            const problem = document.getElementById('fu-problem').value.trim();
+            const action = document.getElementById('fu-action').value.trim();
+            const shift = document.getElementById('fu-shift').value;
+            const status = document.getElementById('fu-status').value;
+
+            const btn = document.getElementById('btn-submit-fu');
+            btn.disabled = true;
+            btn.classList.remove('ready');
+            btn.onclick = null;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+            const fd = new FormData();
+            fd.append('source_id', sourceId);
+            fd.append('start_date', startDate);
+            fd.append('start_time', startTime);
+            fd.append('finish_date', finishDate);
+            fd.append('finish_time', finishTime);
+            fd.append('pic', pic);
+            fd.append('problem', problem);
+            fd.append('action', action);
+            fd.append('duration_minutes', document.getElementById('fu-duration-minutes').value);
+            fd.append('shift', shift);
+            fd.append('status', status);
+
+            fetch(`${BASE}?ajax=add_followup`, {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast(data.message || 'Informasi lanjutan berhasil disimpan.', 'success');
+                        resetFollowupForm();
+                        loadFollowupSources();
+                        loadPendingFollowups();
+                    } else {
+                        showToast(data.message || 'Gagal menyimpan.', 'error');
+                    }
+                })
+                .catch(() => showToast('Koneksi error.', 'error'))
+                .finally(() => {
+                    btn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Lanjutan';
+                    checkFollowupFieldsFilled();
+                });
+        }
+
+        function resetFollowupForm() {
+            document.getElementById('sel-followup-source').value = '';
+            document.getElementById('fu-original-problem').value = '';
+            document.getElementById('fu-source-badge').style.display = 'none';
+            resetLeftPanelLockedEmpty();
+            document.getElementById('fu-start-date').value = '';
+            document.getElementById('fu-start-time').value = '';
+            document.getElementById('fu-finish-date').value = '';
+            document.getElementById('fu-finish-time').value = '';
+            document.getElementById('fu-duration-display').value = '';
+            document.getElementById('fu-duration-minutes').value = '';
+            document.getElementById('fu-pic').value = '';
+            document.getElementById('fu-problem').value = '';
+            document.getElementById('fu-action').value = '';
+            document.getElementById('fu-shift').value = '';
+            document.getElementById('fu-status').value = '';
+            document.querySelectorAll('#fu-shift-btn-group .choice-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#fu-status-btn-group .choice-btn').forEach(b => b.classList.remove('active-done', 'active-pending'));
+            checkFollowupFieldsFilled();
+        }
+
         // ── Submit ────────────────────────────────────────────────────────────────────
         function submitReport() {
             const dept = document.getElementById('sel-dept').value;
@@ -1653,14 +2476,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const type = document.getElementById('inp-type').value;
             const startDate = document.getElementById('inp-start-date').value;
             const startTime = document.getElementById('inp-start-time').value;
-            const finishDate = document.getElementById('inp-finish-date').value;
-            const finishTime = document.getElementById('inp-finish-time').value;
-            const pic = document.getElementById('inp-pic').value;
+            const finishDate = valOf('inp-finish-date');
+            const finishTime = valOf('inp-finish-time');
+            const pic = valOf('inp-pic');
             const problem = document.getElementById('inp-problem').value.trim();
-            const action = document.getElementById('inp-action').value.trim();
+            const action = valOf('inp-action').trim();
             const reported = document.getElementById('inp-reported-by').value;
             const shift = document.getElementById('inp-shift').value;
-            const status = document.getElementById('inp-status').value;
+            const status = valOf('inp-status');
 
             const btn = document.getElementById('btn-submit');
             btn.disabled = true;
@@ -1681,10 +2504,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             fd.append('finish_date', finishDate);
             fd.append('finish_time', finishTime);
             fd.append('reported_by', reported);
+            fd.append('foreman', valOf('inp-foreman'));
             fd.append('pic', pic);
             fd.append('problem', problem);
             fd.append('action', action);
-            fd.append('duration_minutes', document.getElementById('inp-duration-minutes').value);
+            fd.append('duration_minutes', valOf('inp-duration-minutes'));
             fd.append('shift', shift);
             fd.append('status', status);
 
@@ -1695,7 +2519,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                 .then(r => r.json())
                 .then(data => {
                     if (data.success) {
-                        showToast('E-Report berhasil disimpan!', 'success');
+                        showToast(data.message || 'E-Report berhasil disimpan!', 'success');
                         resetForm();
                     } else {
                         showToast(data.message || 'Gagal menyimpan.', 'error');
@@ -1703,9 +2527,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                 })
                 .catch(() => showToast('Koneksi error.', 'error'))
                 .finally(() => {
-                    btn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit E-Report';
+                    btn.innerHTML = IS_CONROD_ONLY ?
+                        '<i class="fas fa-paper-plane"></i> Submit Laporan Awal' :
+                        '<i class="fas fa-paper-plane"></i> Submit E-Report';
                     checkAllFieldsFilled();
                 });
+        }
+
+        function setValIfExists(id, val) {
+            const el = document.getElementById(id);
+            if (el) el.value = val;
         }
 
         function resetForm() {
@@ -1719,15 +2550,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             document.getElementById('inp-type').value = '';
             document.getElementById('inp-start-date').value = '';
             document.getElementById('inp-start-time').value = '';
-            document.getElementById('inp-finish-date').value = '';
-            document.getElementById('inp-finish-time').value = '';
-            document.getElementById('inp-duration-display').value = '';
-            document.getElementById('inp-duration-minutes').value = '';
-            document.getElementById('inp-pic').value = '';
+            setValIfExists('inp-finish-date', '');
+            setValIfExists('inp-finish-time', '');
+            setValIfExists('inp-duration-display', '');
+            setValIfExists('inp-duration-minutes', '');
+            setValIfExists('inp-pic', '');
+            setValIfExists('inp-foreman', '');
             document.getElementById('inp-problem').value = '';
-            document.getElementById('inp-action').value = '';
+            setValIfExists('inp-action', '');
             document.getElementById('inp-shift').value = '';
-            document.getElementById('inp-status').value = '';
+            setValIfExists('inp-status', '');
             document.querySelectorAll('#shift-btn-group .choice-btn').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('#status-btn-group .choice-btn').forEach(b => b.classList.remove('active-done', 'active-pending'));
             checkAllFieldsFilled();

@@ -10,10 +10,20 @@ if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role
     exit;
 }
 
+// admin_conrod cuma boleh lihat laporan yang dia buat sendiri (reported_by = username-nya).
+// admin_maintenance, technician, superadmin tetap bisa lihat semua laporan.
+$isConrodOnly     = ($_SESSION['role'] === ROLE_ADMIN_CONROD);
+$currentUsername  = $_SESSION['username'] ?? '';
+
 // ─── AJAX: distinct departments ────────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
     header('Content-Type: application/json');
-    $stmt = $pdo->query("SELECT DISTINCT department FROM e_reports WHERE department IS NOT NULL AND department <> '' ORDER BY department ASC");
+    if ($isConrodOnly) {
+        $stmt = $pdo->prepare("SELECT DISTINCT department FROM e_reports WHERE department IS NOT NULL AND department <> '' AND reported_by = ? ORDER BY department ASC");
+        $stmt->execute([$currentUsername]);
+    } else {
+        $stmt = $pdo->query("SELECT DISTINCT department FROM e_reports WHERE department IS NOT NULL AND department <> '' ORDER BY department ASC");
+    }
     echo json_encode($stmt->fetchAll(PDO::FETCH_COLUMN));
     exit;
 }
@@ -24,12 +34,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
 // 'belum selesai' DAN belum ada satupun follow-up-nya yang sudah 'selesai'.
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'pending_followups') {
     header('Content-Type: application/json');
+    $extraWhere = $isConrodOnly ? "AND r.reported_by = " . $pdo->quote($currentUsername) : "";
     $rows = $pdo->query("
         SELECT r.id, r.department, r.line, r.op, r.machine_name, r.problem,
                r.reported_by, r.pic, r.report_date, r.created_at
         FROM e_reports r
         WHERE r.parent_id IS NULL
           AND r.status = 'belum selesai'
+          $extraWhere
           AND NOT EXISTS (
               SELECT 1 FROM e_reports f
               WHERE f.parent_id = r.id AND f.status = 'selesai'
@@ -65,6 +77,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
         $where = "WHERE DATE_FORMAT(r.created_at, '%Y-%m') = ?";
     }
     $params = [$value];
+
+    // admin_conrod cuma boleh lihat laporan yang dia buat sendiri
+    if ($isConrodOnly) {
+        $where .= " AND r.reported_by = ?";
+        $params[] = $currentUsername;
+    }
 
     // Filter department
     if ($dept !== '') {
@@ -137,7 +155,16 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     }
     $stmt = $pdo->prepare("SELECT * FROM e_reports WHERE id = ?");
     $stmt->execute([$id]);
-    echo json_encode($stmt->fetch());
+    $row = $stmt->fetch();
+
+    // admin_conrod cuma boleh lihat detail laporan yang dia buat sendiri,
+    // walau tahu/tebak ID laporan orang lain lewat AJAX.
+    if ($row && $isConrodOnly && $row['reported_by'] !== $currentUsername) {
+        echo json_encode(null);
+        exit;
+    }
+
+    echo json_encode($row);
     exit;
 }
 
@@ -172,13 +199,31 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'thread') {
         ORDER BY created_at ASC
     ");
     $stmt->execute([$rootId, $rootId]);
-    echo json_encode(['root_id' => $rootId, 'items' => $stmt->fetchAll()]);
+    $items = $stmt->fetchAll();
+
+    // admin_conrod cuma boleh lihat thread yang ROOT laporannya dia buat sendiri.
+    if ($isConrodOnly) {
+        $root = $items[0] ?? null;
+        if (!$root || $root['reported_by'] !== $currentUsername) {
+            echo json_encode(['root_id' => null, 'items' => []]);
+            exit;
+        }
+    }
+
+    echo json_encode(['root_id' => $rootId, 'items' => $items]);
     exit;
 }
 
 // ─── AJAX: tambah informasi lanjutan (follow-up INSERT row baru) ──────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
+
+    // Follow-up cuma boleh dibuat oleh admin_maintenance/technician/superadmin,
+    // bukan admin_conrod (sama seperti aturan di dashboard_report.php).
+    if ($isConrodOnly) {
+        echo json_encode(['success' => false, 'message' => 'Role Anda tidak diizinkan menambah follow-up.']);
+        exit;
+    }
 
     // Ambil data mesin dari baris asli (read-only, tidak boleh diubah)
     $sourceId = (int)($_POST['source_id'] ?? 0);
@@ -1494,6 +1539,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
     <div id="toast"></div>
 
     <script>
+        const IS_CONROD_ONLY = <?= $isConrodOnly ? 'true' : 'false' ?>;
         let currentMode = 'daily';
         let currentPage = 1;
         let totalRecords = 0;
@@ -2171,7 +2217,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             // sudah tuntas — jangan tampilkan lagi tombol Tambah Info,
                             // walau baris yang sedang dibuka masih tercatat "belum selesai".
                             const alreadyDone = items.some(it => (it.status || 'belum selesai') === 'selesai');
-                            editBtn.style.display = alreadyDone ? 'none' : 'inline-flex';
+                            editBtn.style.display = (alreadyDone || IS_CONROD_ONLY) ? 'none' : 'inline-flex';
 
                             if (alreadyDone && statusVal !== 'selesai') {
                                 content.innerHTML += `
@@ -2185,7 +2231,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             // langsung buka form Tambah Info (kalau belum selesai)
                             if (_autoOpenFollowup) {
                                 _autoOpenFollowup = false;
-                                if (!alreadyDone) {
+                                if (!alreadyDone && !IS_CONROD_ONLY) {
                                     openFollowupForm();
                                 }
                             }
@@ -2194,7 +2240,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             // Tetap coba auto-open meski thread gagal dimuat
                             if (_autoOpenFollowup) {
                                 _autoOpenFollowup = false;
-                                if (statusVal !== 'selesai') openFollowupForm();
+                                if (statusVal !== 'selesai' && !IS_CONROD_ONLY) openFollowupForm();
                             }
                         });
                 })
