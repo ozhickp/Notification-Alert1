@@ -14,6 +14,46 @@ if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role
 // admin_maintenance, technician, superadmin tetap bisa lihat semua laporan.
 $isConrodOnly     = ($_SESSION['role'] === ROLE_ADMIN_CONROD);
 $currentUsername  = $_SESSION['username'] ?? '';
+$role             = $_SESSION['role'];
+$reportedBy       = $_SESSION['username'] ?? 'Unknown';
+
+// Label yang tampil di UI untuk role saat ini (topbar) — samakan dengan dashboard_report.php.
+$roleLabels = [
+    ROLE_SUPERADMIN        => 'Superadmin',
+    ROLE_ADMIN_MAINTENANCE => 'Admin Maintenance',
+    ROLE_TECHNICIAN        => 'Technician',
+    ROLE_ADMIN_CONROD      => 'Admin Conrod',
+];
+$roleLabel = $roleLabels[$role] ?? $role;
+
+// Hanya admin_maintenance & superadmin yang boleh mengubah report jadi Schedule
+// (Predictive/Preventive) — technician & admin_conrod tidak diberi akses fitur ini.
+$canConvertSchedule = in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_SUPERADMIN], true);
+
+// Hanya admin_maintenance / technician / superadmin yang boleh menutup/menindaklanjuti
+// laporan pending — dipakai untuk menentukan apakah tombol "Selesaikan" muncul di
+// floating bubble (samakan dengan dashboard_report.php).
+$canFollowUp = in_array($role, [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_SUPERADMIN], true);
+
+// ── Helper: hitung status awal schedule (samakan dengan logika di dashboard_user.php) ──
+if (!function_exists('computeInitialScheduleStatus')) {
+    function computeInitialScheduleStatus(?string $changeDatePlan, int $reminderActivity): array
+    {
+        $remainingDay = null;
+        if (!empty($changeDatePlan)) {
+            $now = new DateTime('today');
+            $cdp = new DateTime($changeDatePlan);
+            $diff = (int)$now->diff($cdp)->days;
+            $remainingDay = ($cdp >= $now) ? $diff : -$diff;
+        }
+        $inWindow = ($remainingDay !== null && (
+            $remainingDay <= 0 ||
+            ($remainingDay >= 1 && $remainingDay <= 7) ||
+            ($reminderActivity > 0 && $remainingDay <= $reminderActivity)
+        ));
+        return [$remainingDay, $inWindow];
+    }
+}
 
 // ─── AJAX: distinct departments ────────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
@@ -32,16 +72,25 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
 // Sama persis dengan endpoint di dashboard_report.php — sebuah laporan AWAL
 // (parent_id IS NULL) dianggap masih menggantung hanya jika statusnya
 // 'belum selesai' DAN belum ada satupun follow-up-nya yang sudah 'selesai'.
+// Query & filter role di sini disamakan persis dengan dashboard_report.php, supaya
+// floating bubble selalu tampil sama antara kedua halaman.
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'pending_followups') {
     header('Content-Type: application/json');
-    $extraWhere = $isConrodOnly ? "AND r.reported_by = " . $pdo->quote($currentUsername) : "";
+    // admin_conrod cuma perlu melihat laporan yang asalnya dari Conrod sendiri
+    // (bubble untuk conrod murni informatif — tidak perlu lihat punya maintenance).
+    $conrodOnlyFilter = $isConrodOnly ? "AND r.foreman IS NOT NULL AND r.foreman <> ''" : "";
     $rows = $pdo->query("
-        SELECT r.id, r.department, r.line, r.op, r.machine_name, r.problem,
-               r.reported_by, r.pic, r.report_date, r.created_at
+        SELECT r.id, r.department, r.line, r.op, r.machine_name, r.machine_type, r.problem,
+               r.reported_by, r.pic, r.report_date, r.created_at, r.foreman,
+               CASE
+                   WHEN r.foreman IS NOT NULL AND r.foreman <> '' THEN 'admin_conrod'
+                   ELSE COALESCE(u.role, 'admin_maintenance')
+               END AS source_role
         FROM e_reports r
+        LEFT JOIN users u ON u.username = r.reported_by
         WHERE r.parent_id IS NULL
           AND r.status = 'belum selesai'
-          $extraWhere
+          $conrodOnlyFilter
           AND NOT EXISTS (
               SELECT 1 FROM e_reports f
               WHERE f.parent_id = r.id AND f.status = 'selesai'
@@ -165,6 +214,148 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     }
 
     echo json_encode($row);
+    exit;
+}
+
+// ─── AJAX: konversi report → Schedule (Predictive/Preventive) ────────────────
+// Hanya admin_maintenance/superadmin. Report ASLI tidak diubah/dihapus — cuma
+// ditandai lewat converted_to_schedule_id/converted_to_schedule_type supaya
+// tidak bisa dikonversi dobel dan bisa dilacak dari sisi report.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'convert_to_schedule' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+
+    if (!$canConvertSchedule) {
+        echo json_encode(['success' => false, 'message' => 'Anda tidak memiliki akses untuk fitur ini.']);
+        exit;
+    }
+
+    $reportId = (int)($_POST['report_id'] ?? 0);
+    $type     = trim($_POST['schedule_type'] ?? ''); // 'predictive' | 'preventive'
+
+    if (!$reportId || !in_array($type, ['predictive', 'preventive'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Data tidak valid.']);
+        exit;
+    }
+
+    // Ambil report sumber
+    $stmt = $pdo->prepare("SELECT * FROM e_reports WHERE id = ?");
+    $stmt->execute([$reportId]);
+    $report = $stmt->fetch();
+
+    if (!$report) {
+        echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan.']);
+        exit;
+    }
+
+    if (!empty($report['converted_to_schedule_id'])) {
+        echo json_encode(['success' => false, 'message' => 'Laporan ini sudah pernah dijadikan schedule sebelumnya.']);
+        exit;
+    }
+
+    // Field tambahan yang tidak ada di report — diisi manual oleh admin_maintenance
+    $nameUnit         = trim($_POST['name_unit'] ?? '');
+    $maintenancePoint = trim($_POST['maintenance_point'] ?? '');
+    $intervalMonth    = (int)($_POST['interval_month'] ?? 0);
+    $useDate          = trim($_POST['use_date'] ?? '');
+    $changeDatePlan   = trim($_POST['change_date_plan'] ?? '');
+    $reminderActivity = (int)($_POST['reminder_activity'] ?? 0);
+
+    if (!$nameUnit || !$maintenancePoint || $intervalMonth <= 0 || !$useDate || !$changeDatePlan) {
+        echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib (Name Unit, Maintenance Point, Interval, Use Date, Change Date Plan).']);
+        exit;
+    }
+
+    // Mapping dari kolom report -> kolom schedule
+    $department       = $report['department'];
+    $line             = $report['line'];
+    $operationProcess = $report['op'];
+    $machineName      = $report['machine_name'];
+    $processMachine   = $report['machine_type'];
+
+    [$remainingDay, $inWindow] = computeInitialScheduleStatus($changeDatePlan, $reminderActivity);
+
+    try {
+        $pdo->beginTransaction();
+
+        if ($type === 'predictive') {
+            $initStatus = $inWindow ? 'soon' : 'done';
+            $initPart   = $inWindow ? 'open' : 'close';
+            $ins = $pdo->prepare("INSERT INTO schedules
+                (department, line, operation_process, machine_name, process_machine, name_unit,
+                 maintenance_point, interval_month, use_date, change_date_plan,
+                 reminder_activity, remaining_day, maintenance_status, part_order, part_availability)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $ins->execute([
+                $department,
+                $line,
+                $operationProcess,
+                $machineName,
+                $processMachine,
+                $nameUnit,
+                $maintenancePoint,
+                $intervalMonth,
+                $useDate,
+                $changeDatePlan,
+                $reminderActivity,
+                $remainingDay,
+                $initStatus,
+                $initPart,
+                $initPart,
+            ]);
+        } else {
+            $initStatus = $inWindow ? 'soon' : 'done';
+            $ins = $pdo->prepare("INSERT INTO schedules_preventive
+                (department, line, operation_process, machine_name, process_machine, name_unit,
+                 maintenance_point, interval_month, use_date, change_date_plan,
+                 reminder_activity, remaining_day, maintenance_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $ins->execute([
+                $department,
+                $line,
+                $operationProcess,
+                $machineName,
+                $processMachine,
+                $nameUnit,
+                $maintenancePoint,
+                $intervalMonth,
+                $useDate,
+                $changeDatePlan,
+                $reminderActivity,
+                $remainingDay,
+                $initStatus,
+            ]);
+        }
+
+        $newScheduleId = (int)$pdo->lastInsertId();
+
+        $upd = $pdo->prepare("UPDATE e_reports SET converted_to_schedule_id = ?, converted_to_schedule_type = ? WHERE id = ?");
+        $upd->execute([$newScheduleId, $type, $reportId]);
+
+        $pdo->commit();
+
+        // Kirim email alert baru kalau langsung masuk window (reuse fungsi yang sudah ada)
+        if ($inWindow && $newScheduleId > 0) {
+            $reminderFile = __DIR__ . '/send_reminder.php';
+            if (file_exists($reminderFile)) {
+                if (!function_exists('sendNewScheduleAlert')) require_once $reminderFile;
+                if ($type === 'predictive' && function_exists('sendNewScheduleAlert')) {
+                    sendNewScheduleAlert($pdo, $newScheduleId);
+                } elseif ($type === 'preventive' && function_exists('sendNewPrevScheduleAlert')) {
+                    sendNewPrevScheduleAlert($pdo, $newScheduleId);
+                }
+            }
+        }
+
+        echo json_encode([
+            'success'       => true,
+            'message'       => 'Laporan berhasil dijadikan schedule ' . ($type === 'predictive' ? 'Predictive' : 'Preventive') . '.',
+            'schedule_id'   => $newScheduleId,
+            'schedule_type' => $type,
+        ]);
+    } catch (\Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
+    }
     exit;
 }
 
@@ -754,6 +945,34 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             }
         }
 
+        /* ── Modal: Jadikan Schedule ─────────────────────────────────────────────── */
+        #modal-convert-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, .55);
+            backdrop-filter: blur(3px);
+            z-index: 210;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #modal-convert-overlay.open {
+            display: flex;
+        }
+
+        #modal-convert-box {
+            background: #fff;
+            border-radius: 18px;
+            width: 90%;
+            max-width: 560px;
+            max-height: 88vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .25);
+            animation: popIn .25s cubic-bezier(.34, 1.56, .64, 1);
+        }
+
         /* detail field rows inside modal */
         .detail-row {
             display: grid;
@@ -969,7 +1188,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         }
 
         /* ── Edit form (inside modal) ────────────────────────────────────────────── */
-        #modal-edit-wrap .form-label {
+        #modal-edit-wrap .form-label,
+        #modal-convert-box .form-label {
             font-size: .68rem;
             font-weight: 800;
             color: #64748b;
@@ -979,7 +1199,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             margin-bottom: 5px;
         }
 
-        #modal-edit-wrap .edit-field {
+        #modal-edit-wrap .edit-field,
+        #modal-convert-box .edit-field {
             width: 100%;
             padding: 8px 11px;
             border: 1.5px solid #e2e8f0;
@@ -992,19 +1213,79 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             transition: border-color .2s, box-shadow .2s;
         }
 
-        #modal-edit-wrap .edit-field:focus {
+        #modal-edit-wrap .edit-field:focus,
+        #modal-convert-box .edit-field:focus {
             border-color: #fb8b24;
             box-shadow: 0 0 0 3px rgba(249, 115, 22, .12);
         }
 
-        #modal-edit-wrap .edit-field[readonly] {
+        #modal-edit-wrap .edit-field[readonly],
+        #modal-convert-box .edit-field[readonly] {
             background: #f8fafc;
             color: #64748b;
             cursor: default;
         }
 
-        #modal-edit-wrap textarea.edit-field {
+        #modal-edit-wrap textarea.edit-field,
+        #modal-convert-box textarea.edit-field {
             resize: vertical;
+        }
+
+        /* ── Modal convert: section styling ──────────────────────────────────────── */
+        #modal-convert-box .conv-section-title {
+            font-size: .68rem;
+            font-weight: 800;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        #modal-convert-box .conv-info-box {
+            border-radius: 12px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 12px 14px;
+            margin-bottom: 1.25rem;
+        }
+
+        #modal-convert-box .conv-info-row {
+            display: grid;
+            grid-template-columns: 110px 1fr;
+            gap: 4px 10px;
+            font-size: .78rem;
+            padding: 3px 0;
+        }
+
+        #modal-convert-box .conv-info-row .conv-info-label {
+            font-weight: 700;
+            color: #94a3b8;
+        }
+
+        #modal-convert-box .conv-info-row .conv-info-value {
+            color: #334155;
+            font-weight: 600;
+        }
+
+        #modal-convert-box .conv-sync-check {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin-top: 7px;
+            font-size: .72rem;
+            color: #64748b;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        #modal-convert-box .conv-sync-check input[type="checkbox"] {
+            width: 15px;
+            height: 15px;
+            accent-color: #fb8b24;
+            cursor: pointer;
         }
 
         /* ── Pending Follow-up Floating Window ───────────────────────────────── */
@@ -1014,8 +1295,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             right: 12px;
             left: auto;
             z-index: 150;
-            width: 44px;
-            height: 44px;
+            width: 52px;
+            height: 52px;
             border-radius: 50%;
             background: linear-gradient(135deg, #f59e0b, #d97706);
             box-shadow: 0 6px 18px rgba(217, 119, 6, .4);
@@ -1024,7 +1305,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             justify-content: center;
             cursor: grab;
             color: #fff;
-            font-size: 1rem;
+            font-size: 1.15rem;
             touch-action: none;
             transition: transform .15s ease, left .25s cubic-bezier(.2, .8, .2, 1), top .25s cubic-bezier(.2, .8, .2, 1);
         }
@@ -1045,15 +1326,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
         #pending-fab-badge {
             position: absolute;
-            top: -4px;
-            right: -4px;
-            min-width: 19px;
-            height: 19px;
-            padding: 0 4px;
+            top: -5px;
+            right: -5px;
+            min-width: 22px;
+            height: 22px;
+            padding: 0 5px;
             border-radius: 999px;
             background: #dc2626;
             color: #fff;
-            font-size: .65rem;
+            font-size: .7rem;
             font-weight: 800;
             display: flex;
             align-items: center;
@@ -1065,10 +1346,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         #pending-window {
             position: fixed;
             top: 70px;
-            left: calc(100vw - 342px);
+            left: calc(100vw - 382px);
             z-index: 151;
-            width: 320px;
-            max-height: 420px;
+            width: 360px;
+            max-height: 460px;
             background: #fff;
             border-radius: 14px;
             box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
@@ -1197,6 +1478,25 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         .pi-btn-selesaikan:hover {
             opacity: .85;
         }
+
+        .src-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 1px 7px;
+            border-radius: 999px;
+            font-size: .64rem;
+            font-weight: 800;
+            letter-spacing: .02em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .src-badge .sb-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+        }
     </style>
 </head>
 
@@ -1269,6 +1569,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     <div class="text-sm font-bold text-slate-800">History E-Report</div>
                     <div class="text-[10px] text-slate-400 font-medium">Riwayat laporan kerusakan & perbaikan mesin</div>
                 </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl">
+                    <div class="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0" style="background:#fb8b24;">
+                        <i class="fas fa-user text-white" style="font-size:.65rem;"></i>
+                    </div>
+                    <div class="leading-tight">
+                        <div class="text-sm font-bold text-slate-700"><?= htmlspecialchars($reportedBy) ?></div>
+                        <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider"><?= htmlspecialchars($roleLabel) ?></div>
+                    </div>
+                </div>
+                <a href="logout_user.php" onclick="return confirm('Apakah Anda yakin ingin keluar?')"
+                    class="bg-red-100 hover:bg-red-200 text-red-600 px-4 py-1.5 rounded-xl font-bold transition-all flex items-center gap-2 text-sm">
+                    <i class="fas fa-sign-out-alt"></i> Logout
+                </a>
             </div>
         </div>
 
@@ -1515,6 +1830,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-between flex-shrink-0">
                 <span id="modal-meta" class="text-[11px] text-slate-400 font-medium"></span>
                 <div class="flex gap-2" id="modal-footer-view">
+                    <button id="btn-convert-schedule" onclick="openConvertModal()" style="display:none;"
+                        class="px-4 py-2 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-700 text-xs font-bold transition-all flex items-center gap-1.5">
+                        <i class="fas fa-calendar-plus"></i> Jadikan Schedule
+                    </button>
                     <button id="btn-edit-report" onclick="openFollowupForm()" style="display:none;"
                         class="px-4 py-2 rounded-xl bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs font-bold transition-all flex items-center gap-1.5">
                         <i class="fas fa-plus-circle"></i> Tambah Info
@@ -1536,10 +1855,107 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         </div>
     </div>
 
+    <!-- ── Modal: Jadikan Schedule (Predictive/Preventive) ─────────────────────── -->
+    <div id="modal-convert-overlay" onclick="closeConvertModal(event)">
+        <div id="modal-convert-box">
+            <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+                <div>
+                    <h3 class="text-base font-bold text-slate-800">Jadikan Schedule</h3>
+                    <p class="text-xs text-slate-400 mt-0.5" id="convert-subtitle"></p>
+                </div>
+                <button onclick="closeConvertModal()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <div class="px-6 py-5 overflow-y-auto" style="max-height:70vh;">
+
+                <!-- Data dari report (read-only) -->
+                <div class="conv-section-title"><i class="fas fa-industry"></i> Deskripsi Mesin</div>
+                <div class="conv-info-box">
+                    <div class="conv-info-row">
+                        <span class="conv-info-label">Department / Line</span>
+                        <span class="conv-info-value" id="conv-dept-line">—</span>
+                    </div>
+                    <div class="conv-info-row">
+                        <span class="conv-info-label">OP / Mesin</span>
+                        <span class="conv-info-value" id="conv-op-mesin">—</span>
+                    </div>
+                    <div class="conv-info-row">
+                        <span class="conv-info-label">Machine Type</span>
+                        <span class="conv-info-value" id="conv-machtype">—</span>
+                    </div>
+                </div>
+
+                <!-- Pilih tipe -->
+                <div class="conv-section-title"><i class="fas fa-calendar-check"></i> Tipe Schedule <span class="text-red-400">*</span></div>
+                <div class="choice-btn-group" id="convert-type-group" style="margin-bottom:1.25rem;">
+                    <button type="button" class="choice-btn" data-val="predictive" onclick="setConvertType(this)">
+                        <i class="fas fa-chart-line"></i> Predictive
+                    </button>
+                    <button type="button" class="choice-btn" data-val="preventive" onclick="setConvertType(this)">
+                        <i class="fas fa-shield-alt"></i> Preventive
+                    </button>
+                </div>
+                <input type="hidden" id="convert-inp-type">
+
+                <!-- Field manual -->
+                <div class="conv-section-title"><i class="fas fa-clipboard-list"></i> Detail Schedule</div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2">
+                        <label class="form-label"><i class="fas fa-cog text-slate-300 mr-1"></i> Name Unit <span class="text-red-400">*</span></label>
+                        <input type="text" id="conv-name-unit" class="edit-field" placeholder="Nama unit/part">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="form-label"><i class="fas fa-crosshairs text-slate-300 mr-1"></i> Maintenance Point <span class="text-red-400">*</span></label>
+                        <textarea id="conv-maint-point" class="edit-field" style="min-height:60px;" placeholder="Titik/poin perawatan"></textarea>
+                    </div>
+                    <div>
+                        <label class="form-label">Interval (bulan) <span class="text-red-400">*</span></label>
+                        <input type="number" min="1" id="conv-interval" class="edit-field" placeholder="mis. 6" oninput="syncConvertChangeDate()">
+                    </div>
+                    <div>
+                        <label class="form-label">Reminder Activity (hari)</label>
+                        <input type="number" min="0" id="conv-reminder" class="edit-field" placeholder="mis. 14">
+                    </div>
+                    <div>
+                        <label class="form-label">Use Date (Last Change) <span class="text-red-400">*</span></label>
+                        <input type="date" id="conv-use-date" class="edit-field" oninput="syncConvertChangeDate()">
+                    </div>
+                    <div>
+                        <label class="form-label">Change Date Plan (Jadwal Berikutnya) <span class="text-red-400">*</span></label>
+                        <input type="date" id="conv-change-date" class="edit-field">
+                        <label class="conv-sync-check">
+                            <input type="checkbox" id="conv-sync-checkbox" checked onchange="syncConvertChangeDate()">
+                            Otomatis: Use Date + Interval
+                        </label>
+                    </div>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-3">
+                    Laporan asli tidak akan hilang/berubah — tetap tersimpan di history. Setelah dijadikan schedule,
+                    jadwal berikutnya akan otomatis berulang sesuai interval yang diisi di sini setiap kali report
+                    penyelesaian di-submit.
+                </p>
+            </div>
+
+            <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-end gap-2 flex-shrink-0">
+                <button onclick="closeConvertModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
+                    Batal
+                </button>
+                <button id="btn-save-convert" onclick="submitConvertSchedule()"
+                    class="px-4 py-2 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5" style="background:#fb8b24;">
+                    <i class="fas fa-save"></i> Simpan Schedule
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div id="toast"></div>
 
     <script>
         const IS_CONROD_ONLY = <?= $isConrodOnly ? 'true' : 'false' ?>;
+        const CAN_CONVERT_SCHEDULE = <?= $canConvertSchedule ? 'true' : 'false' ?>;
+        const CAN_FOLLOWUP = <?= $canFollowUp ? 'true' : 'false' ?>;
         let currentMode = 'daily';
         let currentPage = 1;
         let totalRecords = 0;
@@ -1558,9 +1974,33 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             return d.innerHTML;
         }
 
+        // ── Label & warna badge sesuai asal laporan (samakan dengan dashboard_report.php) ──
+        function sourceRoleMeta(role) {
+            switch (role) {
+                case 'admin_conrod':
+                    return {
+                        label: 'Conrod', bg: '#fef3c7', text: '#92400e', dot: '#f59e0b'
+                    };
+                case 'technician':
+                    return {
+                        label: 'Technician', bg: '#dbeafe', text: '#1e40af', dot: '#3b82f6'
+                    };
+                case 'superadmin':
+                    return {
+                        label: 'Superadmin', bg: '#ede9fe', text: '#5b21b6', dot: '#8b5cf6'
+                    };
+                case 'admin_maintenance':
+                default:
+                    return {
+                        label: 'Maintenance', bg: '#d1fae5', text: '#065f46', dot: '#10b981'
+                    };
+            }
+        }
+
         const PENDING_POS_KEY = 'pending_widget_pos';
         const EDGE_MARGIN = 12;
-        const FAB_SIZE = 44; // harus sama dengan width/height #pending-fab di CSS
+        const FAB_SIZE = 52; // harus sama dengan width/height #pending-fab di CSS
+        let pendingItemsById = {}; // cache data laporan pending untuk modal Jadikan Schedule
 
         function clampPos(x, y, w, h) {
             const maxX = window.innerWidth - w - EDGE_MARGIN;
@@ -1687,7 +2127,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 x: fabRect.left,
                 y: fabRect.top
             };
-            const pos = clampPos(fabRect.left, fabRect.top, 320, 1);
+            const pos = clampPos(fabRect.left, fabRect.top, 360, 1);
             win.style.left = pos.x + 'px';
             win.style.top = pos.y + 'px';
             fab.style.display = 'none';
@@ -1747,26 +2187,46 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     fab.style.display = 'flex';
                 }
 
+                // Simpan data mentah per-id supaya bisa dipakai ulang oleh modal Jadikan Schedule
+                // tanpa perlu fetch ulang ke server.
+                pendingItemsById = {};
+                data.forEach(item => {
+                    pendingItemsById[item.id] = item;
+                });
+
                 bodyEl.innerHTML = data.map(item => {
                     const loc = [item.department, item.line, item.op && item.op !== '-' ? item.op : null]
                         .filter(Boolean).join(' / ');
                     const dateFmt = item.report_date ? item.report_date.slice(0, 10) : '—';
-                    return `
-                        <div class="pending-item">
-                            <div class="pi-top">
-                                <span class="pi-dot"></span>
-                                <span class="pi-main">${escTextPending(item.machine_name || '—')}</span>
-                                <span class="pi-meta">${escTextPending(loc)}</span>
-                            </div>
-                            <div class="pi-sub">${escTextPending(item.problem || '')}</div>
-                            <div class="pi-sub">PIC: ${escTextPending(item.pic || '—')} · ${dateFmt}</div>
+                    const meta = sourceRoleMeta(item.source_role);
+                    const srcBadge = `<span class="src-badge" style="background:${meta.bg};color:${meta.text};"><span class="sb-dot" style="background:${meta.dot};"></span>${meta.label}</span>`;
+                    const showActions = CAN_FOLLOWUP || CAN_CONVERT_SCHEDULE;
+                    const actionsHtml = showActions ? `
                             <div class="pi-action">
+                                ${CAN_FOLLOWUP ? `
                                 <button class="pi-btn-selesaikan"
                                         onclick="closePendingWindow(); _autoOpenFollowup = true; openDetail(${item.id});"
                                         title="Buka form penyelesaian laporan ini">
                                     <i class="fas fa-check-circle"></i> Selesaikan
-                                </button>
+                                </button>` : ''}
+                                ${CAN_CONVERT_SCHEDULE ? `
+                                <button class="pi-btn-selesaikan" style="background:#fef3c7;color:#b45309;"
+                                        onclick="openConvertModalForId(${item.id});"
+                                        title="Jadikan laporan ini schedule Predictive/Preventive">
+                                    <i class="fas fa-calendar-plus"></i> Jadikan Schedule
+                                </button>` : ''}
+                            </div>` : '';
+                    return `
+                        <div class="pending-item">
+                            <div class="pi-top">
+                                <span class="pi-dot" style="background:${meta.dot};"></span>
+                                <span class="pi-main">${escTextPending(item.machine_name || '—')}</span>
+                                <span class="pi-meta">${escTextPending(loc)}</span>
+                                ${srcBadge}
                             </div>
+                            <div class="pi-sub">${escTextPending(item.problem || '')}</div>
+                            <div class="pi-sub">PIC: ${escTextPending(item.pic || '—')} · ${dateFmt}</div>
+                            ${actionsHtml}
                         </div>`;
                 }).join('');
             } catch (e) {
@@ -1845,6 +2305,19 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     // Gunakan flag khusus agar openDetail tahu harus langsung ke form.
                     _autoOpenFollowup = true;
                     openDetail(openId);
+                }, 300);
+            }
+
+            // ── Auto-open dari quick-action dashboard_report: ?convert=ID ─────────────
+            // Langsung buka detail lalu langsung buka modal "Jadikan Schedule".
+            const convertId = parseInt(urlParams.get('convert'));
+            if (convertId) {
+                const cleanUrl2 = window.location.pathname;
+                window.history.replaceState({}, '', cleanUrl2);
+                setTimeout(() => {
+                    if (!CAN_CONVERT_SCHEDULE) return;
+                    openDetail(convertId);
+                    setTimeout(openConvertModal, 350); // tunggu detail selesai load
                 }, 300);
             }
         });
@@ -2172,6 +2645,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         '<span class="status-badge status-done"><i class="fas fa-check-circle"></i> Selesai</span>' :
                         '<span class="status-badge status-pending"><i class="fas fa-clock"></i> Belum Selesai</span>';
 
+                    const isConverted = !!r.converted_to_schedule_id;
+                    const scheduleBadgeHtml = isConverted ?
+                        `<span class="status-badge" style="background:#fef3c7;color:#b45309;"><i class="fas fa-calendar-check"></i> ${r.converted_to_schedule_type === 'preventive' ? 'Preventive' : 'Predictive'} #${r.converted_to_schedule_id}</span>` :
+                        '<span class="text-slate-300 text-xs">Belum dijadwalkan</span>';
+
                     const fields = [
                         ['Tanggal Laporan', r.report_date?.slice(0, 10) ?? '—'],
                         ['Department', r.department],
@@ -2189,6 +2667,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         ['Action / Perbaikan', r.action],
                         ['Status', statusBadgeHtml, true],
                         ['Submitted At', r.created_at?.slice(0, 16) ?? '—'],
+                        ['Schedule', scheduleBadgeHtml, true],
                     ];
 
                     const content = document.getElementById('modal-content');
@@ -2203,6 +2682,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     const editBtn = document.getElementById('btn-edit-report');
                     // Default dulu berdasarkan status baris ini sendiri (fallback kalau fetch thread gagal)
                     editBtn.style.display = statusVal !== 'selesai' ? 'inline-flex' : 'none';
+
+                    // Tombol "Jadikan Schedule" — hanya admin_maintenance/superadmin,
+                    // dan hanya kalau laporan ini belum pernah dikonversi.
+                    const convertBtn = document.getElementById('btn-convert-schedule');
+                    convertBtn.style.display = (CAN_CONVERT_SCHEDULE && !isConverted) ? 'inline-flex' : 'none';
 
                     // Ambil rangkaian (laporan awal + semua follow-up yang terhubung)
                     fetch(`history_report.php?ajax=thread&id=${id}`)
@@ -2460,6 +2944,145 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 .finally(() => {
                     btn.disabled = false;
                     btn.innerHTML = '<i class="fas fa-save"></i> Simpan Informasi';
+                });
+        }
+
+        // ── Modal: Jadikan Schedule ──────────────────────────────────────────────────
+        // Dipanggil langsung dari floating bubble (quick-action), tanpa perlu buka
+        // modal detail penuh dulu. Pakai data cache dari bubble kalau ada; kalau tidak
+        // (mis. dipanggil dari tempat lain), fallback fetch ke ajax=detail.
+        function openConvertModalForId(id) {
+            const cached = pendingItemsById[id];
+            if (cached) {
+                currentDetailRow = cached;
+                openConvertModal();
+                return;
+            }
+            fetch(`history_report.php?ajax=detail&id=${id}`)
+                .then(r => r.json())
+                .then(r => {
+                    if (!r) {
+                        showToast('Data laporan tidak ditemukan.', 'error');
+                        return;
+                    }
+                    currentDetailRow = r;
+                    openConvertModal();
+                })
+                .catch(() => showToast('Koneksi error.', 'error'));
+        }
+
+        function openConvertModal() {
+            if (!currentDetailRow) return;
+            const r = currentDetailRow;
+
+            document.getElementById('convert-subtitle').textContent = `Dari E-Report #${r.id}`;
+            document.getElementById('conv-dept-line').textContent = `${r.department || '—'} / ${r.line || '—'}`;
+            document.getElementById('conv-op-mesin').textContent = `${r.op || '—'} / ${r.machine_name || '—'}`;
+            document.getElementById('conv-machtype').textContent = r.machine_type || '—';
+
+            // Reset field
+            document.getElementById('conv-name-unit').value = '';
+            document.getElementById('conv-maint-point').value = '';
+            document.getElementById('conv-interval').value = '';
+            document.getElementById('conv-reminder').value = '';
+            document.getElementById('conv-use-date').value = (r.report_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+            document.getElementById('conv-change-date').value = '';
+            document.getElementById('convert-inp-type').value = '';
+            document.querySelectorAll('#convert-type-group .choice-btn').forEach(b => b.classList.remove('active'));
+
+            // Default: Change Date Plan mengikuti Use Date + Interval secara otomatis
+            document.getElementById('conv-sync-checkbox').checked = true;
+            document.getElementById('conv-change-date').readOnly = true;
+            document.getElementById('conv-change-date').classList.add('bg-slate-50');
+
+            document.getElementById('modal-convert-overlay').classList.add('open');
+        }
+
+        function closeConvertModal(e) {
+            if (e && e.target !== e.currentTarget) return;
+            document.getElementById('modal-convert-overlay').classList.remove('open');
+        }
+
+        function setConvertType(btn) {
+            document.querySelectorAll('#convert-type-group .choice-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('convert-inp-type').value = btn.dataset.val;
+        }
+
+        // Sinkronkan Change Date Plan = Use Date (Last Change) + Interval bulan,
+        // hanya jika checkbox "Otomatis" dicentang. User tetap bisa uncheck untuk isi manual.
+        function syncConvertChangeDate() {
+            const checkbox = document.getElementById('conv-sync-checkbox');
+            const changeDateInput = document.getElementById('conv-change-date');
+
+            changeDateInput.readOnly = checkbox.checked;
+            changeDateInput.classList.toggle('bg-slate-50', checkbox.checked);
+
+            if (!checkbox.checked) return;
+
+            const useDate = document.getElementById('conv-use-date').value;
+            const interval = parseInt(document.getElementById('conv-interval').value);
+            if (!useDate || !interval || interval <= 0) return;
+
+            const d = new Date(useDate + 'T00:00:00');
+            d.setMonth(d.getMonth() + interval);
+            changeDateInput.value = d.toISOString().slice(0, 10);
+        }
+
+        function submitConvertSchedule() {
+            if (!currentDetailRow) return;
+            const reportId = currentDetailRow.id;
+
+            const type = document.getElementById('convert-inp-type').value;
+            const nameUnit = document.getElementById('conv-name-unit').value.trim();
+            const maintPoint = document.getElementById('conv-maint-point').value.trim();
+            const interval = document.getElementById('conv-interval').value;
+            const reminder = document.getElementById('conv-reminder').value || '0';
+            const useDate = document.getElementById('conv-use-date').value;
+            const changeDate = document.getElementById('conv-change-date').value;
+
+            if (!type) {
+                showToast('Pilih tipe schedule (Predictive/Preventive) dulu.', 'error');
+                return;
+            }
+            if (!nameUnit || !maintPoint || !interval || parseInt(interval) <= 0 || !useDate || !changeDate) {
+                showToast('Lengkapi semua field wajib.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('btn-save-convert');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+            const fd = new FormData();
+            fd.append('report_id', reportId);
+            fd.append('schedule_type', type);
+            fd.append('name_unit', nameUnit);
+            fd.append('maintenance_point', maintPoint);
+            fd.append('interval_month', interval);
+            fd.append('reminder_activity', reminder);
+            fd.append('use_date', useDate);
+            fd.append('change_date_plan', changeDate);
+
+            fetch('history_report.php?ajax=convert_to_schedule', {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        showToast(res.message || 'Berhasil dijadikan schedule.', 'success');
+                        closeConvertModal();
+                        openDetail(reportId); // refresh badge & tombol di modal detail
+                        loadHistory(currentPage);
+                    } else {
+                        showToast(res.message || 'Gagal menyimpan.', 'error');
+                    }
+                })
+                .catch(() => showToast('Koneksi error.', 'error'))
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-save"></i> Simpan Schedule';
                 });
         }
 

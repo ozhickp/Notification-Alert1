@@ -291,13 +291,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     Buat Akun
                 </button>
             </form>
-        </div>
 
-        <!-- Footer links -->
-        <p class="text-center text-slate-500 text-sm mt-6 fade-up-3">
-            Sudah punya akun?
-            <a href="login_user.php" class="text-sky-400 hover:text-sky-300 font-medium transition">Login di sini</a>
-        </p>
+            <!-- Login link (langsung di bawah tombol Buat Akun) -->
+            <p class="text-center text-slate-500 text-sm mt-3 fade-up-3">
+                Sudah punya akun?
+                <a href="login_user.php" class="text-sky-400 hover:text-sky-300 font-medium transition">Login di sini</a>
+            </p>
+        </div>
 
     </div>
 

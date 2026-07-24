@@ -203,7 +203,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </style>
 </head>
 
-<body class="dot-grid flex items-center justify-center min-h-screen px-4 py-12">
+<body class="dot-grid flex items-center justify-center min-h-screen px-4 py-6">
     <a href="index.php" class="fixed top-6 left-6 flex items-center gap-2 text-slate-500 hover:text-blue-600 transition-colors font-semibold text-sm group">
         <div class="w-8 h-8 rounded-full bg-white shadow-sm border border-slate-200 flex items-center justify-center group-hover:border-blue-200 group-hover:bg-blue-50 transition-all">
             <i class="fas fa-arrow-left"></i>
@@ -214,8 +214,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="w-full max-w-md">
 
         <!-- Brand -->
-        <div class="text-center mb-8 fade-up">
-            <div class="inline-flex items-center justify-center w-12 h-12 rounded-2xl mb-4"
+        <div class="text-center mb-5 fade-up">
+            <div class="inline-flex items-center justify-center w-12 h-12 rounded-2xl mb-3"
                 style="background: linear-gradient(135deg,#0ea5e9,#6366f1); box-shadow:0 8px 24px rgba(14,165,233,0.35)">
                 <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -226,9 +226,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
 
         <!-- Card -->
-        <div class="glass-card rounded-2xl p-8 fade-up-2">
+        <div class="glass-card rounded-2xl p-7 fade-up-2">
             <h2 class="brand text-xl font-semibold text-black mb-1">Selamat Datang</h2>
-            <p class="text-slate-500 text-sm mb-6">Masuk ke akun pengguna Anda</p>
+            <p class="text-slate-500 text-sm mb-4">Masuk ke akun pengguna Anda</p>
 
             <!-- Alert Sukses (habis daftar akun) -->
             <?php if (isset($_GET['registered'])): ?>
@@ -250,7 +250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             <?php endif; ?>
 
-            <form method="POST" action="" class="space-y-5" novalidate>
+            <form method="POST" action="" class="space-y-4" novalidate>
 
                 <input type="hidden" name="redirect" value="<?= htmlspecialchars($redirect) ?>">
 
@@ -287,8 +287,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </button>
             </form>
 
+            <!-- Register link (langsung di bawah tombol Masuk) -->
+            <p class="text-center text-slate-500 text-sm mt-3 fade-up-3">
+                Belum punya akun?
+                <a href="register_user.php" class="text-sky-400 hover:text-sky-300 font-medium transition">Daftar di sini</a>
+            </p>
+
             <!-- Divider -->
-            <div class="divider my-6">atau</div>
+            <div class="divider my-4">atau</div>
 
             <!-- Admin Login Button -->
             <a href="login_admin.php"
@@ -300,12 +306,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 Login sebagai Admin
             </a>
         </div>
-
-        <!-- Footer links -->
-        <p class="text-center text-slate-500 text-sm mt-6 fade-up-3">
-            Belum punya akun?
-            <a href="register_user.php" class="text-sky-400 hover:text-sky-300 font-medium transition">Daftar di sini</a>
-        </p>
 
     </div>
 

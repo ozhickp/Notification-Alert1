@@ -338,32 +338,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
         }
 
-        // --- EDIT MASSAL (BULK) — Predictive -------------------------------------
-        // Menerima beberapa jadwal sekaligus (items[idx][...]) dari modal "Edit Massal".
-        // Setiap item tetap dihitung ulang remaining_day, maintenance_status, dan
-        // auto-open part_order/part_availability persis seperti logika edit single di atas,
-        // hanya dijalankan per-baris di dalam satu transaction.
-        if ($_POST['action'] === 'edit_bulk') {
-            $items = $_POST['items'] ?? [];
-            if (!is_array($items) || count($items) === 0) {
-                echo json_encode(['status' => 'error', 'message' => 'Tidak ada jadwal yang dipilih untuk diedit']);
+        // --- JADWAL ULANG (BULK RESCHEDULE) — Predictive --------------------------
+        // Menerima beberapa schedule id sekaligus + SATU tanggal baru (new_date) dari
+        // modal "Jadwal Ulang". Hanya change_date_plan, remaining_day, dan
+        // maintenance_status yang dihitung ulang & diupdate — field lain (department,
+        // line, machine, part, dst.) tidak disentuh sama sekali.
+        if ($_POST['action'] === 'reschedule_bulk') {
+            $rescheduleIds  = $_POST['ids'] ?? [];
+            $rescheduleDate = trim($_POST['new_date'] ?? '');
+            if (!is_array($rescheduleIds) || count($rescheduleIds) === 0) {
+                echo json_encode(['status' => 'error', 'message' => 'Tidak ada jadwal yang dipilih untuk dijadwal ulang']);
+                exit;
+            }
+            if ($rescheduleDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $rescheduleDate)) {
+                echo json_encode(['status' => 'error', 'message' => 'Tanggal baru tidak valid']);
                 exit;
             }
 
             $pdo->beginTransaction();
             try {
                 $successCount = 0;
-                foreach ($items as $item) {
-                    $bulkEditId = (int)($item['id'] ?? 0);
+                $bulkRemainingDay = calculateRemainingDays($rescheduleDate);
+
+                foreach ($rescheduleIds as $rawId) {
+                    $bulkEditId = (int)$rawId;
                     if ($bulkEditId <= 0) continue;
 
-                    $bulkChangeDatePlan = $item['change_date_plan'] ?? null;
-                    $bulkRemainingDay   = calculateRemainingDays($bulkChangeDatePlan);
-                    $bulkRemAct         = (int)($item['reminder_activity'] ?? 0);
-
-                    $currRow = $pdo->prepare("SELECT maintenance_status FROM schedules WHERE id = ?");
+                    $currRow = $pdo->prepare("SELECT reminder_activity FROM schedules WHERE id = ?");
                     $currRow->execute([$bulkEditId]);
-                    $currStatus = $currRow->fetchColumn() ?: 'done';
+                    $bulkRemAct = (int)($currRow->fetchColumn() ?: 0);
                     $currRow->closeCursor();
 
                     $inWindow = ($bulkRemainingDay !== null && (
@@ -372,44 +375,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         ($bulkRemAct > 0 && $bulkRemainingDay <= $bulkRemAct)
                     ));
                     $autoStatus = $inWindow ? 'soon' : 'done';
-                    $wasSecure  = ($currStatus === 'done');
-
-                    if ($inWindow && $wasSecure) {
-                        // Transisi done → soon: auto-open sekali (sama seperti edit single)
-                        $itemPartOrder = 'open';
-                        $itemPartAvail = 'open';
-                    } else {
-                        $itemPartOrder = $item['part_order']        ?? 'close';
-                        $itemPartAvail = $item['part_availability'] ?? 'close';
-                    }
-
-                    $rawQty = $item['part_qty_needed'] ?? '';
-                    $itemPartQty = ($rawQty === '' ? null : max(0, (int)$rawQty));
 
                     $stmt = $pdo->prepare("UPDATE schedules SET
-                        department = ?, line = ?, operation_process = ?, machine_name = ?,
-                        process_machine = ?, name_unit = ?, maintenance_point = ?,
-                        interval_month = ?, use_date = ?, change_date_plan = ?,
-                        reminder_activity = ?, remaining_day = ?,
-                        part_order = ?, part_availability = ?, part_qty_needed = ?,
-                        maintenance_status = ?
+                        change_date_plan = ?, remaining_day = ?, maintenance_status = ?
                         WHERE id = ?");
                     $stmt->execute([
-                        trim($item['department'] ?? ''),
-                        trim($item['line'] ?? ''),
-                        trim($item['operation_process'] ?? ''),
-                        trim($item['machine_name'] ?? ''),
-                        trim($item['process_machine'] ?? ''),
-                        trim($item['name_unit'] ?? ''),
-                        trim($item['maintenance_point'] ?? ''),
-                        (int)($item['interval_month'] ?? 0),
-                        $item['use_date'] ?? null,
-                        $bulkChangeDatePlan,
-                        $bulkRemAct,
+                        $rescheduleDate,
                         $bulkRemainingDay,
-                        $itemPartOrder,
-                        $itemPartAvail,
-                        $itemPartQty,
                         $autoStatus,
                         $bulkEditId,
                     ]);
@@ -432,10 +404,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $successCount++;
                 }
                 $pdo->commit();
-                echo json_encode(['status' => 'success', 'message' => "$successCount jadwal berhasil diupdate"]);
+                echo json_encode(['status' => 'success', 'message' => "$successCount jadwal berhasil dijadwal ulang"]);
             } catch (\Exception $e) {
                 $pdo->rollBack();
-                error_log('[Dashboard] edit_bulk gagal: ' . $e->getMessage());
+                error_log('[Dashboard] reschedule_bulk gagal: ' . $e->getMessage());
                 echo json_encode(['status' => 'error', 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
             }
             exit;
@@ -706,30 +678,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
             exit;
         }
 
-        // --- EDIT MASSAL (BULK) — Preventive --------------------------------------
-        // Sama seperti edit_bulk predictive, tapi tanpa part_order/part_availability/
-        // part_qty_needed (kolom tersebut tidak ada di schedules_preventive).
-        if ($_POST['prev_action'] === 'prev_edit_bulk') {
-            $items = $_POST['items'] ?? [];
-            if (!is_array($items) || count($items) === 0) {
-                echo json_encode(['status' => 'error', 'message' => 'Tidak ada jadwal preventive yang dipilih untuk diedit']);
+        // --- JADWAL ULANG (BULK RESCHEDULE) — Preventive ---------------------------
+        // Sama seperti reschedule_bulk predictive: hanya change_date_plan,
+        // remaining_day, dan maintenance_status yang diupdate.
+        if ($_POST['prev_action'] === 'prev_reschedule_bulk') {
+            $rescheduleIds  = $_POST['ids'] ?? [];
+            $rescheduleDate = trim($_POST['new_date'] ?? '');
+            if (!is_array($rescheduleIds) || count($rescheduleIds) === 0) {
+                echo json_encode(['status' => 'error', 'message' => 'Tidak ada jadwal preventive yang dipilih untuk dijadwal ulang']);
+                exit;
+            }
+            if ($rescheduleDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $rescheduleDate)) {
+                echo json_encode(['status' => 'error', 'message' => 'Tanggal baru tidak valid']);
                 exit;
             }
 
             $pdo->beginTransaction();
             try {
                 $successCount = 0;
-                foreach ($items as $item) {
-                    $bulkPrevId = (int)($item['id'] ?? 0);
+                $bulkRemainingDay = calculateRemainingDays($rescheduleDate);
+
+                foreach ($rescheduleIds as $rawId) {
+                    $bulkPrevId = (int)$rawId;
                     if ($bulkPrevId <= 0) continue;
 
-                    $bulkChangeDatePlan = $item['change_date_plan'] ?? null;
-                    $bulkRemainingDay   = calculateRemainingDays($bulkChangeDatePlan);
-                    $bulkRemAct         = (int)($item['reminder_activity'] ?? 0);
-
-                    $currRow = $pdo->prepare("SELECT maintenance_status FROM schedules_preventive WHERE id = ?");
+                    $currRow = $pdo->prepare("SELECT reminder_activity FROM schedules_preventive WHERE id = ?");
                     $currRow->execute([$bulkPrevId]);
-                    $currStatus = $currRow->fetchColumn() ?: 'done';
+                    $bulkRemAct = (int)($currRow->fetchColumn() ?: 0);
                     $currRow->closeCursor();
 
                     $inWindow = ($bulkRemainingDay !== null && (
@@ -737,28 +712,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                         ($bulkRemainingDay >= 1 && $bulkRemainingDay <= 7) ||
                         ($bulkRemAct > 0 && $bulkRemainingDay <= $bulkRemAct)
                     ));
-                    // Sama seperti prev_edit single: masuk window → 'soon', selain itu → 'done'
                     $autoStatus = $inWindow ? 'soon' : 'done';
-                    unset($currStatus);
 
                     $stmt = $pdo->prepare("UPDATE schedules_preventive SET
-                        department = ?, line = ?, operation_process = ?, machine_name = ?,
-                        process_machine = ?, name_unit = ?, maintenance_point = ?,
-                        interval_month = ?, use_date = ?, change_date_plan = ?,
-                        reminder_activity = ?, remaining_day = ?, maintenance_status = ?
+                        change_date_plan = ?, remaining_day = ?, maintenance_status = ?
                         WHERE id = ?");
                     $stmt->execute([
-                        trim($item['department'] ?? ''),
-                        trim($item['line'] ?? ''),
-                        trim($item['operation_process'] ?? ''),
-                        trim($item['machine_name'] ?? ''),
-                        trim($item['process_machine'] ?? ''),
-                        trim($item['name_unit'] ?? ''),
-                        trim($item['maintenance_point'] ?? ''),
-                        (int)($item['interval_month'] ?? 0),
-                        $item['use_date'] ?? null,
-                        $bulkChangeDatePlan,
-                        $bulkRemAct,
+                        $rescheduleDate,
                         $bulkRemainingDay,
                         $autoStatus,
                         $bulkPrevId,
@@ -782,10 +742,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                     $successCount++;
                 }
                 $pdo->commit();
-                echo json_encode(['status' => 'success', 'message' => "$successCount jadwal preventive berhasil diupdate"]);
+                echo json_encode(['status' => 'success', 'message' => "$successCount jadwal preventive berhasil dijadwal ulang"]);
             } catch (\Exception $e) {
                 $pdo->rollBack();
-                error_log('[Dashboard] prev_edit_bulk gagal: ' . $e->getMessage());
+                error_log('[Dashboard] prev_reschedule_bulk gagal: ' . $e->getMessage());
                 echo json_encode(['status' => 'error', 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
             }
             exit;
@@ -1181,9 +1141,10 @@ try {
     error_log('[Dashboard] schedules_preventive fetch gagal: ' . $e->getMessage());
 }
 
-// ── Data untuk modal "Edit Massal" — job yang statusnya belum 'done'          ──
-// (mendekati hari-H / sudah overdue), dikirim ke JS agar bisa diedit sekaligus
-// dalam 1 modal (checklist), tetap bisa dicentang & diisi satu per satu.
+// ── Data untuk modal "Jadwal Ulang" (reschedule massal) — job yang statusnya  ──
+// belum 'done' (overdue, alert, reminder, maupun secure yang masih aktif),
+// dikirim ke JS agar bisa dicentang beberapa/semua sekaligus lalu di-set ke
+// satu tanggal baru dalam sekali submit.
 $predEditableJobs = array_values(array_filter($schedules, fn($r) => ($r['maintenance_status'] ?? 'soon') !== 'done'));
 $prevEditableJobs = array_values(array_filter($prevSchedules, fn($r) => ($r['maintenance_status'] ?? 'soon') !== 'done'));
 
@@ -1975,9 +1936,9 @@ HTML;
                                 <i class="fas fa-cog"></i> Add Machine
                             </button>
                             <?php if (count($predEditableJobs) > 0): ?>
-                                <button onclick="showBulkEditModal('pred')"
+                                <button onclick="showRescheduleModal('pred')"
                                     class="flex-1 lg:flex-none bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap relative">
-                                    <i class="fas fa-list-check"></i> Edit Massal
+                                    <i class="fas fa-calendar-days"></i> Jadwal Ulang
                                     <span class="bg-white/25 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= count($predEditableJobs) ?></span>
                                 </button>
                             <?php endif; ?>
@@ -2257,9 +2218,9 @@ HTML;
                                 <i class="fas fa-cog"></i> Add Machine
                             </button>
                             <?php if (count($prevEditableJobs) > 0): ?>
-                                <button onclick="showBulkEditModal('prev')"
+                                <button onclick="showRescheduleModal('prev')"
                                     class="flex-1 lg:flex-none bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap relative">
-                                    <i class="fas fa-list-check"></i> Edit Massal
+                                    <i class="fas fa-calendar-days"></i> Jadwal Ulang
                                     <span class="bg-white/25 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= count($prevEditableJobs) ?></span>
                                 </button>
                             <?php endif; ?>
@@ -2700,7 +2661,7 @@ HTML;
                 // Data per status dari PHP
                 const SCHED_BY_STATUS = <?= json_encode($schedByStatus, JSON_UNESCAPED_UNICODE) ?>;
                 const PREV_BY_STATUS = <?= json_encode($prevByStatus, JSON_UNESCAPED_UNICODE) ?>;
-                // Job yang belum 'done' (mendekati H / overdue), sumber data untuk modal "Edit Massal"
+                // Job yang belum 'done' (mendekati H / overdue), sumber data untuk modal "Jadwal Ulang"
                 const PRED_EDIT_JOBS = <?= json_encode($predEditableJobs, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE) ?>;
                 const PREV_EDIT_JOBS = <?= json_encode($prevEditableJobs, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE) ?>;
                 const STATUS_CFG = {
@@ -2751,9 +2712,7 @@ HTML;
                     // Pill slide
                     const indicator = document.getElementById('tabIndicator');
                     indicator.style.transform = isPred ? 'translateX(0)' : 'translateX(calc(100% + 4px))';
-                    indicator.style.background = isPred ?
-                        'linear-gradient(135deg, #5f0f40, #7a1a5a)' :
-                        'linear-gradient(135deg,#4338ca,#4f46e5)';
+                    indicator.style.background = 'linear-gradient(135deg, #5f0f40, #7a1a5a)';
                     // Text colors
                     document.getElementById('tabPredictive').style.color = isPred ? '#fff' : '#64748b';
                     document.getElementById('tabPreventive').style.color = !isPred ? '#fff' : '#64748b';
@@ -3965,155 +3924,71 @@ HTML;
                 </div>
             </div>
 
-            <!-- ========================= MODAL EDIT MASSAL (BULK) ========================= -->
-            <!-- Dipakai untuk predictive & preventive (dibedakan via data-mode="pred"/"prev").   -->
-            <!-- Menampilkan semua job yang belum 'done' (mendekati H / overdue), dikelompokkan   -->
-            <!-- Department → Line → Operation Process. User bisa centang banyak job & submit     -->
-            <!-- sekaligus, atau centang satu job saja untuk mengedit satu per satu.               -->
-            <div id="bulkEditModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
-                <div class="bg-white w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden flex flex-col" style="max-height:92vh;">
+            <!-- ========================= MODAL JADWAL ULANG (BULK RESCHEDULE) ========================= -->
+            <!-- Dipakai untuk predictive & preventive (dibedakan via mode 'pred'/'prev').           -->
+            <!-- Menampilkan semua jadwal yang belum 'done' — overdue, alert, reminder, maupun       -->
+            <!-- secure — dikelompokkan Department → Line → Operation Process, sama seperti modal    -->
+            <!-- Report. Centang satu per satu, atau centang di level Operation Process untuk         -->
+            <!-- otomatis mencentang semua pekerjaan di bawahnya. Semua yang dicentang akan            -->
+            <!-- dipindah ke SATU tanggal baru yang sama saat submit.                                  -->
+            <div id="rescheduleModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
+                <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col" style="max-height:92vh;">
                     <div class="px-5 py-4 flex justify-between items-center flex-shrink-0" style="background:linear-gradient(135deg,#b45309,#d97706);">
                         <div>
-                            <h3 class="text-base font-bold text-white"><i class="fas fa-list-check mr-2"></i>Edit Massal — <span id="bulkEditModalTitle">Predictive</span></h3>
-                            <p class="text-amber-100 text-xs mt-0.5">Centang jadwal yang ingin diubah, lalu edit langsung datanya masing-masing.</p>
+                            <h3 class="text-base font-bold text-white"><i class="fas fa-calendar-days mr-2"></i>Jadwal Ulang — <span id="rescheduleModalTitle">Predictive</span></h3>
+                            <p class="text-amber-100 text-xs mt-0.5">Centang pekerjaan (atau centang seluruh Operation Process), set tanggal baru, lalu submit.</p>
                         </div>
-                        <button onclick="hideModal('bulkEditModal')" class="text-amber-100 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition flex-shrink-0"><i class="fas fa-times"></i></button>
+                        <button onclick="hideModal('rescheduleModal')" class="text-amber-100 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition flex-shrink-0"><i class="fas fa-times"></i></button>
                     </div>
-                    <form id="bulkEditForm" class="p-5 overflow-y-auto" style="flex:1;">
-                        <div id="bulkEditJobsList" class="space-y-3"></div>
-                        <div id="bulkEditAlert" class="hidden rounded-xl p-3 mt-4 text-sm font-medium border"></div>
-                    </form>
+                    <div class="px-5 pt-4 pb-2 flex-shrink-0 bg-amber-50 border-b border-amber-100">
+                        <label class="block text-[10px] font-black text-amber-700 uppercase tracking-widest mb-1">Tanggal Baru (Change Date Plan) <span class="text-red-500">*</span></label>
+                        <input type="date" id="rescheduleNewDate" oninput="updateRescheduleCount()"
+                            class="w-full sm:w-64 border border-amber-200 rounded-lg px-3 py-2.5 text-sm font-bold focus:ring-4 focus:ring-amber-200 outline-none transition bg-white">
+                        <p class="text-[11px] text-amber-700/80 mt-1 mb-3">Tanggal ini akan diterapkan ke semua pekerjaan yang dicentang di bawah.</p>
+                    </div>
+                    <div id="rescheduleJobsList" class="p-5 overflow-y-auto space-y-3" style="flex:1;"></div>
+                    <div id="rescheduleAlert" class="hidden rounded-xl p-3 mx-5 mb-2 text-sm font-medium border flex-shrink-0"></div>
                     <div class="px-5 py-4 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0 bg-white">
-                        <button type="button" onclick="hideModal('bulkEditModal')" class="px-6 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
-                        <button type="button" id="btnSubmitBulkEdit" onclick="submitBulkEdit()" disabled
+                        <button type="button" onclick="hideModal('rescheduleModal')" class="px-6 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
+                        <button type="button" id="btnSubmitReschedule" onclick="submitReschedule()" disabled
                             class="text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm opacity-50 cursor-not-allowed" style="background:#b45309;">
-                            <i class="fas fa-floppy-disk mr-1"></i> Simpan Perubahan (<span id="bulkEditSelectedCount">0</span>)
+                            <i class="fas fa-check mr-1"></i> Terapkan Tanggal Baru (<span id="rescheduleSelectedCount">0</span>)
                         </button>
                     </div>
                 </div>
             </div>
 
             <script>
-                // ── Modal Edit Massal (bulk) — predictive & preventive ──────────────
-                // Sama mekanismenya dengan modal Report: checklist per job, tiap job
-                // punya form sendiri (bisa diisi satu-satu), lalu submit sekaligus untuk
-                // semua job yang dicentang.
-                let bulkEditMode = 'pred'; // 'pred' | 'prev'
+                // ── Modal Jadwal Ulang (bulk reschedule) — predictive & preventive ──────────
+                // Checklist per job, dikelompokkan Department → Line → Operation Process.
+                // Centang checkbox di level Operation Process untuk auto-centang semua job
+                // di bawahnya. Semua job yang dicentang dipindah ke satu tanggal baru bersama.
+                let rescheduleMode = 'pred'; // 'pred' | 'prev'
 
-                function showBulkEditModal(mode) {
-                    bulkEditMode = mode;
+                function showRescheduleModal(mode) {
+                    rescheduleMode = mode;
                     const jobs = (mode === 'pred') ? PRED_EDIT_JOBS : PREV_EDIT_JOBS;
-                    document.getElementById('bulkEditModalTitle').textContent = (mode === 'pred') ? 'Predictive' : 'Preventive';
+                    document.getElementById('rescheduleModalTitle').textContent = (mode === 'pred') ? 'Predictive' : 'Preventive';
+                    document.getElementById('rescheduleNewDate').value = '';
 
-                    const listEl = document.getElementById('bulkEditJobsList');
+                    const listEl = document.getElementById('rescheduleJobsList');
                     listEl.dataset.jobs = JSON.stringify(jobs);
 
-                    const partFieldsHtml = (job, idx) => (mode !== 'pred') ? '' : `
-                        <div class="grid grid-cols-3 gap-2">
-                            <div>
-                                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Part Order</label>
-                                <select id="be_part_order_${idx}" oninput="updateBulkEditCount()" onchange="updateBulkEditCount()"
-                                    class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white">
-                                    <option value="close" ${job.part_order === 'open' ? '' : 'selected'}>close</option>
-                                    <option value="open" ${job.part_order === 'open' ? 'selected' : ''}>open</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Part Availability</label>
-                                <select id="be_part_availability_${idx}" oninput="updateBulkEditCount()" onchange="updateBulkEditCount()"
-                                    class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white">
-                                    <option value="close" ${job.part_availability === 'open' ? '' : 'selected'}>close</option>
-                                    <option value="open" ${job.part_availability === 'open' ? 'selected' : ''}>open</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Qty Part</label>
-                                <input type="number" id="be_part_qty_${idx}" min="0" step="1" value="${job.part_qty_needed ?? ''}" oninput="updateBulkEditCount()"
-                                    class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                            </div>
-                        </div>`;
-
                     const jobCardHtml = (job, idx) => `
-                        <div class="border border-slate-200 rounded-xl overflow-hidden" data-be-card="${idx}">
-                            <label class="flex items-start gap-3 p-3 cursor-pointer hover:bg-slate-50 transition">
-                                <input type="checkbox" class="mt-1 w-4 h-4 accent-amber-600" id="be_check_${idx}"
-                                    onchange="toggleBulkEditDetail(${idx})">
-                                <div class="flex-1 min-w-0">
-                                    <p class="font-bold text-sm text-slate-800">${esc(job.machine_name)} | ${esc(job.operation_process)}</p>
-                                    <p class="text-xs text-slate-500 mt-0.5">${esc(job.maintenance_point)}</p>
-                                    <p class="text-xs text-slate-400 mt-0.5">Change Date Plan: ${esc(job.change_date_plan ?? '-')} • Sisa ${job.remaining_day} hari</p>
-                                </div>
-                            </label>
-                            <div id="be_detail_${idx}" class="hidden border-t border-slate-100 bg-slate-50 p-4 space-y-3">
-                                <div class="grid grid-cols-3 gap-2">
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Department</label>
-                                        <input type="text" id="be_department_${idx}" value="${esc(job.department ?? '')}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Line</label>
-                                        <input type="text" id="be_line_${idx}" value="${esc(job.line ?? '')}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Operation Process</label>
-                                        <input type="text" id="be_operation_process_${idx}" value="${esc(job.operation_process ?? '')}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                </div>
-                                <div class="grid grid-cols-3 gap-2">
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Machine Name</label>
-                                        <input type="text" id="be_machine_name_${idx}" value="${esc(job.machine_name ?? '')}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Process Machine</label>
-                                        <input type="text" id="be_process_machine_${idx}" value="${esc(job.process_machine ?? '')}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Name Unit</label>
-                                        <input type="text" id="be_name_unit_${idx}" value="${esc(job.name_unit ?? '')}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                </div>
-                                <div>
-                                    <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Maintenance Point</label>
-                                    <textarea id="be_maintenance_point_${idx}" rows="2" oninput="updateBulkEditCount()"
-                                        class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm resize-none">${esc(job.maintenance_point ?? '')}</textarea>
-                                </div>
-                                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Interval (bulan)</label>
-                                        <input type="number" id="be_interval_month_${idx}" min="0" step="1" value="${job.interval_month ?? 0}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Use Date</label>
-                                        <input type="date" id="be_use_date_${idx}" value="${job.use_date ?? ''}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Change Date Plan</label>
-                                        <input type="date" id="be_change_date_plan_${idx}" value="${job.change_date_plan ?? ''}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                    <div>
-                                        <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Reminder (hari)</label>
-                                        <input type="number" id="be_reminder_activity_${idx}" min="0" step="1" value="${job.reminder_activity ?? 0}" oninput="updateBulkEditCount()"
-                                            class="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm">
-                                    </div>
-                                </div>
-                                ${partFieldsHtml(job, idx)}
+                        <label class="flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer hover:bg-slate-50 transition border-b border-slate-100 last:border-b-0">
+                            <input type="checkbox" class="mt-1 w-4 h-4 accent-amber-600 resched-job-check" id="rs_check_${idx}"
+                                onchange="updateRescheduleCount()">
+                            <div class="flex-1 min-w-0">
+                                <p class="font-bold text-sm text-slate-800 truncate">${esc(job.machine_name)}</p>
+                                <p class="text-xs text-slate-500 mt-0.5">${esc(job.maintenance_point)}</p>
+                                <p class="text-xs text-slate-400 mt-0.5">Change Date Plan saat ini: ${esc(job.change_date_plan ?? '-')} • Sisa ${job.remaining_day} hari</p>
                             </div>
-                        </div>`;
+                        </label>`;
 
                     if (jobs.length === 0) {
-                        listEl.innerHTML = '<p class="text-center text-slate-400 text-sm py-6">Tidak ada jadwal yang mendekati H / overdue saat ini.</p>';
+                        listEl.innerHTML = '<p class="text-center text-slate-400 text-sm py-6">Tidak ada jadwal yang bisa dijadwal ulang saat ini.</p>';
                     } else {
-                        // Kelompokkan Department → Line → Operation Process, sama seperti modal Report preventive
+                        // Kelompokkan Department → Line → Operation Process, sama seperti modal Report
                         const groups = {};
                         jobs.forEach((job, idx) => {
                             const dept = job.department || '-';
@@ -4125,6 +4000,7 @@ HTML;
                         });
 
                         let html = '';
+                        let opGroupIdx = 0;
                         Object.keys(groups).sort().forEach(dept => {
                             html += `<div class="mb-4">
                                 <div class="flex items-center gap-1.5 mb-2">
@@ -4139,15 +4015,18 @@ HTML;
                                     </div>`;
                                 Object.keys(groups[dept][line]).sort().forEach(op => {
                                     const opIdxs = groups[dept][line][op];
-                                    html += `<details class="ml-1 mb-2 group border border-slate-200 rounded-xl overflow-hidden">
+                                    const gid = opGroupIdx++;
+                                    html += `<details class="ml-1 mb-2 group border border-slate-200 rounded-xl overflow-hidden" open>
                                         <summary class="flex items-center gap-2 cursor-pointer select-none list-none px-3 py-2.5 bg-amber-50 hover:bg-amber-100 transition">
+                                            <input type="checkbox" class="w-4 h-4 accent-amber-600 flex-shrink-0" id="rs_opgroup_${gid}"
+                                                onclick="event.stopPropagation()" onchange="toggleRescheduleOpGroup(${gid}, [${opIdxs.join(',')}])">
                                             <i class="fas fa-chevron-right text-amber-600 text-[10px] transition-transform group-open:rotate-90"></i>
                                             <span class="flex-1 min-w-0">
                                                 <span class="block text-sm font-black text-amber-700 leading-tight truncate">${esc(op)}</span>
                                             </span>
                                             <span class="flex-shrink-0 bg-amber-600 text-white text-[10px] font-black px-2 py-1 rounded-full">${opIdxs.length} job</span>
                                         </summary>
-                                        <div class="space-y-2 p-3 bg-white">
+                                        <div class="bg-white">
                                             ${opIdxs.map(idx => jobCardHtml(jobs[idx], idx)).join('')}
                                         </div>
                                     </details>`;
@@ -4159,106 +4038,76 @@ HTML;
                         listEl.innerHTML = html;
                     }
 
-                    document.getElementById('bulkEditAlert').classList.add('hidden');
-                    updateBulkEditCount();
-                    showModal('bulkEditModal');
+                    document.getElementById('rescheduleAlert').classList.add('hidden');
+                    updateRescheduleCount();
+                    showModal('rescheduleModal');
                 }
 
-                function toggleBulkEditDetail(idx) {
-                    const detail = document.getElementById(`be_detail_${idx}`);
-                    const checked = document.getElementById(`be_check_${idx}`)?.checked;
-                    if (detail) detail.classList.toggle('hidden', !checked);
-                    updateBulkEditCount();
+                // Centang/uncentang checkbox Operation Process → ikut centang/uncentang semua job di bawahnya
+                function toggleRescheduleOpGroup(gid, jobIdxs) {
+                    const groupChecked = document.getElementById(`rs_opgroup_${gid}`)?.checked;
+                    jobIdxs.forEach(idx => {
+                        const cb = document.getElementById(`rs_check_${idx}`);
+                        if (cb) cb.checked = groupChecked;
+                    });
+                    updateRescheduleCount();
                 }
 
-                function updateBulkEditCount() {
-                    const listEl = document.getElementById('bulkEditJobsList');
+                function updateRescheduleCount() {
+                    const listEl = document.getElementById('rescheduleJobsList');
                     const jobs = JSON.parse(listEl.dataset.jobs || '[]');
                     let count = 0;
-                    let allFilled = true;
                     jobs.forEach((job, idx) => {
-                        const cb = document.getElementById(`be_check_${idx}`);
-                        if (cb && cb.checked) {
-                            count++;
-                            const dept = document.getElementById(`be_department_${idx}`)?.value?.trim();
-                            const line = document.getElementById(`be_line_${idx}`)?.value?.trim();
-                            const op = document.getElementById(`be_operation_process_${idx}`)?.value?.trim();
-                            const machine = document.getElementById(`be_machine_name_${idx}`)?.value?.trim();
-                            const point = document.getElementById(`be_maintenance_point_${idx}`)?.value?.trim();
-                            const cdp = document.getElementById(`be_change_date_plan_${idx}`)?.value;
-                            if (!dept || !line || !op || !machine || !point || !cdp) allFilled = false;
-                        }
+                        const cb = document.getElementById(`rs_check_${idx}`);
+                        if (cb && cb.checked) count++;
                     });
-                    document.getElementById('bulkEditSelectedCount').textContent = count;
-                    const btn = document.getElementById('btnSubmitBulkEdit');
-                    const canSubmit = count > 0 && allFilled;
+                    document.getElementById('rescheduleSelectedCount').textContent = count;
+
+                    const newDate = document.getElementById('rescheduleNewDate')?.value;
+                    const btn = document.getElementById('btnSubmitReschedule');
+                    const canSubmit = count > 0 && !!newDate;
                     btn.disabled = !canSubmit;
                     btn.classList.toggle('opacity-50', !canSubmit);
                     btn.classList.toggle('cursor-not-allowed', !canSubmit);
                 }
 
-                async function submitBulkEdit() {
-                    const listEl = document.getElementById('bulkEditJobsList');
+                async function submitReschedule() {
+                    const listEl = document.getElementById('rescheduleJobsList');
                     const jobs = JSON.parse(listEl.dataset.jobs || '[]');
-                    const al = document.getElementById('bulkEditAlert');
+                    const al = document.getElementById('rescheduleAlert');
                     const showErr = (msg) => {
-                        al.className = 'rounded-xl p-3 mt-4 text-sm font-medium border bg-red-50 text-red-800 border-red-200';
+                        al.className = 'rounded-xl p-3 mx-5 mb-2 text-sm font-medium border bg-red-50 text-red-800 border-red-200';
                         al.textContent = msg;
                         al.classList.remove('hidden');
                     };
 
-                    const fd = new FormData();
-                    if (bulkEditMode === 'pred') {
-                        fd.append('action', 'edit_bulk');
-                    } else {
-                        fd.append('prev_action', 'prev_edit_bulk');
-                    }
-
-                    let selectedCount = 0;
-                    for (let idx = 0; idx < jobs.length; idx++) {
-                        const cb = document.getElementById(`be_check_${idx}`);
-                        if (!cb || !cb.checked) continue;
-
-                        const dept = document.getElementById(`be_department_${idx}`)?.value?.trim();
-                        const line = document.getElementById(`be_line_${idx}`)?.value?.trim();
-                        const op = document.getElementById(`be_operation_process_${idx}`)?.value?.trim();
-                        const machine = document.getElementById(`be_machine_name_${idx}`)?.value?.trim();
-                        const point = document.getElementById(`be_maintenance_point_${idx}`)?.value?.trim();
-                        const cdp = document.getElementById(`be_change_date_plan_${idx}`)?.value;
-
-                        if (!dept || !line || !op || !machine || !point || !cdp) {
-                            showErr(`❌ Lengkapi field wajib (department, line, operation process, machine, maintenance point, change date plan) untuk: ${jobs[idx].machine_name} | ${jobs[idx].operation_process}`);
-                            return;
-                        }
-
-                        fd.append(`items[${selectedCount}][id]`, jobs[idx].id);
-                        fd.append(`items[${selectedCount}][department]`, dept);
-                        fd.append(`items[${selectedCount}][line]`, line);
-                        fd.append(`items[${selectedCount}][operation_process]`, op);
-                        fd.append(`items[${selectedCount}][machine_name]`, machine);
-                        fd.append(`items[${selectedCount}][process_machine]`, document.getElementById(`be_process_machine_${idx}`)?.value?.trim() || '');
-                        fd.append(`items[${selectedCount}][name_unit]`, document.getElementById(`be_name_unit_${idx}`)?.value?.trim() || '');
-                        fd.append(`items[${selectedCount}][maintenance_point]`, point);
-                        fd.append(`items[${selectedCount}][interval_month]`, document.getElementById(`be_interval_month_${idx}`)?.value || 0);
-                        fd.append(`items[${selectedCount}][use_date]`, document.getElementById(`be_use_date_${idx}`)?.value || '');
-                        fd.append(`items[${selectedCount}][change_date_plan]`, cdp);
-                        fd.append(`items[${selectedCount}][reminder_activity]`, document.getElementById(`be_reminder_activity_${idx}`)?.value || 0);
-
-                        if (bulkEditMode === 'pred') {
-                            fd.append(`items[${selectedCount}][part_order]`, document.getElementById(`be_part_order_${idx}`)?.value || 'close');
-                            fd.append(`items[${selectedCount}][part_availability]`, document.getElementById(`be_part_availability_${idx}`)?.value || 'close');
-                            fd.append(`items[${selectedCount}][part_qty_needed]`, document.getElementById(`be_part_qty_${idx}`)?.value || '');
-                        }
-
-                        selectedCount++;
-                    }
-
-                    if (selectedCount === 0) {
-                        showErr('❌ Pilih minimal 1 jadwal untuk diedit.');
+                    const newDate = document.getElementById('rescheduleNewDate')?.value;
+                    if (!newDate) {
+                        showErr('❌ Isi tanggal baru terlebih dahulu.');
                         return;
                     }
 
-                    const btn = document.getElementById('btnSubmitBulkEdit');
+                    const selectedIds = [];
+                    jobs.forEach((job, idx) => {
+                        const cb = document.getElementById(`rs_check_${idx}`);
+                        if (cb && cb.checked) selectedIds.push(job.id);
+                    });
+
+                    if (selectedIds.length === 0) {
+                        showErr('❌ Pilih minimal 1 pekerjaan untuk dijadwal ulang.');
+                        return;
+                    }
+
+                    const fd = new FormData();
+                    if (rescheduleMode === 'pred') {
+                        fd.append('action', 'reschedule_bulk');
+                    } else {
+                        fd.append('prev_action', 'prev_reschedule_bulk');
+                    }
+                    fd.append('new_date', newDate);
+                    selectedIds.forEach(id => fd.append('ids[]', id));
+
+                    const btn = document.getElementById('btnSubmitReschedule');
                     if (btn.disabled) return;
                     btn.disabled = true;
                     const originalHtml = btn.innerHTML;
@@ -4270,7 +4119,7 @@ HTML;
                             body: fd
                         })).json();
                         if (r.status === 'success') {
-                            al.className = 'rounded-xl p-3 mt-4 text-sm font-medium border bg-green-50 text-green-800 border-green-200';
+                            al.className = 'rounded-xl p-3 mx-5 mb-2 text-sm font-medium border bg-green-50 text-green-800 border-green-200';
                             al.textContent = '✅ ' + r.message + ' Halaman akan dimuat ulang...';
                             al.classList.remove('hidden');
                             // Reload agar semua badge status/remaining_day/urutan tabel ikut
@@ -4288,6 +4137,7 @@ HTML;
                     }
                 }
             </script>
+
 
             <!-- =========================================================
          MODAL — PREVENTIVE IMPORT EXCEL
