@@ -38,6 +38,65 @@ if (!function_exists('computeNextChangeDate')) {
     }
 }
 
+// ── Resolusi department/line dari ID → NAMA ─────────────────────────────────
+// Beberapa baris lama di schedules/schedules_preventive masih menyimpan
+// department/line sebagai ID angka FK (department → plants.id, line → line.id),
+// bukan nama string ("CONNECTING ROD", "4", dst). Fungsi ini dipakai di SEMUA
+// tempat yang membaca department/line — baik untuk tabel utama maupun endpoint
+// get_schedule/get_prev_schedule (buat isi modal Edit) — supaya keduanya selalu
+// konsisten menampilkan NAMA, bukan angka ID mentah.
+// Urutan resolusi: 1) lookup langsung via FK plants/line (paling akurat),
+// 2) fallback pencocokan machine_name + operation_process ke machine_list.
+if (!function_exists('resolveDeptLineName')) {
+    function resolveDeptLineName(PDO $pdo, array $row): array
+    {
+        $deptIsId = isset($row['department']) && $row['department'] !== '' && ctype_digit((string)$row['department']);
+        $lineIsId = isset($row['line']) && $row['line'] !== '' && ctype_digit((string)$row['line']);
+        if (!$deptIsId && !$lineIsId) {
+            return $row;
+        }
+
+        if ($deptIsId) {
+            $stmt = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
+            $stmt->execute([(int)$row['department']]);
+            $plantName = $stmt->fetchColumn();
+            $stmt->closeCursor();
+            if ($plantName !== false && $plantName !== null && $plantName !== '') {
+                $row['department'] = $plantName;
+                $deptIsId = false;
+            }
+        }
+        if ($lineIsId) {
+            $stmt = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
+            $stmt->execute([(int)$row['line']]);
+            $lineName = $stmt->fetchColumn();
+            $stmt->closeCursor();
+            if ($lineName !== false && $lineName !== null && $lineName !== '') {
+                $row['line'] = $lineName;
+                $lineIsId = false;
+            }
+        }
+
+        if ($deptIsId || $lineIsId) {
+            $stmt = $pdo->prepare(
+                "SELECT department, `line`, machine_name, op
+                 FROM machine_list
+                 WHERE machine_name = ? AND op = ?
+                 LIMIT 1"
+            );
+            $stmt->execute([$row['machine_name'] ?? '', $row['operation_process'] ?? '']);
+            $mlRow = $stmt->fetch(PDO::FETCH_ASSOC);
+            $stmt->closeCursor();
+            if ($mlRow) {
+                if ($deptIsId) $row['department'] = $mlRow['department'];
+                if ($lineIsId) $row['line'] = $mlRow['line'];
+            }
+        }
+
+        return $row;
+    }
+}
+
 $todayStr = date('Y-m-d');
 
 // Ambil nama user yang sedang login
@@ -188,14 +247,18 @@ if (isset($_GET['get_ops'])) {
 if (isset($_GET['get_schedule'])) {
     $stmt = $pdo->prepare("SELECT * FROM schedules WHERE id = ?");
     $stmt->execute([$_GET['get_schedule']]);
-    echo json_encode($stmt->fetch(PDO::FETCH_ASSOC));
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row) $row = resolveDeptLineName($pdo, $row);
+    echo json_encode($row);
     exit;
 }
 
 if (isset($_GET['get_prev_schedule'])) {
     $stmt = $pdo->prepare("SELECT * FROM schedules_preventive WHERE id = ?");
     $stmt->execute([$_GET['get_prev_schedule']]);
-    echo json_encode($stmt->fetch(PDO::FETCH_ASSOC));
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row) $row = resolveDeptLineName($pdo, $row);
+    echo json_encode($row);
     exit;
 }
 
@@ -337,6 +400,82 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['status' => 'success', 'message' => 'Data berhasil diupdate']);
             exit;
         }
+
+        // --- JADWAL ULANG (BULK RESCHEDULE) — Predictive --------------------------
+        // Menerima beberapa schedule id sekaligus + SATU tanggal baru (new_date) dari
+        // modal "Jadwal Ulang". Hanya change_date_plan, remaining_day, dan
+        // maintenance_status yang dihitung ulang & diupdate — field lain (department,
+        // line, machine, part, dst.) tidak disentuh sama sekali.
+        if ($_POST['action'] === 'reschedule_bulk') {
+            $rescheduleIds  = $_POST['ids'] ?? [];
+            $rescheduleDate = trim($_POST['new_date'] ?? '');
+            if (!is_array($rescheduleIds) || count($rescheduleIds) === 0) {
+                echo json_encode(['status' => 'error', 'message' => 'Tidak ada jadwal yang dipilih untuk dijadwal ulang']);
+                exit;
+            }
+            if ($rescheduleDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $rescheduleDate)) {
+                echo json_encode(['status' => 'error', 'message' => 'Tanggal baru tidak valid']);
+                exit;
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $successCount = 0;
+                $bulkRemainingDay = calculateRemainingDays($rescheduleDate);
+
+                foreach ($rescheduleIds as $rawId) {
+                    $bulkEditId = (int)$rawId;
+                    if ($bulkEditId <= 0) continue;
+
+                    $currRow = $pdo->prepare("SELECT reminder_activity FROM schedules WHERE id = ?");
+                    $currRow->execute([$bulkEditId]);
+                    $bulkRemAct = (int)($currRow->fetchColumn() ?: 0);
+                    $currRow->closeCursor();
+
+                    $inWindow = ($bulkRemainingDay !== null && (
+                        $bulkRemainingDay <= 0 ||
+                        ($bulkRemainingDay >= 1 && $bulkRemainingDay <= 7) ||
+                        ($bulkRemAct > 0 && $bulkRemainingDay <= $bulkRemAct)
+                    ));
+                    $autoStatus = $inWindow ? 'soon' : 'done';
+
+                    $stmt = $pdo->prepare("UPDATE schedules SET
+                        change_date_plan = ?, remaining_day = ?, maintenance_status = ?
+                        WHERE id = ?");
+                    $stmt->execute([
+                        $rescheduleDate,
+                        $bulkRemainingDay,
+                        $autoStatus,
+                        $bulkEditId,
+                    ]);
+
+                    $needsEmail = ($bulkRemainingDay !== null && (
+                        $bulkRemainingDay <= 0 ||
+                        ($bulkRemainingDay >= 1 && $bulkRemainingDay <= 7) ||
+                        ($bulkRemAct > 0 && $bulkRemainingDay > 7 && $bulkRemainingDay <= $bulkRemAct)
+                    ));
+                    if ($needsEmail) {
+                        $reminderFile = __DIR__ . '/send_reminder.php';
+                        if (file_exists($reminderFile)) {
+                            if (!function_exists('sendEditedScheduleAlert')) require_once $reminderFile;
+                            if (function_exists('sendEditedScheduleAlert')) {
+                                sendEditedScheduleAlert($pdo, $bulkEditId, $bulkRemainingDay);
+                            }
+                        }
+                    }
+
+                    $successCount++;
+                }
+                $pdo->commit();
+                echo json_encode(['status' => 'success', 'message' => "$successCount jadwal berhasil dijadwal ulang"]);
+            } catch (\Exception $e) {
+                $pdo->rollBack();
+                error_log('[Dashboard] reschedule_bulk gagal: ' . $e->getMessage());
+                echo json_encode(['status' => 'error', 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
+            }
+            exit;
+        }
+
         // --- ADD MACHINE & OP_PROCESS ---
         if ($_POST['action'] === 'add_machine') {
             $plant_id  = (int)($_POST['plant_id']  ?? 0);
@@ -610,6 +749,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
             exit;
         }
 
+        // --- JADWAL ULANG (BULK RESCHEDULE) — Preventive ---------------------------
+        // Sama seperti reschedule_bulk predictive: hanya change_date_plan,
+        // remaining_day, dan maintenance_status yang diupdate.
+        if ($_POST['prev_action'] === 'prev_reschedule_bulk') {
+            $rescheduleIds  = $_POST['ids'] ?? [];
+            $rescheduleDate = trim($_POST['new_date'] ?? '');
+            if (!is_array($rescheduleIds) || count($rescheduleIds) === 0) {
+                echo json_encode(['status' => 'error', 'message' => 'Tidak ada jadwal preventive yang dipilih untuk dijadwal ulang']);
+                exit;
+            }
+            if ($rescheduleDate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $rescheduleDate)) {
+                echo json_encode(['status' => 'error', 'message' => 'Tanggal baru tidak valid']);
+                exit;
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $successCount = 0;
+                $bulkRemainingDay = calculateRemainingDays($rescheduleDate);
+
+                foreach ($rescheduleIds as $rawId) {
+                    $bulkPrevId = (int)$rawId;
+                    if ($bulkPrevId <= 0) continue;
+
+                    $currRow = $pdo->prepare("SELECT reminder_activity FROM schedules_preventive WHERE id = ?");
+                    $currRow->execute([$bulkPrevId]);
+                    $bulkRemAct = (int)($currRow->fetchColumn() ?: 0);
+                    $currRow->closeCursor();
+
+                    $inWindow = ($bulkRemainingDay !== null && (
+                        $bulkRemainingDay <= 0 ||
+                        ($bulkRemainingDay >= 1 && $bulkRemainingDay <= 7) ||
+                        ($bulkRemAct > 0 && $bulkRemainingDay <= $bulkRemAct)
+                    ));
+                    $autoStatus = $inWindow ? 'soon' : 'done';
+
+                    $stmt = $pdo->prepare("UPDATE schedules_preventive SET
+                        change_date_plan = ?, remaining_day = ?, maintenance_status = ?
+                        WHERE id = ?");
+                    $stmt->execute([
+                        $rescheduleDate,
+                        $bulkRemainingDay,
+                        $autoStatus,
+                        $bulkPrevId,
+                    ]);
+
+                    $needsEmail = ($bulkRemainingDay !== null && (
+                        $bulkRemainingDay <= 0 ||
+                        ($bulkRemainingDay >= 1 && $bulkRemainingDay <= 7) ||
+                        ($bulkRemAct > 0 && $bulkRemainingDay > 7 && $bulkRemainingDay <= $bulkRemAct)
+                    ));
+                    if ($needsEmail) {
+                        $reminderFile = __DIR__ . '/send_reminder.php';
+                        if (file_exists($reminderFile)) {
+                            if (!function_exists('sendEditedPrevScheduleAlert')) require_once $reminderFile;
+                            if (function_exists('sendEditedPrevScheduleAlert')) {
+                                sendEditedPrevScheduleAlert($pdo, $bulkPrevId, $bulkRemainingDay);
+                            }
+                        }
+                    }
+
+                    $successCount++;
+                }
+                $pdo->commit();
+                echo json_encode(['status' => 'success', 'message' => "$successCount jadwal preventive berhasil dijadwal ulang"]);
+            } catch (\Exception $e) {
+                $pdo->rollBack();
+                error_log('[Dashboard] prev_reschedule_bulk gagal: ' . $e->getMessage());
+                echo json_encode(['status' => 'error', 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
+            }
+            exit;
+        }
+
         if ($_POST['prev_action'] === 'prev_report') {
             $schedId      = (int)($_POST['schedule_id'] ?? 0);
             $note         = trim($_POST['note'] ?? '');
@@ -707,7 +919,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
             $pdo->beginTransaction();
             try {
                 $successCount = 0;
-                $updatedItems = []; // dikirim balik ke JS supaya tabel bisa di-update tanpa reload
+                $updatedItems = []; // dikirim balik ke JS supaya tabel & kartu bisa di-update tanpa reload
 
                 foreach ($items as $idx => $item) {
                     $schedId    = (int)($item['schedule_id'] ?? 0);
@@ -835,15 +1047,18 @@ $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $stmt->closeCursor();
 
 // ── FALLBACK TAMPILAN: beberapa baris lama menyimpan department/line ────────
-// sebagai ID angka (mis. "1") bukan nama string ("Connecting Rod", "Conrod 1").
-// Tanpa mengubah data di DB, terjemahkan ID → nama dengan mencocokkan
-// machine_name + operation_process ke machine_list (yang selalu berisi nama).
-// (Sama persis dengan fallback yang sudah ada untuk schedules_preventive di bawah.)
+// sebagai ID angka FK (department → plants.id, line → line.id), bukan nama
+// string ("Connecting Rod", "5", dst). Diutamakan lookup LANGSUNG ke tabel
+// plants & line (akurat sesuai relasi FK). Kalau ID tidak ditemukan di sana,
+// baru fallback ke pencocokan machine_name + operation_process ke machine_list
+// (cara lama, dipertahankan untuk baris yang datanya tidak lengkap).
 $schedNeedsLookup = array_filter($schedules, function ($r) {
     return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
         || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
 });
 if (!empty($schedNeedsLookup)) {
+    $stmtPlantById = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
+    $stmtLineById  = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
     $stmtMlSched = $pdo->prepare(
         "SELECT department, `line`, machine_name, op
          FROM machine_list
@@ -856,15 +1071,40 @@ if (!empty($schedNeedsLookup)) {
         if (!$deptIsId && !$lineIsId) {
             continue;
         }
-        $stmtMlSched->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '']);
-        $mlRowSched = $stmtMlSched->fetch(PDO::FETCH_ASSOC);
-        $stmtMlSched->closeCursor();
-        if ($mlRowSched) {
-            if ($deptIsId) {
-                $schedRow['department'] = $mlRowSched['department'];
+
+        // 1) Utamakan lookup langsung via FK plants/line (paling akurat)
+        if ($deptIsId) {
+            $stmtPlantById->execute([(int)$schedRow['department']]);
+            $plantName = $stmtPlantById->fetchColumn();
+            $stmtPlantById->closeCursor();
+            if ($plantName !== false && $plantName !== null && $plantName !== '') {
+                $schedRow['department'] = $plantName;
+                $deptIsId = false;
             }
-            if ($lineIsId) {
-                $schedRow['line'] = $mlRowSched['line'];
+        }
+        if ($lineIsId) {
+            $stmtLineById->execute([(int)$schedRow['line']]);
+            $lineName = $stmtLineById->fetchColumn();
+            $stmtLineById->closeCursor();
+            if ($lineName !== false && $lineName !== null && $lineName !== '') {
+                $schedRow['line'] = $lineName;
+                $lineIsId = false;
+            }
+        }
+
+        // 2) Kalau masih belum ketemu (ID tidak ada di plants/line), fallback lama
+        //    via pencocokan machine_name + operation_process ke machine_list.
+        if ($deptIsId || $lineIsId) {
+            $stmtMlSched->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '']);
+            $mlRowSched = $stmtMlSched->fetch(PDO::FETCH_ASSOC);
+            $stmtMlSched->closeCursor();
+            if ($mlRowSched) {
+                if ($deptIsId) {
+                    $schedRow['department'] = $mlRowSched['department'];
+                }
+                if ($lineIsId) {
+                    $schedRow['line'] = $mlRowSched['line'];
+                }
             }
         }
     }
@@ -917,14 +1157,17 @@ try {
     $stmtPrev->closeCursor();
 
     // ── FALLBACK TAMPILAN: beberapa baris lama menyimpan department/line ────────
-    // sebagai ID angka (mis. "1") bukan nama string ("ASSEMBLING", "LINE 1").
-    // Tanpa mengubah data di DB, terjemahkan ID → nama dengan mencocokkan
-    // machine_name + operation_process ke machine_list (yang selalu berisi nama).
+    // sebagai ID angka FK (department → plants.id, line → line.id), bukan nama
+    // string ("ASSEMBLING", "LINE 1"). Diutamakan lookup LANGSUNG ke tabel
+    // plants & line (akurat sesuai relasi FK). Kalau ID tidak ditemukan di sana,
+    // baru fallback ke pencocokan machine_name + operation_process ke machine_list.
     $prevNeedsLookup = array_filter($prevSchedules, function ($r) {
         return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
             || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
     });
     if (!empty($prevNeedsLookup)) {
+        $stmtPrevPlantById = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
+        $stmtPrevLineById  = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
         $stmtMl = $pdo->prepare(
             "SELECT department, `line`, machine_name, op
              FROM machine_list
@@ -937,15 +1180,39 @@ try {
             if (!$deptIsId && !$lineIsId) {
                 continue;
             }
-            $stmtMl->execute([$prevRow['machine_name'] ?? '', $prevRow['operation_process'] ?? '']);
-            $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
-            $stmtMl->closeCursor();
-            if ($mlRow) {
-                if ($deptIsId) {
-                    $prevRow['department'] = $mlRow['department'];
+
+            // 1) Utamakan lookup langsung via FK plants/line (paling akurat)
+            if ($deptIsId) {
+                $stmtPrevPlantById->execute([(int)$prevRow['department']]);
+                $plantName = $stmtPrevPlantById->fetchColumn();
+                $stmtPrevPlantById->closeCursor();
+                if ($plantName !== false && $plantName !== null && $plantName !== '') {
+                    $prevRow['department'] = $plantName;
+                    $deptIsId = false;
                 }
-                if ($lineIsId) {
-                    $prevRow['line'] = $mlRow['line'];
+            }
+            if ($lineIsId) {
+                $stmtPrevLineById->execute([(int)$prevRow['line']]);
+                $lineName = $stmtPrevLineById->fetchColumn();
+                $stmtPrevLineById->closeCursor();
+                if ($lineName !== false && $lineName !== null && $lineName !== '') {
+                    $prevRow['line'] = $lineName;
+                    $lineIsId = false;
+                }
+            }
+
+            // 2) Kalau masih belum ketemu, fallback lama via machine_list.
+            if ($deptIsId || $lineIsId) {
+                $stmtMl->execute([$prevRow['machine_name'] ?? '', $prevRow['operation_process'] ?? '']);
+                $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
+                $stmtMl->closeCursor();
+                if ($mlRow) {
+                    if ($deptIsId) {
+                        $prevRow['department'] = $mlRow['department'];
+                    }
+                    if ($lineIsId) {
+                        $prevRow['line'] = $mlRow['line'];
+                    }
                 }
             }
         }
@@ -955,6 +1222,13 @@ try {
     $prevSchedules = [];
     error_log('[Dashboard] schedules_preventive fetch gagal: ' . $e->getMessage());
 }
+
+// ── Data untuk modal "Jadwal Ulang" (reschedule massal) — job yang statusnya  ──
+// belum 'done' (overdue, alert, reminder, maupun secure yang masih aktif),
+// dikirim ke JS agar bisa dicentang beberapa/semua sekaligus lalu di-set ke
+// satu tanggal baru dalam sekali submit.
+$predEditableJobs = array_values(array_filter($schedules, fn($r) => ($r['maintenance_status'] ?? 'soon') !== 'done'));
+$prevEditableJobs = array_values(array_filter($prevSchedules, fn($r) => ($r['maintenance_status'] ?? 'soon') !== 'done'));
 
 // Hitung stat cards
 $todaySched   = array_filter($schedules, fn($r) => ($r['change_date_plan'] ?? '') === $todayStr);
@@ -1680,28 +1954,28 @@ HTML;
                             <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#b91c1c;">
                                 Overdue <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
                             </p>
-                            <p class="text-3xl font-black" style="color:#b91c1c;"><?= $cntOverdue ?></p>
+                            <p class="text-3xl font-black" style="color:#b91c1c;" id="cardCntOverdue"><?= $cntOverdue ?></p>
                         </div>
                         <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
                             style="background:#fef9c3;border-color:#fde047;" onclick="openStatusModal('alert')">
                             <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#854d0e;">
                                 Alert <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
                             </p>
-                            <p class="text-3xl font-black" style="color:#854d0e;"><?= $cntAlert ?></p>
+                            <p class="text-3xl font-black" style="color:#854d0e;" id="cardCntAlert"><?= $cntAlert ?></p>
                         </div>
                         <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
                             style="background:#ffedd5;border-color:#fdba74;" onclick="openStatusModal('reminder')">
                             <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#c2410c;">
                                 Reminder <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
                             </p>
-                            <p class="text-3xl font-black" style="color:#c2410c;"><?= $cntReminder ?></p>
+                            <p class="text-3xl font-black" style="color:#c2410c;" id="cardCntReminder"><?= $cntReminder ?></p>
                         </div>
                         <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
                             style="background:#d1fae5;border-color:#6ee7b7;" onclick="openStatusModal('secure')">
                             <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#065f46;">
                                 Secure <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
                             </p>
-                            <p class="text-3xl font-black" style="color:#065f46;"><?= $cntSecure ?></p>
+                            <p class="text-3xl font-black" style="color:#065f46;" id="cardCntSecure"><?= $cntSecure ?></p>
                         </div>
                     </div>
 
@@ -1743,6 +2017,13 @@ HTML;
                                 class="flex-1 lg:flex-none bg-slate-600 hover:bg-slate-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
                                 <i class="fas fa-cog"></i> Add Machine
                             </button>
+                            <?php if (count($predEditableJobs) > 0): ?>
+                                <button onclick="showRescheduleModal('pred')"
+                                    class="flex-1 lg:flex-none bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap relative">
+                                    <i class="fas fa-calendar-days"></i> Jadwal Ulang
+                                    <span class="bg-white/25 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= count($predEditableJobs) ?></span>
+                                </button>
+                            <?php endif; ?>
                         </div>
                     </div>
 
@@ -1766,23 +2047,6 @@ HTML;
                                     </tr>
                                 </thead>
                                 <tbody id="schedBody" class="divide-y divide-slate-100">
-                                    <?php
-                                    // ── Precompute SEMUA job (bukan cuma yang due), dikelompokkan per machine_name ──
-                                    // Dipakai untuk tombol "Edit" gabungan per mesin (picker banyak pekerjaan sekaligus)
-                                    $machineAllJobsPred = [];
-                                    if (!empty($schedules)) {
-                                        foreach ($schedules as $r) {
-                                            $machineAllJobsPred[$r['machine_name']][] = [
-                                                'id'                => (int)$r['id'],
-                                                'maintenance_point' => $r['maintenance_point'],
-                                                'change_date_plan'  => $r['change_date_plan'],
-                                                'remaining_day'     => (int)$r['remaining_day'],
-                                                'maintenance_status' => $r['maintenance_status'] ?? 'soon',
-                                            ];
-                                        }
-                                    }
-                                    $renderedMachineEditBtnPred = [];
-                                    ?>
                                     <?php foreach ($schedules as $row):
                                         $days     = (int)$row['remaining_day'];
                                         $reminder = (int)($row['reminder_activity'] ?? 30);
@@ -1820,6 +2084,7 @@ HTML;
                                             data-schedule-id="<?= $row['id'] ?>"
                                             data-line="<?= htmlspecialchars($row['line'] ?? '') ?>"
                                             data-reminder="<?= (int)$reminder ?>"
+                                            data-days="<?= (int)$days ?>"
                                             data-search="<?= htmlspecialchars($srch) ?>">
                                             <td class="px-5 py-3">
                                                 <div class="font-bold text-sm text-slate-800 whitespace-nowrap">
@@ -1864,23 +2129,6 @@ HTML;
                                                         class="bg-[#7a1a5a] text-white p-2 rounded-lg hover:bg-[#5f0f40] transition" title="Edit">
                                                         <i class="fas fa-edit text-xs"></i>
                                                     </button>
-                                                    <?php
-                                                    $mNameEditPred = $row['machine_name'];
-                                                    if (!isset($renderedMachineEditBtnPred[$mNameEditPred])):
-                                                        $renderedMachineEditBtnPred[$mNameEditPred] = true;
-                                                        $editJobsForMachinePred = $machineAllJobsPred[$mNameEditPred] ?? [];
-                                                        $editCountPred = count($editJobsForMachinePred);
-                                                        if ($editCountPred > 1):
-                                                    ?>
-                                                            <button onclick="showMachineEditPicker('pred', '<?= htmlspecialchars($mNameEditPred, ENT_QUOTES) ?>')"
-                                                                class="bg-sky-600 text-white p-2 rounded-lg hover:bg-sky-700 transition relative" title="Edit Semua Pekerjaan Mesin Ini (<?= $editCountPred ?> job)">
-                                                                <i class="fas fa-layer-group text-xs"></i>
-                                                                <span class="absolute -top-1.5 -right-1.5 bg-slate-700 text-white text-[9px] font-black rounded-full min-w-[16px] h-4 px-0.5 flex items-center justify-center leading-none"><?= $editCountPred ?></span>
-                                                            </button>
-                                                    <?php
-                                                        endif;
-                                                    endif;
-                                                    ?>
                                                     <?php if ($canReport): ?>
                                                         <button onclick="showReportModal(<?= $row['id'] ?>, '<?= htmlspecialchars($row['machine_name'], ENT_QUOTES) ?>')"
                                                             class="bg-emerald-500 text-white p-2 rounded-lg hover:bg-emerald-600 transition" title="Submit Report">
@@ -1989,28 +2237,28 @@ HTML;
                             <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#b91c1c;">
                                 Overdue <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
                             </p>
-                            <p class="text-3xl font-black" style="color:#b91c1c;"><?= $pCntOverdue ?></p>
+                            <p class="text-3xl font-black" style="color:#b91c1c;" id="cardPrevCntOverdue"><?= $pCntOverdue ?></p>
                         </div>
                         <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
                             style="background:#fef9c3;border-color:#fde047;" onclick="openPrevStatusModal('alert')">
                             <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#854d0e;">
                                 Alert <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
                             </p>
-                            <p class="text-3xl font-black" style="color:#854d0e;"><?= $pCntAlert ?></p>
+                            <p class="text-3xl font-black" style="color:#854d0e;" id="cardPrevCntAlert"><?= $pCntAlert ?></p>
                         </div>
                         <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
                             style="background:#ffedd5;border-color:#fdba74;" onclick="openPrevStatusModal('reminder')">
                             <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#c2410c;">
                                 Reminder <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
                             </p>
-                            <p class="text-3xl font-black" style="color:#c2410c;"><?= $pCntReminder ?></p>
+                            <p class="text-3xl font-black" style="color:#c2410c;" id="cardPrevCntReminder"><?= $pCntReminder ?></p>
                         </div>
                         <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
                             style="background:#d1fae5;border-color:#6ee7b7;" onclick="openPrevStatusModal('secure')">
                             <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#065f46;">
                                 Secure <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
                             </p>
-                            <p class="text-3xl font-black" style="color:#065f46;"><?= $pCntSecure ?></p>
+                            <p class="text-3xl font-black" style="color:#065f46;" id="cardPrevCntSecure"><?= $pCntSecure ?></p>
                         </div>
                     </div>
 
@@ -2053,6 +2301,13 @@ HTML;
                                 class="flex-1 lg:flex-none bg-slate-600 hover:bg-slate-700 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap">
                                 <i class="fas fa-cog"></i> Add Machine
                             </button>
+                            <?php if (count($prevEditableJobs) > 0): ?>
+                                <button onclick="showRescheduleModal('prev')"
+                                    class="flex-1 lg:flex-none bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 text-sm whitespace-nowrap relative">
+                                    <i class="fas fa-calendar-days"></i> Jadwal Ulang
+                                    <span class="bg-white/25 text-white text-[10px] font-black px-2 py-0.5 rounded-full"><?= count($prevEditableJobs) ?></span>
+                                </button>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <!-- TABEL PREVENTIVE — tanpa Part Order & Part Availability -->
@@ -2124,6 +2379,7 @@ HTML;
                                                 data-schedule-id="<?= $row['id'] ?>"
                                                 data-line="<?= htmlspecialchars($row['line'] ?? '') ?>"
                                                 data-reminder="<?= (int)$reminder ?>"
+                                                data-days="<?= (int)$days ?>"
                                                 data-search="<?= htmlspecialchars($srch) ?>">
                                                 <td class="px-5 py-3">
                                                     <div class="font-bold text-sm text-slate-800 whitespace-nowrap">
@@ -2498,6 +2754,9 @@ HTML;
                 // Data per status dari PHP
                 const SCHED_BY_STATUS = <?= json_encode($schedByStatus, JSON_UNESCAPED_UNICODE) ?>;
                 const PREV_BY_STATUS = <?= json_encode($prevByStatus, JSON_UNESCAPED_UNICODE) ?>;
+                // Job yang belum 'done' (mendekati H / overdue), sumber data untuk modal "Jadwal Ulang"
+                const PRED_EDIT_JOBS = <?= json_encode($predEditableJobs, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE) ?>;
+                const PREV_EDIT_JOBS = <?= json_encode($prevEditableJobs, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE) ?>;
                 const STATUS_CFG = {
                     overdue: {
                         label: 'Overdue',
@@ -2546,9 +2805,7 @@ HTML;
                     // Pill slide
                     const indicator = document.getElementById('tabIndicator');
                     indicator.style.transform = isPred ? 'translateX(0)' : 'translateX(calc(100% + 4px))';
-                    indicator.style.background = isPred ?
-                        'linear-gradient(135deg, #5f0f40, #7a1a5a)' :
-                        'linear-gradient(135deg,#4338ca,#4f46e5)';
+                    indicator.style.background = 'linear-gradient(135deg, #5f0f40, #7a1a5a)';
                     // Text colors
                     document.getElementById('tabPredictive').style.color = isPred ? '#fff' : '#64748b';
                     document.getElementById('tabPreventive').style.color = !isPred ? '#fff' : '#64748b';
@@ -2813,12 +3070,36 @@ HTML;
                     return `${String(d.getDate()).padStart(2, '0')} ${months[d.getMonth()]} ${d.getFullYear()}`;
                 }
 
+                // Hitung badge class + label dari jumlah hari & threshold reminder (samain logic PHP)
+                function computeRemainingBadge(days, reminder) {
+                    if (days <= 0) return {
+                        cls: 'badge-overdue',
+                        label: 'Overdue'
+                    };
+                    if (days <= 7) return {
+                        cls: 'badge-alert',
+                        label: 'Alert'
+                    };
+                    if (days <= reminder) return {
+                        cls: 'badge-reminder',
+                        label: 'Reminder'
+                    };
+                    return {
+                        cls: 'badge-secure',
+                        label: 'Secure'
+                    };
+                }
+
                 // Update kolom Last Change, Change Date Plan, & badge Remaining Days di baris
                 // tabel — dipanggil setelah submit report berhasil, supaya tabel langsung
-                // akurat tanpa perlu reload halaman.
+                // akurat tanpa perlu reload halaman. Mengembalikan {oldDays, newDays, reminder}
+                // supaya pemanggil bisa sekalian update kartu statistik di atas.
                 function updateRowScheduleDisplay(rowSelector, id, data) {
                     const row = document.querySelector(`${rowSelector}[data-schedule-id="${id}"]`);
-                    if (!row || !data) return;
+                    if (!row || !data) return null;
+
+                    const oldDays = parseInt(row.dataset.days);
+                    const reminder = parseInt(row.dataset.reminder) || 30;
 
                     const useDateCell = row.querySelector('[data-use-date-cell]');
                     if (useDateCell && data.use_date) useDateCell.textContent = formatDateDisplay(data.use_date);
@@ -2826,27 +3107,49 @@ HTML;
                     const cdpCell = row.querySelector('[data-cdp-cell]');
                     if (cdpCell) cdpCell.textContent = formatDateDisplay(data.change_date_plan);
 
+                    let newDays = oldDays;
                     const remainingBadge = row.querySelector('[data-remaining-badge]');
                     if (remainingBadge && data.remaining_day !== null && data.remaining_day !== undefined) {
-                        const days = parseInt(data.remaining_day);
-                        const reminder = parseInt(row.dataset.reminder) || 30;
-                        let badgeClass, statusLabel;
-                        if (days <= 0) {
-                            badgeClass = 'badge-overdue';
-                            statusLabel = 'Overdue';
-                        } else if (days <= 7) {
-                            badgeClass = 'badge-alert';
-                            statusLabel = 'Alert';
-                        } else if (days <= reminder) {
-                            badgeClass = 'badge-reminder';
-                            statusLabel = 'Reminder';
-                        } else {
-                            badgeClass = 'badge-secure';
-                            statusLabel = 'Secure';
-                        }
-                        remainingBadge.className = 'badge ' + badgeClass;
-                        remainingBadge.textContent = `${days} DAYS (${statusLabel})`;
+                        newDays = parseInt(data.remaining_day);
+                        const {
+                            cls,
+                            label
+                        } = computeRemainingBadge(newDays, reminder);
+                        remainingBadge.className = 'badge ' + cls;
+                        remainingBadge.textContent = `${newDays} DAYS (${label})`;
+                        row.dataset.days = newDays;
                     }
+                    return {
+                        oldDays,
+                        newDays,
+                        reminder
+                    };
+                }
+
+                // Update 4 kartu statistik (Overdue/Alert/Reminder/Secure) di atas tabel,
+                // berdasarkan perpindahan status hari sebelum → sesudah submit report.
+                function updateStatCards(prefix, change) {
+                    if (!change) return;
+                    const bucket = (days, reminder) => {
+                        if (days <= 0) return 'Overdue';
+                        if (days <= 7) return 'Alert';
+                        if (days <= reminder) return 'Reminder';
+                        return 'Secure';
+                    };
+                    const from = bucket(change.oldDays, change.reminder);
+                    const to = bucket(change.newDays, change.reminder);
+                    if (from === to) return; // tidak pindah kategori, kartu tidak berubah
+
+                    const ids = {
+                        Overdue: prefix + 'CntOverdue',
+                        Alert: prefix + 'CntAlert',
+                        Reminder: prefix + 'CntReminder',
+                        Secure: prefix + 'CntSecure',
+                    };
+                    const fromEl = document.getElementById(ids[from]);
+                    const toEl = document.getElementById(ids[to]);
+                    if (fromEl) fromEl.textContent = Math.max(0, (parseInt(fromEl.textContent) || 0) - 1);
+                    if (toEl) toEl.textContent = (parseInt(toEl.textContent) || 0) + 1;
                 }
 
                 async function submitReport() {
@@ -2892,7 +3195,8 @@ HTML;
                         if (r.status === 'success') {
                             const doneId = document.getElementById('report_schedule_id').value;
                             markRowDone(doneId);
-                            updateRowScheduleDisplay('tr.sched-row', doneId, r.data);
+                            const change = updateRowScheduleDisplay('tr.sched-row', doneId, r.data);
+                            updateStatCards('card', change);
                             // Buang job yang baru selesai dari antrean, lalu lanjut ke job
                             // berikutnya TANPA menutup modal.
                             reportQueue.splice(reportQueueIndex, 1);
@@ -3503,7 +3807,6 @@ HTML;
                     const on = document.getElementById('pmrQuickFillToggle').checked;
                     document.getElementById('pmrQuickFillFields').classList.toggle('hidden', !on);
                     if (on) {
-                        // Isi dropdown teknisi & default tanggal hari ini kalau belum diisi
                         const teknisiSel = document.getElementById('pmrQuickFillTeknisi');
                         if (teknisiSel.options.length <= 1) {
                             technicianListData.forEach(t => {
@@ -3629,9 +3932,12 @@ HTML;
                             al.className = 'rounded-xl p-3 mt-4 text-sm font-medium border bg-green-50 text-green-800 border-green-200';
                             al.textContent = '✅ ' + r.message + ' Lanjut ke pekerjaan berikutnya...';
                             al.classList.remove('hidden');
-                            // Update baris tabel di belakang tanpa reload halaman.
-                            submittedIds.forEach(id => {
-                                const row = document.querySelector(`tr.prev-sched-row[data-schedule-id="${id}"]`);
+                            // Update baris tabel di belakang tanpa reload halaman, pakai data
+                            // akurat (Last Change, Change Date Plan, Remaining Day) dari server.
+                            (r.data || []).forEach(item => {
+                                const change = updateRowScheduleDisplay('tr.prev-sched-row', item.id, item);
+                                updateStatCards('cardPrev', change);
+                                const row = document.querySelector(`tr.prev-sched-row[data-schedule-id="${item.id}"]`);
                                 if (row) {
                                     const msBadge = row.querySelector('[data-ms-badge]');
                                     if (msBadge) {
@@ -3639,11 +3945,6 @@ HTML;
                                         msBadge.className = 'badge ms-done';
                                     }
                                 }
-                            });
-                            // Update Last Change, Change Date Plan, & badge Remaining Days
-                            // per item, pakai data akurat yang dikirim balik dari server.
-                            (r.data || []).forEach(item => {
-                                updateRowScheduleDisplay('tr.prev-sched-row', item.id, item);
                             });
                             // Buang job yang baru saja disubmit dari cache client, lalu
                             // render ulang checklist di DALAM modal yang sama (modal TIDAK
@@ -3909,6 +4210,221 @@ HTML;
                     </div>
                 </div>
             </div>
+
+            <!-- ========================= MODAL JADWAL ULANG (BULK RESCHEDULE) ========================= -->
+            <!-- Dipakai untuk predictive & preventive (dibedakan via mode 'pred'/'prev').           -->
+            <!-- Menampilkan semua jadwal yang belum 'done' — overdue, alert, reminder, maupun       -->
+            <!-- secure — dikelompokkan Department → Line → Operation Process, sama seperti modal    -->
+            <!-- Report. Centang satu per satu, atau centang di level Operation Process untuk         -->
+            <!-- otomatis mencentang semua pekerjaan di bawahnya. Semua yang dicentang akan            -->
+            <!-- dipindah ke SATU tanggal baru yang sama saat submit.                                  -->
+            <div id="rescheduleModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 items-center justify-center p-4" style="display:none;">
+                <div class="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col" style="max-height:92vh;">
+                    <div class="px-5 py-4 flex justify-between items-center flex-shrink-0" style="background:linear-gradient(135deg,#b45309,#d97706);">
+                        <div>
+                            <h3 class="text-base font-bold text-white"><i class="fas fa-calendar-days mr-2"></i>Jadwal Ulang — <span id="rescheduleModalTitle">Predictive</span></h3>
+                            <p class="text-amber-100 text-xs mt-0.5">Centang pekerjaan (atau centang seluruh Operation Process), set tanggal baru, lalu submit.</p>
+                        </div>
+                        <button onclick="hideModal('rescheduleModal')" class="text-amber-100 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition flex-shrink-0"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="px-5 pt-4 pb-2 flex-shrink-0 bg-amber-50 border-b border-amber-100">
+                        <label class="block text-[10px] font-black text-amber-700 uppercase tracking-widest mb-1">Tanggal Baru (Change Date Plan) <span class="text-red-500">*</span></label>
+                        <input type="date" id="rescheduleNewDate" oninput="updateRescheduleCount()"
+                            class="w-full sm:w-64 border border-amber-200 rounded-lg px-3 py-2.5 text-sm font-bold focus:ring-4 focus:ring-amber-200 outline-none transition bg-white">
+                        <p class="text-[11px] text-amber-700/80 mt-1 mb-3">Tanggal ini akan diterapkan ke semua pekerjaan yang dicentang di bawah.</p>
+                    </div>
+                    <div id="rescheduleJobsList" class="p-5 overflow-y-auto space-y-3" style="flex:1;"></div>
+                    <div id="rescheduleAlert" class="hidden rounded-xl p-3 mx-5 mb-2 text-sm font-medium border flex-shrink-0"></div>
+                    <div class="px-5 py-4 border-t border-slate-100 flex justify-end gap-3 flex-shrink-0 bg-white">
+                        <button type="button" onclick="hideModal('rescheduleModal')" class="px-6 py-3 font-bold text-slate-400 hover:bg-slate-100 rounded-xl transition text-sm">Batal</button>
+                        <button type="button" id="btnSubmitReschedule" onclick="submitReschedule()" disabled
+                            class="text-white px-8 py-3 rounded-xl font-black shadow-lg transition text-sm opacity-50 cursor-not-allowed" style="background:#b45309;">
+                            <i class="fas fa-check mr-1"></i> Terapkan Tanggal Baru (<span id="rescheduleSelectedCount">0</span>)
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                // ── Modal Jadwal Ulang (bulk reschedule) — predictive & preventive ──────────
+                // Checklist per job, dikelompokkan Department → Line → Operation Process.
+                // Centang checkbox di level Operation Process untuk auto-centang semua job
+                // di bawahnya. Semua job yang dicentang dipindah ke satu tanggal baru bersama.
+                let rescheduleMode = 'pred'; // 'pred' | 'prev'
+
+                function showRescheduleModal(mode) {
+                    rescheduleMode = mode;
+                    const jobs = (mode === 'pred') ? PRED_EDIT_JOBS : PREV_EDIT_JOBS;
+                    document.getElementById('rescheduleModalTitle').textContent = (mode === 'pred') ? 'Predictive' : 'Preventive';
+                    document.getElementById('rescheduleNewDate').value = '';
+
+                    const listEl = document.getElementById('rescheduleJobsList');
+                    listEl.dataset.jobs = JSON.stringify(jobs);
+
+                    const jobCardHtml = (job, idx) => `
+                        <label class="flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer hover:bg-slate-50 transition border-b border-slate-100 last:border-b-0">
+                            <input type="checkbox" class="mt-1 w-4 h-4 accent-amber-600 resched-job-check" id="rs_check_${idx}"
+                                onchange="updateRescheduleCount()">
+                            <div class="flex-1 min-w-0">
+                                <p class="font-bold text-sm text-slate-800 truncate">${esc(job.machine_name)}</p>
+                                <p class="text-xs text-slate-500 mt-0.5">${esc(job.maintenance_point)}</p>
+                                <p class="text-xs text-slate-400 mt-0.5">Change Date Plan saat ini: ${esc(job.change_date_plan ?? '-')} • Sisa ${job.remaining_day} hari</p>
+                            </div>
+                        </label>`;
+
+                    if (jobs.length === 0) {
+                        listEl.innerHTML = '<p class="text-center text-slate-400 text-sm py-6">Tidak ada jadwal yang bisa dijadwal ulang saat ini.</p>';
+                    } else {
+                        // Kelompokkan Department → Line → Operation Process, sama seperti modal Report
+                        const groups = {};
+                        jobs.forEach((job, idx) => {
+                            const dept = job.department || '-';
+                            const line = job.line || '-';
+                            const op = job.operation_process || '-';
+                            (groups[dept] ??= {});
+                            (groups[dept][line] ??= {});
+                            (groups[dept][line][op] ??= []).push(idx);
+                        });
+
+                        let html = '';
+                        let opGroupIdx = 0;
+                        Object.keys(groups).sort().forEach(dept => {
+                            html += `<div class="mb-4">
+                                <div class="flex items-center gap-1.5 mb-2">
+                                    <i class="fas fa-building text-amber-600 text-xs"></i>
+                                    <span class="text-xs font-black text-amber-700 uppercase tracking-widest">${esc(dept)}</span>
+                                </div>`;
+                            Object.keys(groups[dept]).sort().forEach(line => {
+                                html += `<div class="ml-3 pl-3 border-l-2 border-amber-100 mb-3">
+                                    <div class="flex items-center gap-1.5 mb-2">
+                                        <i class="fas fa-industry text-slate-400 text-[11px]"></i>
+                                        <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wide">${esc(line)}</span>
+                                    </div>`;
+                                Object.keys(groups[dept][line]).sort().forEach(op => {
+                                    const opIdxs = groups[dept][line][op];
+                                    const gid = opGroupIdx++;
+                                    html += `<details class="ml-1 mb-2 group border border-slate-200 rounded-xl overflow-hidden" open>
+                                        <summary class="flex items-center gap-2 cursor-pointer select-none list-none px-3 py-2.5 bg-amber-50 hover:bg-amber-100 transition">
+                                            <input type="checkbox" class="w-4 h-4 accent-amber-600 flex-shrink-0" id="rs_opgroup_${gid}"
+                                                onclick="event.stopPropagation()" onchange="toggleRescheduleOpGroup(${gid}, [${opIdxs.join(',')}])">
+                                            <i class="fas fa-chevron-right text-amber-600 text-[10px] transition-transform group-open:rotate-90"></i>
+                                            <span class="flex-1 min-w-0">
+                                                <span class="block text-sm font-black text-amber-700 leading-tight truncate">${esc(op)}</span>
+                                            </span>
+                                            <span class="flex-shrink-0 bg-amber-600 text-white text-[10px] font-black px-2 py-1 rounded-full">${opIdxs.length} job</span>
+                                        </summary>
+                                        <div class="bg-white">
+                                            ${opIdxs.map(idx => jobCardHtml(jobs[idx], idx)).join('')}
+                                        </div>
+                                    </details>`;
+                                });
+                                html += `</div>`;
+                            });
+                            html += `</div>`;
+                        });
+                        listEl.innerHTML = html;
+                    }
+
+                    document.getElementById('rescheduleAlert').classList.add('hidden');
+                    updateRescheduleCount();
+                    showModal('rescheduleModal');
+                }
+
+                // Centang/uncentang checkbox Operation Process → ikut centang/uncentang semua job di bawahnya
+                function toggleRescheduleOpGroup(gid, jobIdxs) {
+                    const groupChecked = document.getElementById(`rs_opgroup_${gid}`)?.checked;
+                    jobIdxs.forEach(idx => {
+                        const cb = document.getElementById(`rs_check_${idx}`);
+                        if (cb) cb.checked = groupChecked;
+                    });
+                    updateRescheduleCount();
+                }
+
+                function updateRescheduleCount() {
+                    const listEl = document.getElementById('rescheduleJobsList');
+                    const jobs = JSON.parse(listEl.dataset.jobs || '[]');
+                    let count = 0;
+                    jobs.forEach((job, idx) => {
+                        const cb = document.getElementById(`rs_check_${idx}`);
+                        if (cb && cb.checked) count++;
+                    });
+                    document.getElementById('rescheduleSelectedCount').textContent = count;
+
+                    const newDate = document.getElementById('rescheduleNewDate')?.value;
+                    const btn = document.getElementById('btnSubmitReschedule');
+                    const canSubmit = count > 0 && !!newDate;
+                    btn.disabled = !canSubmit;
+                    btn.classList.toggle('opacity-50', !canSubmit);
+                    btn.classList.toggle('cursor-not-allowed', !canSubmit);
+                }
+
+                async function submitReschedule() {
+                    const listEl = document.getElementById('rescheduleJobsList');
+                    const jobs = JSON.parse(listEl.dataset.jobs || '[]');
+                    const al = document.getElementById('rescheduleAlert');
+                    const showErr = (msg) => {
+                        al.className = 'rounded-xl p-3 mx-5 mb-2 text-sm font-medium border bg-red-50 text-red-800 border-red-200';
+                        al.textContent = msg;
+                        al.classList.remove('hidden');
+                    };
+
+                    const newDate = document.getElementById('rescheduleNewDate')?.value;
+                    if (!newDate) {
+                        showErr('❌ Isi tanggal baru terlebih dahulu.');
+                        return;
+                    }
+
+                    const selectedIds = [];
+                    jobs.forEach((job, idx) => {
+                        const cb = document.getElementById(`rs_check_${idx}`);
+                        if (cb && cb.checked) selectedIds.push(job.id);
+                    });
+
+                    if (selectedIds.length === 0) {
+                        showErr('❌ Pilih minimal 1 pekerjaan untuk dijadwal ulang.');
+                        return;
+                    }
+
+                    const fd = new FormData();
+                    if (rescheduleMode === 'pred') {
+                        fd.append('action', 'reschedule_bulk');
+                    } else {
+                        fd.append('prev_action', 'prev_reschedule_bulk');
+                    }
+                    fd.append('new_date', newDate);
+                    selectedIds.forEach(id => fd.append('ids[]', id));
+
+                    const btn = document.getElementById('btnSubmitReschedule');
+                    if (btn.disabled) return;
+                    btn.disabled = true;
+                    const originalHtml = btn.innerHTML;
+                    btn.innerHTML = 'Menyimpan...';
+
+                    try {
+                        const r = await (await fetch('', {
+                            method: 'POST',
+                            body: fd
+                        })).json();
+                        if (r.status === 'success') {
+                            al.className = 'rounded-xl p-3 mx-5 mb-2 text-sm font-medium border bg-green-50 text-green-800 border-green-200';
+                            al.textContent = '✅ ' + r.message + ' Halaman akan dimuat ulang...';
+                            al.classList.remove('hidden');
+                            // Reload agar semua badge status/remaining_day/urutan tabel ikut
+                            // ter-update sesuai perhitungan ulang di server.
+                            setTimeout(() => window.location.reload(), 1000);
+                        } else {
+                            showErr('❌ ' + (r.message || 'Gagal'));
+                            btn.disabled = false;
+                            btn.innerHTML = originalHtml;
+                        }
+                    } catch (err) {
+                        showErr('❌ Gagal: ' + err.message);
+                        btn.disabled = false;
+                        btn.innerHTML = originalHtml;
+                    }
+                }
+            </script>
+
 
             <!-- =========================================================
          MODAL — PREVENTIVE IMPORT EXCEL
