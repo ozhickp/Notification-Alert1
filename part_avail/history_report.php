@@ -5,6 +5,24 @@ require_once __DIR__ . '/config.php';
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
+// ── Tabel riwayat "Waktu Selesai (Versi Conrod)" ────────────────────────────────
+// Opsi 2 (dipilih user): setiap kali admin_conrod menandai/mengubah waktu selesai
+// versi mereka sendiri, itu tersimpan sebagai ENTRI BARU di sini (bukan overwrite),
+// supaya riwayat perubahannya kelihatan (mis. pertama ditandai jam 10, diubah lagi
+// jam 14). Kolom e_reports.conrod_finish_at tetap dipertahankan sebagai cache nilai
+// TERBARU saja, supaya semua query/logic lama (status menggantung, badge, dsb.)
+// yang bergantung pada kolom itu tidak perlu diubah.
+$pdo->exec("
+    CREATE TABLE IF NOT EXISTS conrod_finish_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        report_id INT NOT NULL,
+        finish_at DATETIME NOT NULL,
+        recorded_by VARCHAR(150) NOT NULL,
+        recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_report_id (report_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+");
+
 if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_ADMIN_CONROD, ROLE_SUPERADMIN], true)) {
     header('Location: index.php');
     exit;
@@ -15,9 +33,10 @@ if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role
 $isConrodOnly     = ($_SESSION['role'] === ROLE_ADMIN_CONROD);
 $currentUsername  = $_SESSION['username'] ?? '';
 $role             = $_SESSION['role'];
-$reportedBy       = $_SESSION['username'] ?? 'Unknown';
+$reportedBy       = $currentUsername ?: 'Unknown';
 
-// Label yang tampil di UI untuk role saat ini (topbar) — samakan dengan dashboard_report.php.
+// Label yang tampil di topbar — sama seperti dashboard_report.php, supaya user
+// selalu tahu dia sedang login sebagai apa.
 $roleLabels = [
     ROLE_SUPERADMIN        => 'Superadmin',
     ROLE_ADMIN_MAINTENANCE => 'Admin Maintenance',
@@ -29,11 +48,6 @@ $roleLabel = $roleLabels[$role] ?? $role;
 // Hanya admin_maintenance & superadmin yang boleh mengubah report jadi Schedule
 // (Predictive/Preventive) — technician & admin_conrod tidak diberi akses fitur ini.
 $canConvertSchedule = in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_SUPERADMIN], true);
-
-// Hanya admin_maintenance / technician / superadmin yang boleh menutup/menindaklanjuti
-// laporan pending — dipakai untuk menentukan apakah tombol "Selesaikan" muncul di
-// floating bubble (samakan dengan dashboard_report.php).
-$canFollowUp = in_array($role, [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_SUPERADMIN], true);
 
 // ── Helper: hitung status awal schedule (samakan dengan logika di dashboard_user.php) ──
 if (!function_exists('computeInitialScheduleStatus')) {
@@ -72,32 +86,124 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
 // Sama persis dengan endpoint di dashboard_report.php — sebuah laporan AWAL
 // (parent_id IS NULL) dianggap masih menggantung hanya jika statusnya
 // 'belum selesai' DAN belum ada satupun follow-up-nya yang sudah 'selesai'.
-// Query & filter role di sini disamakan persis dengan dashboard_report.php, supaya
-// floating bubble selalu tampil sama antara kedua halaman.
+// admin_conrod cuma boleh lihat laporannya sendiri (reported_by = username-nya) —
+// bukan daftar kerja lintas tim, karena admin_conrod tidak menindaklanjuti sendiri.
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'pending_followups') {
     header('Content-Type: application/json');
-    // admin_conrod cuma perlu melihat laporan yang asalnya dari Conrod sendiri
-    // (bubble untuk conrod murni informatif — tidak perlu lihat punya maintenance).
-    $conrodOnlyFilter = $isConrodOnly ? "AND r.foreman IS NOT NULL AND r.foreman <> ''" : "";
+    $extraWhere = $isConrodOnly ? "AND r.reported_by = " . $pdo->quote($currentUsername) : "";
+
+    // Sama seperti di dashboard_report.php: admin_conrod punya status "selesai versi
+    // dia sendiri" yang terpisah (conrod_finish_at), jadi tetap dianggap menggantung
+    // selama itu belum diisi, walau follow-up dari maintenance sudah 'selesai'.
+    $hangingCondition = $isConrodOnly
+        ? "(
+              (r.status = 'belum selesai' AND NOT EXISTS (
+                  SELECT 1 FROM e_reports f WHERE f.parent_id = r.id AND f.status = 'selesai'
+              ))
+              OR (r.foreman IS NOT NULL AND r.foreman <> '' AND r.conrod_finish_at IS NULL)
+          )"
+        : "(r.status = 'belum selesai' AND NOT EXISTS (
+              SELECT 1 FROM e_reports f WHERE f.parent_id = r.id AND f.status = 'selesai'
+          ))";
+
     $rows = $pdo->query("
         SELECT r.id, r.department, r.line, r.op, r.machine_name, r.machine_type, r.problem,
-               r.reported_by, r.pic, r.report_date, r.created_at, r.foreman,
+               r.reported_by, r.pic, r.report_date, r.created_at, r.foreman, r.conrod_finish_at,
+               r.repair_start,
+               (SELECT COUNT(*) FROM conrod_finish_log l WHERE l.report_id = r.id) AS conrod_finish_count,
+               -- Prioritas: 1) kolom foreman (sinyal paling kuat, cuma diisi saat submit
+               -- dari admin_conrod) 2) kolom source_role yang direkam permanen saat baris
+               -- ini dibuat 3) fallback lama (JOIN ke users) buat baris lawas sebelum
+               -- source_role mulai direkam — waktu itu semuanya masih tersimpan default
+               -- 'admin_maintenance', jadi tidak bisa dipercaya begitu saja.
                CASE
                    WHEN r.foreman IS NOT NULL AND r.foreman <> '' THEN 'admin_conrod'
-                   ELSE COALESCE(u.role, 'admin_maintenance')
-               END AS source_role
+                   WHEN r.source_role IS NOT NULL AND r.source_role <> 'admin_maintenance' THEN r.source_role
+                   ELSE COALESCE(u.role, r.source_role, 'admin_maintenance')
+               END AS source_role,
+               -- Info status follow-up Maintenance — dipakai supaya admin_conrod tahu
+               -- apakah laporannya sudah ditindaklanjuti sebelum dia menandai versi
+               -- waktu selesainya sendiri. Independen dari conrod_finish_at.
+               (SELECT COUNT(*) FROM e_reports f WHERE f.parent_id = r.id) AS followup_count,
+               (SELECT COUNT(*) FROM e_reports f WHERE f.parent_id = r.id AND f.status = 'selesai') AS followup_done_count
         FROM e_reports r
         LEFT JOIN users u ON u.username = r.reported_by
         WHERE r.parent_id IS NULL
-          AND r.status = 'belum selesai'
-          $conrodOnlyFilter
-          AND NOT EXISTS (
-              SELECT 1 FROM e_reports f
-              WHERE f.parent_id = r.id AND f.status = 'selesai'
-          )
+          AND {$hangingCondition}
+          $extraWhere
         ORDER BY r.created_at DESC
     ")->fetchAll();
     echo json_encode($rows);
+    exit;
+}
+
+// ─── AJAX: Admin Conrod — tandai "Waktu Selesai (Versi Saya)" pada laporan sendiri ──
+// Sama persis dengan endpoint di dashboard_report.php: CATATAN MANDIRI milik conrod,
+// independen dari status resmi/completed_at. Hanya boleh menandai laporan AWAL
+// (parent_id NULL) milik mereka sendiri.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'mark_conrod_finish' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+    if (!$isConrodOnly) {
+        echo json_encode(['success' => false, 'message' => 'Fitur ini khusus Admin Conrod.']);
+        exit;
+    }
+
+    $reportId   = (int)($_POST['report_id'] ?? 0);
+    $finishDate = trim($_POST['finish_date'] ?? '');
+    $finishTime = trim($_POST['finish_time'] ?? '');
+
+    if (!$reportId || !$finishDate || !$finishTime) {
+        echo json_encode(['success' => false, 'message' => 'Lengkapi tanggal & jam selesai.']);
+        exit;
+    }
+
+    // Pastikan laporan ini memang laporan awal milik conrod yang sedang login —
+    // jangan sampai bisa menandai laporan orang lain lewat ID sembarangan.
+    $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ? AND parent_id IS NULL");
+    $chk->execute([$reportId, $reportedBy]);
+    if (!$chk->fetch()) {
+        echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan atau bukan milik Anda.']);
+        exit;
+    }
+
+    $finishDatetime = $finishDate . ' ' . $finishTime . ':00';
+
+    // Opsi 2: simpan sebagai ENTRI BARU di riwayat (bukan overwrite) — supaya kalau
+    // nanti diubah lagi, entri sebelumnya tetap tercatat sebagai histori.
+    $ins = $pdo->prepare("INSERT INTO conrod_finish_log (report_id, finish_at, recorded_by) VALUES (?, ?, ?)");
+    $ins->execute([$reportId, $finishDatetime, $currentUsername]);
+
+    // e_reports.conrod_finish_at tetap dijaga sinkron sebagai cache nilai TERBARU,
+    // supaya query/badge lama yang masih baca kolom ini langsung tidak perlu diubah.
+    $upd = $pdo->prepare("UPDATE e_reports SET conrod_finish_at = ? WHERE id = ?");
+    $upd->execute([$finishDatetime, $reportId]);
+
+    echo json_encode(['success' => true, 'message' => 'Waktu selesai (versi Anda) berhasil disimpan sebagai entri baru di riwayat.', 'conrod_finish_at' => $finishDatetime]);
+    exit;
+}
+
+// ─── AJAX: riwayat "Waktu Selesai (Versi Conrod)" untuk satu laporan ───────────
+// Dipakai buat menampilkan histori perubahan (opsi 2) — bukan cuma nilai terakhir.
+// admin_conrod hanya boleh lihat riwayat laporan miliknya sendiri; role lain (yang
+// memang berhak lihat laporan ini lewat endpoint detail/pending) boleh lihat juga.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'conrod_finish_log') {
+    header('Content-Type: application/json');
+    $reportId = (int)($_GET['report_id'] ?? 0);
+    if (!$reportId) {
+        echo json_encode([]);
+        exit;
+    }
+    if ($isConrodOnly) {
+        $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ?");
+        $chk->execute([$reportId, $currentUsername]);
+        if (!$chk->fetch()) {
+            echo json_encode([]);
+            exit;
+        }
+    }
+    $stmt = $pdo->prepare("SELECT id, finish_at, recorded_by, recorded_at FROM conrod_finish_log WHERE report_id = ? ORDER BY recorded_at DESC, id DESC");
+    $stmt->execute([$reportId]);
+    echo json_encode($stmt->fetchAll());
     exit;
 }
 
@@ -114,6 +220,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $offset = ($page - 1) * $limit;
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
     $dept   = isset($_GET['dept']) ? trim($_GET['dept']) : '';
+    $source = isset($_GET['source']) ? trim($_GET['source']) : '';
 
     if ($value === '') {
         echo json_encode(['rows' => [], 'total' => 0]);
@@ -127,9 +234,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     }
     $params = [$value];
 
-    // admin_conrod cuma boleh lihat laporan yang dia buat sendiri
+    // admin_conrod cuma boleh lihat laporan yang dia buat sendiri, DITAMBAH follow-up
+    // yang dibuat maintenance/technician atas laporan-laporan miliknya itu — supaya
+    // begitu tiketnya diselesaikan orang lain, dia tetap bisa lihat itu di history-nya
+    // sendiri (follow-up-nya kan direported_by oleh maintenance/technician, bukan dia).
     if ($isConrodOnly) {
-        $where .= " AND r.reported_by = ?";
+        $where .= " AND (r.reported_by = ? OR r.parent_id IN (
+            SELECT id FROM e_reports WHERE reported_by = ? AND parent_id IS NULL
+        ))";
+        $params[] = $currentUsername;
         $params[] = $currentUsername;
     }
 
@@ -137,6 +250,23 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     if ($dept !== '') {
         $where .= " AND r.department = ?";
         $params[] = $dept;
+    }
+
+    // Filter sumber laporan: cek apakah laporan AWAL (root) dari rangkaian baris ini
+    // berasal dari Admin Conrod (foreman terisi / source_role admin_conrod) atau bukan.
+    // Sama persis dengan konvensi CASE fallback yang dipakai di pending_followups.
+    if ($source === 'conrod' || $source === 'maintenance') {
+        $rootConrodExpr = "EXISTS (
+            SELECT 1 FROM e_reports rt
+            LEFT JOIN users ru ON ru.username = rt.reported_by
+            WHERE rt.id = COALESCE(r.parent_id, r.id)
+              AND (
+                    (rt.foreman IS NOT NULL AND rt.foreman <> '')
+                 OR (rt.source_role IS NOT NULL AND rt.source_role = 'admin_conrod')
+                 OR (rt.source_role IS NULL AND ru.role = 'admin_conrod')
+              )
+        )";
+        $where .= $source === 'conrod' ? " AND {$rootConrodExpr}" : " AND NOT {$rootConrodExpr}";
     }
 
     // Server-side search: cari di seluruh data, bukan hanya halaman aktif
@@ -178,7 +308,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $stmt = $pdo->prepare("
         SELECT r.id, r.parent_id, r.report_date, r.department, r.line, r.op, r.shift,
                r.machine_name, r.machine_type,
-               r.repair_start, r.repair_finish,
+               r.repair_start, r.repair_finish, r.conrod_finish_at,
                r.reported_by, r.pic,
                r.problem, r.action, r.status,
                r.created_at
@@ -206,11 +336,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     $stmt->execute([$id]);
     $row = $stmt->fetch();
 
-    // admin_conrod cuma boleh lihat detail laporan yang dia buat sendiri,
-    // walau tahu/tebak ID laporan orang lain lewat AJAX.
+    // admin_conrod cuma boleh lihat detail: laporan yang dia buat sendiri, ATAU
+    // follow-up yang parent_id-nya mengarah ke laporan awal miliknya sendiri —
+    // supaya tidak bisa mengintip laporan/thread milik orang lain lewat ID sembarangan,
+    // tapi tetap bisa lihat siapapun yang menyelesaikan tiketnya sendiri.
     if ($row && $isConrodOnly && $row['reported_by'] !== $currentUsername) {
-        echo json_encode(null);
-        exit;
+        $isOwnThread = false;
+        if ($row['parent_id']) {
+            $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ?");
+            $chk->execute([$row['parent_id'], $currentUsername]);
+            $isOwnThread = (bool)$chk->fetch();
+        }
+        if (!$isOwnThread) {
+            echo json_encode(null);
+            exit;
+        }
     }
 
     echo json_encode($row);
@@ -383,7 +523,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'thread') {
     $rootId = $row['parent_id'] ?: $row['id'];
 
     $stmt = $pdo->prepare("
-        SELECT id, parent_id, report_date, shift, repair_start, repair_finish,
+        SELECT id, parent_id, report_date, shift, repair_start, repair_finish, conrod_finish_at,
                pic, problem, action, status, reported_by, created_at
         FROM e_reports
         WHERE id = ? OR parent_id = ?
@@ -471,8 +611,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         $stmt = $pdo->prepare("
             INSERT INTO e_reports
               (parent_id, department, `line`, op, shift, machine_name, machine_type, report_date,
-               repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+               repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, status, source_role, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
         $stmt->execute([
             $rootId,
@@ -491,6 +631,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             $problem,
             $action,
             $status,
+            $role, // role sesi yang sedang login saat submit — direkam permanen, tidak bergantung JOIN ke tabel users lagi
         ]);
         echo json_encode(['success' => true, 'message' => 'Informasi lanjutan berhasil disimpan.']);
     } catch (\Exception $e) {
@@ -1295,8 +1436,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             right: 12px;
             left: auto;
             z-index: 150;
-            width: 52px;
-            height: 52px;
+            width: 44px;
+            height: 44px;
             border-radius: 50%;
             background: linear-gradient(135deg, #f59e0b, #d97706);
             box-shadow: 0 6px 18px rgba(217, 119, 6, .4);
@@ -1305,7 +1446,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             justify-content: center;
             cursor: grab;
             color: #fff;
-            font-size: 1.15rem;
+            font-size: 1rem;
             touch-action: none;
             transition: transform .15s ease, left .25s cubic-bezier(.2, .8, .2, 1), top .25s cubic-bezier(.2, .8, .2, 1);
         }
@@ -1326,15 +1467,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
         #pending-fab-badge {
             position: absolute;
-            top: -5px;
-            right: -5px;
-            min-width: 22px;
-            height: 22px;
-            padding: 0 5px;
+            top: -4px;
+            right: -4px;
+            min-width: 19px;
+            height: 19px;
+            padding: 0 4px;
             border-radius: 999px;
             background: #dc2626;
             color: #fff;
-            font-size: .7rem;
+            font-size: .65rem;
             font-weight: 800;
             display: flex;
             align-items: center;
@@ -1346,10 +1487,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         #pending-window {
             position: fixed;
             top: 70px;
-            left: calc(100vw - 382px);
+            left: calc(100vw - 342px);
             z-index: 151;
-            width: 360px;
-            max-height: 460px;
+            width: 320px;
+            max-height: 420px;
             background: #fff;
             border-radius: 14px;
             box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
@@ -1459,6 +1600,25 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             margin-top: 5px;
         }
 
+        .src-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 1px 7px;
+            border-radius: 999px;
+            font-size: .64rem;
+            font-weight: 800;
+            letter-spacing: .02em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .src-badge .sb-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+        }
+
         .pi-btn-selesaikan {
             display: inline-flex;
             align-items: center;
@@ -1477,25 +1637,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
         .pi-btn-selesaikan:hover {
             opacity: .85;
-        }
-
-        .src-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 1px 7px;
-            border-radius: 999px;
-            font-size: .64rem;
-            font-weight: 800;
-            letter-spacing: .02em;
-            text-transform: uppercase;
-            white-space: nowrap;
-        }
-
-        .src-badge .sb-dot {
-            width: 5px;
-            height: 5px;
-            border-radius: 50%;
         }
     </style>
 </head>
@@ -1517,6 +1658,51 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             </button>
         </div>
         <div id="pending-window-body"></div>
+    </div>
+
+    <!-- ═══ MODAL: Tandai Waktu Selesai (Versi Admin Conrod) ═══ -->
+    <div id="modal-conrod-finish-overlay" onclick="closeMarkConrodFinish(event)" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);z-index:300;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:18px;width:90%;max-width:400px;box-shadow:0 24px 60px rgba(0,0,0,.25);">
+            <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <h3 class="text-base font-bold text-slate-800"><i class="fas fa-clock" style="color:#0d9488;"></i> Waktu Selesai (Versi Anda)</h3>
+                <button onclick="closeMarkConrodFinish()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="px-6 py-5">
+                <p class="text-xs text-slate-400 mb-4">
+                    Ini catatan mandiri Anda sendiri — kapan menurut Anda masalah ini sudah beres di lapangan.
+                    Ini tidak menutup tiketnya secara resmi; maintenance tetap yang menentukan status resmi
+                    selesai lewat proses follow-up mereka sendiri. Setiap kali disimpan, ini tercatat sebagai
+                    entri baru di riwayat — entri sebelumnya tidak hilang/tertimpa.
+                </p>
+                <div id="cf-history-wrap" style="display:none;margin-bottom:14px;">
+                    <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">
+                        <i class="fas fa-history"></i> Riwayat Perubahan
+                    </div>
+                    <div id="cf-history-list" style="max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;"></div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="form-label">Tanggal <span class="text-red-400">*</span></label>
+                        <input type="date" id="cf-finish-date" class="form-field">
+                    </div>
+                    <div>
+                        <label class="form-label">Jam <span class="text-red-400">*</span></label>
+                        <input type="time" id="cf-finish-time" class="form-field">
+                    </div>
+                </div>
+            </div>
+            <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-end gap-2">
+                <button onclick="closeMarkConrodFinish()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
+                    Batal
+                </button>
+                <button id="btn-save-conrod-finish" onclick="submitMarkConrodFinish()"
+                    class="px-4 py-2 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5" style="background:#0d9488;">
+                    <i class="fas fa-save"></i> Simpan
+                </button>
+            </div>
+        </div>
     </div>
 
     <aside id="sidebar" class="collapsed">
@@ -1627,6 +1813,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             <option value="">Semua Department</option>
                         </select>
                     </div>
+
+                    <?php if (!$isConrodOnly): ?>
+                        <!-- Filter sumber laporan: pisahkan laporan yang berasal dari kegiatan
+                         Maintenance/Technician sendiri vs laporan awal dari Admin Conrod —
+                         supaya admin_maintenance bisa lihat salah satu saja kalau perlu. -->
+                        <div id="source-filter-wrap">
+                            <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Sumber Laporan</label>
+                            <select id="inp-source" onchange="loadHistory(1)"
+                                class="form-field text-xs" style="min-width:190px;">
+                                <option value="">Semua Sumber</option>
+                                <option value="maintenance">Maintenance / Technician</option>
+                                <option value="conrod">Admin Conrod</option>
+                            </select>
+                        </div>
+                    <?php endif; ?>
 
                     <div id="total-worktime-wrap" style="display:none;position:relative;">
                         <div class="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-orange-200 bg-orange-50">
@@ -1838,6 +2039,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         class="px-4 py-2 rounded-xl bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs font-bold transition-all flex items-center gap-1.5">
                         <i class="fas fa-plus-circle"></i> Tambah Info
                     </button>
+                    <button id="btn-conrod-finish" onclick="openMarkConrodFinish(currentDetailRow.id)" style="display:none;background:linear-gradient(135deg,#2dd4bf,#0d9488);"
+                        class="px-4 py-2 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5">
+                        <i class="fas fa-clock"></i> Tandai Waktu Selesai
+                    </button>
                     <button onclick="closeModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
                         Tutup
                     </button>
@@ -1955,7 +2160,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
     <script>
         const IS_CONROD_ONLY = <?= $isConrodOnly ? 'true' : 'false' ?>;
         const CAN_CONVERT_SCHEDULE = <?= $canConvertSchedule ? 'true' : 'false' ?>;
-        const CAN_FOLLOWUP = <?= $canFollowUp ? 'true' : 'false' ?>;
         let currentMode = 'daily';
         let currentPage = 1;
         let totalRecords = 0;
@@ -1974,33 +2178,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             return d.innerHTML;
         }
 
-        // ── Label & warna badge sesuai asal laporan (samakan dengan dashboard_report.php) ──
-        function sourceRoleMeta(role) {
-            switch (role) {
-                case 'admin_conrod':
-                    return {
-                        label: 'Conrod', bg: '#fef3c7', text: '#92400e', dot: '#f59e0b'
-                    };
-                case 'technician':
-                    return {
-                        label: 'Technician', bg: '#dbeafe', text: '#1e40af', dot: '#3b82f6'
-                    };
-                case 'superadmin':
-                    return {
-                        label: 'Superadmin', bg: '#ede9fe', text: '#5b21b6', dot: '#8b5cf6'
-                    };
-                case 'admin_maintenance':
-                default:
-                    return {
-                        label: 'Maintenance', bg: '#d1fae5', text: '#065f46', dot: '#10b981'
-                    };
-            }
-        }
-
         const PENDING_POS_KEY = 'pending_widget_pos';
         const EDGE_MARGIN = 12;
-        const FAB_SIZE = 52; // harus sama dengan width/height #pending-fab di CSS
-        let pendingItemsById = {}; // cache data laporan pending untuk modal Jadikan Schedule
+        const FAB_SIZE = 44; // harus sama dengan width/height #pending-fab di CSS
 
         function clampPos(x, y, w, h) {
             const maxX = window.innerWidth - w - EDGE_MARGIN;
@@ -2127,7 +2307,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 x: fabRect.left,
                 y: fabRect.top
             };
-            const pos = clampPos(fabRect.left, fabRect.top, 360, 1);
+            const pos = clampPos(fabRect.left, fabRect.top, 320, 1);
             win.style.left = pos.x + 'px';
             win.style.top = pos.y + 'px';
             fab.style.display = 'none';
@@ -2162,10 +2342,74 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
         document.getElementById('pending-window-close').addEventListener('click', closePendingWindow);
 
+        // Warna & label badge sumber laporan (dipakai di daftar bubble "Pekerjaan Belum
+        // Selesai"). Fungsi ini kelewatan waktu file ini dibuat — cuma ada di
+        // dashboard_report.php — makanya render body bubble gagal diam-diam di sini.
+        function sourceRoleMeta(role) {
+            switch (role) {
+                case 'admin_conrod':
+                    return {
+                        label: 'Conrod', bg: '#fef3c7', text: '#92400e', dot: '#f59e0b'
+                    };
+                case 'technician':
+                    return {
+                        label: 'Technician', bg: '#dbeafe', text: '#1e40af', dot: '#3b82f6'
+                    };
+                case 'superadmin':
+                    return {
+                        label: 'Superadmin', bg: '#ede9fe', text: '#5b21b6', dot: '#8b5cf6'
+                    };
+                case 'admin_maintenance':
+                default:
+                    return {
+                        label: 'Maintenance', bg: '#d1fae5', text: '#065f46', dot: '#10b981'
+                    };
+            }
+        }
+
+        // Badge status follow-up Maintenance — khusus buat konteks admin_conrod, supaya
+        // dia tahu apakah laporannya sudah disentuh Maintenance sebelum menandai versi
+        // waktu selesainya sendiri. Independen dari conrod_finish_at.
+        function maintenanceFollowupBadge(item) {
+            const followupCount = Number(item.followup_count || 0);
+            const followupDone = Number(item.followup_done_count || 0) > 0;
+            let label, bg, color, icon;
+            if (followupDone) {
+                label = 'Maintenance: sudah diselesaikan resmi';
+                bg = '#d1fae5';
+                color = '#047857';
+                icon = 'fa-check-circle';
+            } else if (followupCount > 0) {
+                label = 'Maintenance: sedang ditindaklanjuti';
+                bg = '#dbeafe';
+                color = '#1d4ed8';
+                icon = 'fa-spinner';
+            } else {
+                label = 'Maintenance: belum ditindaklanjuti';
+                bg = '#f1f5f9';
+                color = '#64748b';
+                icon = 'fa-hourglass-half';
+            }
+            return `<div class="pi-sub" style="display:inline-flex;align-items:center;gap:5px;background:${bg};color:${color};padding:2px 8px;border-radius:999px;font-weight:700;font-size:.68rem;margin-top:2px;">
+                        <i class="fas ${icon}"></i> ${label}
+                    </div>`;
+        }
+
+        let lastPendingSignature = null;
+
         async function loadPendingFollowups() {
             try {
                 const res = await fetch('history_report.php?ajax=pending_followups');
                 const data = await res.json();
+
+                // Change detection: skip render kalau data persis sama dengan hasil
+                // polling sebelumnya — supaya window bubble yang lagi dibuka user
+                // (misal ada "Riwayat" inline yang sedang di-expand) tidak ke-reset
+                // tiap kali polling jalan, padahal tidak ada perubahan data apapun.
+                const signature = JSON.stringify(data);
+                if (signature === lastPendingSignature) return;
+                lastPendingSignature = signature;
+
                 const fab = document.getElementById('pending-fab');
                 const badge = document.getElementById('pending-fab-badge');
                 const win = document.getElementById('pending-window');
@@ -2187,8 +2431,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     fab.style.display = 'flex';
                 }
 
-                // Simpan data mentah per-id supaya bisa dipakai ulang oleh modal Jadikan Schedule
-                // tanpa perlu fetch ulang ke server.
                 pendingItemsById = {};
                 data.forEach(item => {
                     pendingItemsById[item.id] = item;
@@ -2200,22 +2442,57 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     const dateFmt = item.report_date ? item.report_date.slice(0, 10) : '—';
                     const meta = sourceRoleMeta(item.source_role);
                     const srcBadge = `<span class="src-badge" style="background:${meta.bg};color:${meta.text};"><span class="sb-dot" style="background:${meta.dot};"></span>${meta.label}</span>`;
-                    const showActions = CAN_FOLLOWUP || CAN_CONVERT_SCHEDULE;
-                    const actionsHtml = showActions ? `
+                    // Info status follow-up Maintenance — cuma relevan buat admin_conrod,
+                    // supaya dia tahu progres resminya sebelum menandai versi sendiri.
+                    const followupBadge = IS_CONROD_ONLY ? maintenanceFollowupBadge(item) : '';
+
+                    // Kalau conrod sudah menandai versi waktu selesainya sendiri, tampilkan
+                    // sebagai konteks — bukan status resmi (status resmi tetap lewat "Selesaikan").
+                    const finishCount = Number(item.conrod_finish_count || 0);
+                    const conrodFinishInfo = item.conrod_finish_at ? `
+                            <div class="pi-sub" style="color:#0d9488;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                <span><i class="fas fa-clock"></i> Ditandai selesai (versi Conrod): ${escTextPending(item.conrod_finish_at.replace('T', ' ').slice(0, 16))}</span>
+                                ${finishCount > 1 ? `<span style="cursor:pointer;text-decoration:underline;color:#0f766e;" onclick="event.stopPropagation(); toggleConrodFinishHistoryInline(${item.id})">Riwayat (${finishCount})</span>` : ''}
+                            </div>
+                            <div id="pi-history-${item.id}" style="display:none;"></div>` : '';
+
+                    let actionRow;
+                    if (IS_CONROD_ONLY) {
+                        // Conrod tidak menindaklanjuti tiketnya sendiri, tapi boleh mencatat
+                        // versi waktu selesai MEREKA sendiri — independen dari status resmi.
+                        actionRow = item.conrod_finish_at ? `
                             <div class="pi-action">
-                                ${CAN_FOLLOWUP ? `
+                                <span class="pi-btn-selesaikan" style="background:#ccfbf1;color:#0d9488;cursor:default;">
+                                    <i class="fas fa-check"></i> Selesai (versi Anda): ${escTextPending(item.conrod_finish_at.replace('T', ' ').slice(0, 16))}
+                                </span>
+                                <button type="button" class="pi-btn-selesaikan" style="background:#f1f5f9;color:#64748b;border:none;cursor:pointer;"
+                                   onclick="openMarkConrodFinish(${item.id})" title="Ubah waktu">
+                                    <i class="fas fa-pen"></i>
+                                </button>
+                            </div>` : `
+                            <div class="pi-action">
+                                <button type="button" class="pi-btn-selesaikan" style="background:#ccfbf1;color:#0d9488;border:none;cursor:pointer;"
+                                   onclick="openMarkConrodFinish(${item.id})"
+                                   title="Catat waktu selesai versi Anda sendiri">
+                                    <i class="fas fa-clock"></i> Tandai Waktu Selesai (Versi Saya)
+                                </button>
+                            </div>`;
+                    } else {
+                        actionRow = `
+                            <div class="pi-action">
                                 <button class="pi-btn-selesaikan"
                                         onclick="closePendingWindow(); _autoOpenFollowup = true; openDetail(${item.id});"
                                         title="Buka form penyelesaian laporan ini">
                                     <i class="fas fa-check-circle"></i> Selesaikan
-                                </button>` : ''}
+                                </button>
                                 ${CAN_CONVERT_SCHEDULE ? `
                                 <button class="pi-btn-selesaikan" style="background:#fef3c7;color:#b45309;"
-                                        onclick="openConvertModalForId(${item.id});"
-                                        title="Jadikan laporan ini schedule Predictive/Preventive">
+                                   onclick="openConvertModalForBubbleItemById(${item.id})"
+                                   title="Jadikan laporan ini schedule Predictive/Preventive">
                                     <i class="fas fa-calendar-plus"></i> Jadikan Schedule
                                 </button>` : ''}
-                            </div>` : '';
+                            </div>`;
+                    }
                     return `
                         <div class="pending-item">
                             <div class="pi-top">
@@ -2226,7 +2503,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             </div>
                             <div class="pi-sub">${escTextPending(item.problem || '')}</div>
                             <div class="pi-sub">PIC: ${escTextPending(item.pic || '—')} · ${dateFmt}</div>
-                            ${actionsHtml}
+                            ${followupBadge}
+                            ${conrodFinishInfo}
+                            ${actionRow}
                         </div>`;
                 }).join('');
             } catch (e) {
@@ -2234,11 +2513,152 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             }
         }
 
+        // Toggle daftar riwayat "Waktu Selesai (Versi Conrod)" langsung inline di
+        // dalam kartu floating bubble, tanpa perlu buka modal — cukup buat intip cepat.
+        function toggleConrodFinishHistoryInline(id) {
+            const box = document.getElementById(`pi-history-${id}`);
+            if (!box) return;
+            if (box.style.display === 'block') {
+                box.style.display = 'none';
+                return;
+            }
+            box.style.display = 'block';
+            box.innerHTML = '<div class="pi-sub" style="color:#94a3b8;">Memuat riwayat...</div>';
+            fetch(`history_report.php?ajax=conrod_finish_log&report_id=${id}`)
+                .then(r => r.json())
+                .then(rows => {
+                    if (!Array.isArray(rows) || rows.length === 0) {
+                        box.innerHTML = '';
+                        return;
+                    }
+                    box.innerHTML = `<div style="margin-top:2px;padding:6px 8px;background:#f8fafc;border-radius:8px;display:flex;flex-direction:column;gap:4px;">` +
+                        rows.map((row, idx) => `
+                            <div style="font-size:.68rem;color:${idx===0?'#0d9488':'#64748b'};font-weight:${idx===0?'700':'500'};">
+                                <i class="fas fa-clock"></i> ${escTextPending((row.finish_at||'').replace('T',' ').slice(0,16))}
+                                <span style="color:#94a3b8;">· dicatat ${escTextPending((row.recorded_at||'').replace('T',' ').slice(0,16))}</span>
+                            </div>`).join('') +
+                        `</div>`;
+                })
+                .catch(() => {
+                    box.innerHTML = '';
+                });
+        }
+
+        // ── Admin Conrod: Tandai Waktu Selesai (Versi Saya) ─────────────────────────
+        let conrodFinishReportId = null;
+
+        function openMarkConrodFinish(id) {
+            conrodFinishReportId = id;
+            // Bisa dibuka dari dua tempat: kartu bubble (pendingItemsById) atau tombol
+            // di dalam modal detail (currentDetailRow) — pakai mana saja yang cocok.
+            const item = pendingItemsById[id] || (currentDetailRow && currentDetailRow.id === id ? currentDetailRow : null);
+            const now = new Date();
+            if (item && item.conrod_finish_at) {
+                const d = item.conrod_finish_at.replace('T', ' ');
+                document.getElementById('cf-finish-date').value = d.slice(0, 10);
+                document.getElementById('cf-finish-time').value = d.slice(11, 16);
+            } else {
+                document.getElementById('cf-finish-date').value = now.toISOString().slice(0, 10);
+                document.getElementById('cf-finish-time').value = now.toTimeString().slice(0, 5);
+            }
+            document.getElementById('modal-conrod-finish-overlay').style.display = 'flex';
+            loadConrodFinishHistory(id);
+        }
+
+        // Riwayat perubahan "Waktu Selesai (Versi Conrod)" — opsi 2: tiap perubahan
+        // tersimpan sebagai entri baru, jadi ditampilkan sebagai daftar, terbaru di atas.
+        function loadConrodFinishHistory(reportId) {
+            const wrap = document.getElementById('cf-history-wrap');
+            const list = document.getElementById('cf-history-list');
+            wrap.style.display = 'none';
+            list.innerHTML = '';
+            fetch(`history_report.php?ajax=conrod_finish_log&report_id=${reportId}`)
+                .then(r => r.json())
+                .then(rows => {
+                    if (!Array.isArray(rows) || rows.length === 0) return;
+                    wrap.style.display = 'block';
+                    list.innerHTML = rows.map((row, idx) => `
+                        <div style="display:flex;align-items:center;gap:8px;background:${idx===0?'#f0fdfa':'#f8fafc'};border:1px solid ${idx===0?'#99f6e4':'#e2e8f0'};border-radius:8px;padding:6px 10px;font-size:.72rem;">
+                            <i class="fas fa-clock" style="color:${idx===0?'#0d9488':'#94a3b8'};"></i>
+                            <span style="font-weight:700;color:#334155;">${esc((row.finish_at||'').replace('T',' ').slice(0,16))}</span>
+                            <span style="color:#94a3b8;">· dicatat ${esc((row.recorded_at||'').replace('T',' ').slice(0,16))}</span>
+                            ${idx===0 ? '<span style="margin-left:auto;color:#0d9488;font-weight:700;">Terbaru</span>' : ''}
+                        </div>`).join('');
+                })
+                .catch(() => {});
+        }
+
+        function closeMarkConrodFinish(e) {
+            if (e && e.target !== e.currentTarget) return;
+            document.getElementById('modal-conrod-finish-overlay').style.display = 'none';
+        }
+
+        function submitMarkConrodFinish() {
+            if (!conrodFinishReportId) return;
+            const finishDate = document.getElementById('cf-finish-date').value;
+            const finishTime = document.getElementById('cf-finish-time').value;
+            if (!finishDate || !finishTime) {
+                showToast('Lengkapi tanggal & jam.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('btn-save-conrod-finish');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+            const fd = new FormData();
+            fd.append('report_id', conrodFinishReportId);
+            fd.append('finish_date', finishDate);
+            fd.append('finish_time', finishTime);
+
+            fetch('history_report.php?ajax=mark_conrod_finish', {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        showToast(res.message || 'Berhasil disimpan.', 'success');
+                        closeMarkConrodFinish();
+                        loadPendingFollowups();
+                        if (conrodFinishReportId) loadConrodFinishHistory(conrodFinishReportId);
+
+                        // Kalau modal detail sedang terbuka untuk laporan yang sama, refresh
+                        // juga status tombol & riwayatnya di sana — tanpa perlu tutup-buka modal.
+                        if (currentDetailRow && currentDetailRow.id === conrodFinishReportId) {
+                            currentDetailRow.conrod_finish_at = res.conrod_finish_at;
+                            document.getElementById('btn-conrod-finish').style.display = 'none';
+                            refreshConrodFinishThreadContainer(conrodFinishReportId);
+                        }
+                    } else {
+                        showToast(res.message || 'Gagal menyimpan.', 'error');
+                    }
+                })
+                .catch(() => showToast('Koneksi error.', 'error'))
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-save"></i> Simpan';
+                });
+        }
+
         makeDraggable(document.getElementById('pending-fab'), document.getElementById('pending-fab'), openPendingWindow);
         makeDraggable(document.getElementById('pending-window'), document.getElementById('pending-window-header'), null);
 
         loadPendingFollowups();
-        setInterval(loadPendingFollowups, 60000); // refresh tiap 1 menit
+        setInterval(loadPendingFollowups, 10000); // refresh tiap 10 detik; aman berkat change-detection di atas
+
+        // Auto-refresh tabel history di latar belakang, supaya laporan/update baru dari
+        // admin_conrod, admin_maintenance, maupun technician langsung muncul tanpa perlu
+        // klik refresh manual. Dilewati kalau user sedang mengetik pencarian atau lagi
+        // mengisi form (modal detail dalam mode edit), biar tidak mengganggu.
+        setInterval(() => {
+            const searchBox = document.getElementById('inp-search');
+            const isTyping = document.activeElement === searchBox;
+            const isEditing = document.getElementById('modal-edit-wrap').style.display === 'block';
+            if (isTyping || isEditing) return;
+            if (document.getElementById('hist-table').style.display === 'none') return; // belum pernah cari
+            loadHistory(currentPage, true);
+        }, 20000);
 
         window.addEventListener('resize', () => {
             ['pending-fab', 'pending-window'].forEach(id => {
@@ -2373,29 +2793,35 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 });
         }
 
-        function loadHistory(page = 1) {
+        function loadHistory(page = 1, silent = false) {
             const value = document.getElementById('inp-date').value;
             const searchQuery = document.getElementById('inp-search').value.trim();
             const limitSelect = document.getElementById('inp-limit').value;
             const dept = document.getElementById('inp-dept')?.value || '';
+            const source = document.getElementById('inp-source')?.value || '';
 
             if (!value) {
-                showToast('Pilih tanggal / bulan terlebih dahulu.', 'error');
+                if (!silent) showToast('Pilih tanggal / bulan terlebih dahulu.', 'error');
                 return;
             }
             currentPage = page;
             limitPerPage = parseInt(limitSelect) || 20;
 
-            document.getElementById('hist-table').style.display = 'none';
-            document.getElementById('hist-empty').style.display = 'none';
-            document.getElementById('hist-loading').style.display = 'block';
-            document.getElementById('pagination').classList.add('hidden');
-            document.getElementById('result-label').textContent = '';
+            // Mode "silent" dipakai buat auto-refresh berkala di latar belakang — tabel
+            // yang sudah tampil TIDAK disembunyikan/di-spinner-kan, supaya tidak
+            // mengganggu user yang sedang melihat/scroll, cukup diperbarui isinya saja.
+            if (!silent) {
+                document.getElementById('hist-table').style.display = 'none';
+                document.getElementById('hist-empty').style.display = 'none';
+                document.getElementById('hist-loading').style.display = 'block';
+                document.getElementById('pagination').classList.add('hidden');
+                document.getElementById('result-label').textContent = '';
+            }
 
             // Load departments sekali saja saat pertama kali cari
             if (!deptLoaded) loadDepartments();
 
-            fetch(`history_report.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&dept=${encodeURIComponent(dept)}`)
+            fetch(`history_report.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&dept=${encodeURIComponent(dept)}&source=${encodeURIComponent(source)}`)
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('hist-loading').style.display = 'none';
@@ -2409,6 +2835,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     twVal.textContent = `${mins} menit`;
 
                     if (!data.rows || data.rows.length === 0) {
+                        if (silent) return; // jangan timpa tampilan yang sudah ada, biarkan diam saja
                         document.getElementById('hist-empty').style.display = 'flex';
                         if (searchQuery !== '') {
                             document.getElementById('hist-empty').innerHTML = `
@@ -2440,6 +2867,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     }
                 })
                 .catch(() => {
+                    if (silent) return; // auto-refresh gagal diam-diam, jangan ganggu user
                     document.getElementById('hist-loading').style.display = 'none';
                     document.getElementById('hist-empty').style.display = 'flex';
                     showToast('Gagal memuat data.', 'error');
@@ -2467,7 +2895,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 const repairStartFmt = fmtDt(row.repair_start);
                 const repairFinishFmt = row.repair_finish ?
                     fmtDt(row.repair_finish) :
-                    '<span class="text-amber-400 text-xs whitespace-nowrap">Belum selesai</span>';
+                    (row.conrod_finish_at ?
+                        `<span class="text-amber-400 text-xs whitespace-nowrap">Belum selesai</span><br>
+                         <span class="text-[10px] whitespace-nowrap" style="color:#0d9488;font-weight:700;" title="Waktu selesai versi Admin Conrod — catatan mandiri, belum tentu sama dengan status resmi maintenance">
+                            <i class="fas fa-clock"></i> Versi Conrod: ${row.conrod_finish_at.slice(5, 10)} ${row.conrod_finish_at.slice(11, 16)}
+                         </span>` :
+                        '<span class="text-amber-400 text-xs whitespace-nowrap">Belum selesai</span>');
                 const submittedAtFmt = fmtDt(row.created_at);
 
                 const statusVal = row.status || 'belum selesai';
@@ -2650,25 +3083,55 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         `<span class="status-badge" style="background:#fef3c7;color:#b45309;"><i class="fas fa-calendar-check"></i> ${r.converted_to_schedule_type === 'preventive' ? 'Preventive' : 'Predictive'} #${r.converted_to_schedule_id}</span>` :
                         '<span class="text-slate-300 text-xs">Belum dijadwalkan</span>';
 
-                    const fields = [
-                        ['Tanggal Laporan', r.report_date?.slice(0, 10) ?? '—'],
-                        ['Department', r.department],
-                        ['Line', r.line],
-                        ['OP', r.op || '—'],
-                        ['Nama Mesin', r.machine_name],
-                        ['Machine Type', r.machine_type || '—'],
-                        ['Shift', r.shift || '—'],
-                        ['Repair Start', startFmt],
-                        ['Repair Finish', finishFmt],
-                        ['Durasi Perbaikan', durationFmt],
-                        ['Reported By', r.reported_by],
-                        ['PIC / Teknisi', r.pic],
-                        ['Problem / Alarm', r.problem],
-                        ['Action / Perbaikan', r.action],
-                        ['Status', statusBadgeHtml, true],
-                        ['Submitted At', r.created_at?.slice(0, 16) ?? '—'],
-                        ['Schedule', scheduleBadgeHtml, true],
-                    ];
+                    // Badge role (admin_conrod / admin_maintenance / technician) di sebelah Reported By —
+                    // pakai source_role yang direkam permanen saat baris ini dibuat.
+                    const reportedByMeta = sourceRoleMeta(r.source_role);
+                    const reportedByHtml = `${esc(r.reported_by || '—')} <span class="src-badge" style="background:${reportedByMeta.bg};color:${reportedByMeta.text};display:inline-flex;"><span class="sb-dot" style="background:${reportedByMeta.dot};"></span>${reportedByMeta.label}</span>`;
+
+                    // Laporan AWAL (parent_id NULL) yang berasal dari Admin Conrod ditampilkan
+                    // dengan set field yang lebih ringkas (sama seperti form pengisian Conrod),
+                    // beda dari laporan Maintenance/Technician yang tetap full-field seperti biasa.
+                    // Follow-up (child row) TIDAK terpengaruh — itu tetap full-field seperti sekarang.
+                    const isConrodRoot = !r.parent_id && !!(r.foreman || r.source_role === 'admin_conrod');
+
+                    let fields;
+                    if (isConrodRoot) {
+                        fields = [
+                            ['Tanggal Laporan', r.report_date?.slice(0, 10) ?? '—'],
+                            ['Department', r.department],
+                            ['Line', r.line],
+                            ['OP', r.op || '—'],
+                            ['Nama Mesin', r.machine_name],
+                            ['Machine Type', r.machine_type || '—'],
+                            ['Shift', r.shift || '—'],
+                            ['Waktu Kejadian', startFmt],
+                            ['Foreman', r.foreman || '—'],
+                            ['Reported By', reportedByHtml, true],
+                            ['Problem / Alarm', r.problem],
+                            ['Submitted At', r.created_at?.slice(0, 16) ?? '—'],
+                            ['Schedule', scheduleBadgeHtml, true],
+                        ];
+                    } else {
+                        fields = [
+                            ['Tanggal Laporan', r.report_date?.slice(0, 10) ?? '—'],
+                            ['Department', r.department],
+                            ['Line', r.line],
+                            ['OP', r.op || '—'],
+                            ['Nama Mesin', r.machine_name],
+                            ['Machine Type', r.machine_type || '—'],
+                            ['Shift', r.shift || '—'],
+                            ['Repair Start', startFmt],
+                            ['Repair Finish', finishFmt],
+                            ['Durasi Perbaikan', durationFmt],
+                            ['Reported By', reportedByHtml, true],
+                            ['PIC / Teknisi', r.pic],
+                            ['Problem / Alarm', r.problem],
+                            ['Action / Perbaikan', r.action],
+                            ['Status', statusBadgeHtml, true],
+                            ['Submitted At', r.created_at?.slice(0, 16) ?? '—'],
+                            ['Schedule', scheduleBadgeHtml, true],
+                        ];
+                    }
 
                     const content = document.getElementById('modal-content');
                     content.innerHTML = fields.map(([label, val, isHtml]) => `
@@ -2679,6 +3142,16 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     content.style.display = 'block';
                     document.getElementById('modal-meta').textContent = '';
 
+                    // Laporan awal Conrod: tampilkan riwayat "Waktu Selesai (Versi Conrod)"
+                    // sebagai rangkaian/tingkatan tersendiri (bukan digabung ke satu field),
+                    // supaya gaya tampilannya konsisten dengan rangkaian follow-up Maintenance.
+                    // Dibungkus dalam container ber-id supaya bisa di-refresh sendiri tanpa
+                    // perlu buka-tutup modal ulang setelah submit "Tandai Waktu Selesai".
+                    if (isConrodRoot) {
+                        content.innerHTML += '<div id="conrod-finish-thread-container"></div>';
+                        refreshConrodFinishThreadContainer(r.id);
+                    }
+
                     const editBtn = document.getElementById('btn-edit-report');
                     // Default dulu berdasarkan status baris ini sendiri (fallback kalau fetch thread gagal)
                     editBtn.style.display = statusVal !== 'selesai' ? 'inline-flex' : 'none';
@@ -2687,6 +3160,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     // dan hanya kalau laporan ini belum pernah dikonversi.
                     const convertBtn = document.getElementById('btn-convert-schedule');
                     convertBtn.style.display = (CAN_CONVERT_SCHEDULE && !isConverted) ? 'inline-flex' : 'none';
+
+                    // Tombol "Tandai Waktu Selesai" — mekanismenya sama seperti "Tambah Info"
+                    // milik admin_maintenance: cuma tampil buat admin_conrod, di laporan awal
+                    // miliknya sendiri, dan HILANG begitu sudah ditandai selesai (versi dia).
+                    const conrodFinishBtn = document.getElementById('btn-conrod-finish');
+                    conrodFinishBtn.style.display =
+                        (IS_CONROD_ONLY && isConrodRoot && !r.conrod_finish_at) ? 'inline-flex' : 'none';
 
                     // Ambil rangkaian (laporan awal + semua follow-up yang terhubung)
                     fetch(`history_report.php?ajax=thread&id=${id}`)
@@ -2703,11 +3183,43 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             const alreadyDone = items.some(it => (it.status || 'belum selesai') === 'selesai');
                             editBtn.style.display = (alreadyDone || IS_CONROD_ONLY) ? 'none' : 'inline-flex';
 
-                            if (alreadyDone && statusVal !== 'selesai') {
+                            if (alreadyDone && statusVal !== 'selesai' && !IS_CONROD_ONLY) {
                                 content.innerHTML += `
                                 <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 mt-3 text-xs font-semibold text-emerald-700 flex items-center gap-2">
                                     <i class="fas fa-check-circle"></i>
                                     Pekerjaan ini sudah ditandai "Selesai" pada salah satu laporan dalam rangkaian ini.
+                                </div>`;
+                            }
+
+                            // Buat admin_conrod: tampilkan status follow-up Maintenance secara
+                            // eksplisit, supaya dia tahu progres resminya SEBELUM menandai
+                            // "Waktu Selesai (Versi Saya)" miliknya sendiri — dua hal yang
+                            // independen tapi sering tertukar kalau tidak dibedakan jelas.
+                            if (IS_CONROD_ONLY) {
+                                const hasFollowup = items.length > 1;
+                                let fLabel, fBg, fBorder, fColor, fIcon;
+                                if (alreadyDone) {
+                                    fLabel = 'Sudah ditindaklanjuti & diselesaikan resmi oleh Maintenance.';
+                                    fBg = '#ecfdf5';
+                                    fBorder = '#a7f3d0';
+                                    fColor = '#047857';
+                                    fIcon = 'fa-check-circle';
+                                } else if (hasFollowup) {
+                                    fLabel = 'Sedang ditindaklanjuti Maintenance — belum ditutup resmi.';
+                                    fBg = '#eff6ff';
+                                    fBorder = '#bfdbfe';
+                                    fColor = '#1d4ed8';
+                                    fIcon = 'fa-spinner';
+                                } else {
+                                    fLabel = 'Belum ada tindak lanjut dari Maintenance.';
+                                    fBg = '#f8fafc';
+                                    fBorder = '#e2e8f0';
+                                    fColor = '#64748b';
+                                    fIcon = 'fa-hourglass-half';
+                                }
+                                content.innerHTML += `
+                                <div class="rounded-xl px-3.5 py-2.5 mt-3 text-xs font-semibold flex items-center gap-2" style="background:${fBg};border:1px solid ${fBorder};color:${fColor};">
+                                    <i class="fas ${fIcon}"></i> Status Maintenance: ${fLabel}
                                 </div>`;
                             }
 
@@ -2734,7 +3246,50 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 });
         }
 
-        // ── Rangkaian laporan (root + semua follow-up yang terhubung) ──────────────────
+        // Riwayat "Waktu Selesai (Versi Conrod)" ditampilkan sebagai rangkaian/tingkatan
+        // (mirip gaya "Rangkaian Laporan Ini" milik Maintenance) — bukan digabung jadi
+        // satu baris field, dan bukan cuma expand-on-demand. Selalu tampil kalau ada isinya.
+        function renderConrodFinishThread(rows) {
+            if (!Array.isArray(rows) || rows.length === 0) return '';
+
+            const list = rows.map((row, idx) => {
+                const isLatest = idx === 0;
+                const finishFmt = (row.finish_at || '').replace('T', ' ').slice(0, 16);
+                const recordedFmt = (row.recorded_at || '').replace('T', ' ').slice(0, 16);
+                return `
+                <div class="thread-item" style="cursor:default;${isLatest ? 'background:#f0fdfa;' : ''}">
+                    <div class="thread-item-dot" style="background:${isLatest ? '#0d9488' : '#99f6e4'};"></div>
+                    <div class="thread-item-body">
+                        <div class="thread-item-top">
+                            <span class="thread-item-date"><span class="thread-root-tag" style="color:${isLatest ? '#0d9488' : '#94a3b8'};">Level ${rows.length - idx}</span>${esc(finishFmt)}</span>
+                            ${isLatest ? '<span class="thread-current-tag" style="color:#0d9488;">Terbaru</span>' : ''}
+                        </div>
+                        <div class="thread-item-pic">Dicatat oleh ${esc(row.recorded_by || '—')} · ${esc(recordedFmt)}</div>
+                    </div>
+                </div>`;
+            }).join('');
+
+            return `
+            <div class="thread-wrap">
+                <div class="thread-title" style="color:#0d9488;"><i class="fas fa-clock"></i> Riwayat Waktu Selesai (Versi Conrod) — ${rows.length} entri</div>
+                ${list}
+            </div>`;
+        }
+
+        // Refresh isi riwayat "Waktu Selesai (Versi Conrod)" di dalam modal detail,
+        // tanpa perlu reload seluruh modal — dipakai saat pertama buka & saat
+        // submit "Tandai Waktu Selesai" berhasil ketika modal detail sedang terbuka.
+        function refreshConrodFinishThreadContainer(reportId) {
+            const box = document.getElementById('conrod-finish-thread-container');
+            if (!box) return;
+            fetch(`history_report.php?ajax=conrod_finish_log&report_id=${reportId}`)
+                .then(res => res.json())
+                .then(rows => {
+                    box.innerHTML = renderConrodFinishThread(rows);
+                })
+                .catch(() => {});
+        }
+
         function renderThread(items, currentId, rootId) {
             if (!items || items.length <= 1) return ''; // tidak ada follow-up, tidak perlu ditampilkan
 
@@ -2936,6 +3491,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         document.getElementById('modal-footer-edit').style.display = 'none';
                         openDetail(sourceId);
                         loadHistory(currentPage); // refresh tabel
+                        loadPendingFollowups(); // refresh bubble
                     } else {
                         showToast(res.message || 'Gagal menyimpan.', 'error');
                     }
@@ -2948,27 +3504,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         }
 
         // ── Modal: Jadikan Schedule ──────────────────────────────────────────────────
-        // Dipanggil langsung dari floating bubble (quick-action), tanpa perlu buka
-        // modal detail penuh dulu. Pakai data cache dari bubble kalau ada; kalau tidak
-        // (mis. dipanggil dari tempat lain), fallback fetch ke ajax=detail.
-        function openConvertModalForId(id) {
-            const cached = pendingItemsById[id];
-            if (cached) {
-                currentDetailRow = cached;
-                openConvertModal();
-                return;
-            }
-            fetch(`history_report.php?ajax=detail&id=${id}`)
-                .then(r => r.json())
-                .then(r => {
-                    if (!r) {
-                        showToast('Data laporan tidak ditemukan.', 'error');
-                        return;
-                    }
-                    currentDetailRow = r;
-                    openConvertModal();
-                })
-                .catch(() => showToast('Koneksi error.', 'error'));
+        // Wrapper supaya modal convert bisa dibuka langsung dari floating bubble
+        // (tanpa perlu buka detail modal dulu) — dipakai di loadPendingFollowups().
+        let pendingItemsById = {};
+
+        function openConvertModalForBubbleItemById(id) {
+            const item = pendingItemsById[id];
+            if (!item) return;
+            currentDetailRow = item;
+            openConvertModal();
         }
 
         function openConvertModal() {
@@ -3073,7 +3617,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     if (res.success) {
                         showToast(res.message || 'Berhasil dijadikan schedule.', 'success');
                         closeConvertModal();
-                        openDetail(reportId); // refresh badge & tombol di modal detail
+                        // Hanya refresh modal detail kalau memang sedang terbuka (convert dari
+                        // situ) — kalau convert dari floating bubble, modal detail belum tentu terbuka.
+                        if (document.getElementById('modal-overlay').classList.contains('open')) {
+                            openDetail(reportId);
+                        }
+                        loadPendingFollowups();
                         loadHistory(currentPage);
                     } else {
                         showToast(res.message || 'Gagal menyimpan.', 'error');

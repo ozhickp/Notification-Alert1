@@ -262,6 +262,29 @@ if (isset($_GET['get_prev_schedule'])) {
     exit;
 }
 
+// ── Watcher: deteksi ada schedule BARU yang masuk dari mana saja ────────────
+// (baik ditambah langsung di dashboard_user ini, MAUPUN hasil "Jadikan Schedule"
+// dari E-Report di dashboard_report.php/history_report.php yang berjalan di
+// tab/sesi lain). Dipoll berkala oleh JS — kalau signature-nya berubah dari
+// baseline saat halaman ini dimuat, berarti ada data baru → tampilkan banner
+// supaya user bisa muat ulang tanpa perlu refresh manual berulang-ulang.
+// Sengaja hanya membandingkan COUNT + MAX(id) (bukan hash isi baris) supaya
+// query-nya ringan untuk dipanggil setiap beberapa detik.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'schedule_watch') {
+    header('Content-Type: application/json');
+    $sig = $pdo->query("
+        SELECT
+            (SELECT COUNT(*) FROM schedules)            AS c1,
+            (SELECT COUNT(*) FROM schedules_preventive)  AS c2,
+            (SELECT COALESCE(MAX(id), 0) FROM schedules)           AS m1,
+            (SELECT COALESCE(MAX(id), 0) FROM schedules_preventive) AS m2
+    ")->fetch(PDO::FETCH_ASSOC);
+    echo json_encode([
+        'signature' => implode('-', [$sig['c1'], $sig['c2'], $sig['m1'], $sig['m2']]),
+    ]);
+    exit;
+}
+
 // ==================== SIMPAN / UPDATE ====================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     try {
@@ -1223,6 +1246,11 @@ try {
     error_log('[Dashboard] schedules_preventive fetch gagal: ' . $e->getMessage());
 }
 
+// ── Baseline signature untuk watcher "ada schedule baru" (lihat endpoint ────
+// ajax=schedule_watch di atas) — dihitung dengan query yang SAMA PERSIS supaya
+// nilainya konsisten dengan apa yang dibandingkan JS saat polling nanti.
+$initialScheduleSignature = implode('-', [count($schedules), count($prevSchedules), array_reduce($schedules, fn($c, $r) => max($c, (int)$r['id']), 0), array_reduce($prevSchedules, fn($c, $r) => max($c, (int)$r['id']), 0)]);
+
 // ── Data untuk modal "Jadwal Ulang" (reschedule massal) — job yang statusnya  ──
 // belum 'done' (overdue, alert, reminder, maupun secure yang masih aktif),
 // dikirim ke JS agar bisa dicentang beberapa/semua sekaligus lalu di-set ke
@@ -1787,10 +1815,87 @@ HTML;
                 padding: 1rem;
             }
         }
+
+        /* ── Banner: ada schedule baru (dari e-report atau tab lain) ─────────────── */
+        #new-schedule-banner {
+            display: none;
+            position: fixed;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 400;
+            background: #0f172a;
+            color: #fff;
+            padding: 10px 14px 10px 18px;
+            border-radius: 999px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+            align-items: center;
+            gap: 12px;
+            font-size: .8rem;
+            font-weight: 600;
+            animation: bannerDrop .35s cubic-bezier(.34, 1.56, .64, 1);
+        }
+
+        #new-schedule-banner.show {
+            display: flex;
+        }
+
+        @keyframes bannerDrop {
+            from {
+                opacity: 0;
+                transform: translateX(-50%) translateY(-16px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+        }
+
+        #new-schedule-banner .nsb-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #34d399;
+            flex-shrink: 0;
+            box-shadow: 0 0 0 4px rgba(52, 211, 153, .25);
+        }
+
+        #new-schedule-banner button {
+            background: #fb8b24;
+            color: #fff;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: .74rem;
+            font-weight: 800;
+            cursor: pointer;
+            transition: opacity .15s;
+        }
+
+        #new-schedule-banner button:hover {
+            opacity: .88;
+        }
+
+        #new-schedule-banner .nsb-dismiss {
+            background: transparent;
+            color: #94a3b8;
+            padding: 6px 8px;
+        }
     </style>
 </head>
 
 <body class="bg-slate-50 min-h-screen font-sans text-slate-900">
+
+    <!-- ═══ Banner: ada schedule baru masuk (dari dashboard ini atau dari E-Report) ═══ -->
+    <div id="new-schedule-banner">
+        <span class="nsb-dot"></span>
+        <span id="nsb-text">Ada jadwal baru ditambahkan</span>
+        <button onclick="location.reload()">Muat Ulang</button>
+        <button class="nsb-dismiss" onclick="dismissScheduleBanner()" title="Tutup">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
 
     <div id="app-layout">
 
@@ -2783,6 +2888,51 @@ HTML;
                 function hideModal(id) {
                     document.getElementById(id).style.display = 'none';
                 }
+
+                // ── Watcher: auto-update kalau ada schedule baru masuk ──────────────────
+                // Baik ditambah langsung di dashboard ini, MAUPUN via "Jadikan Schedule"
+                // dari E-Report (dashboard_report.php/history_report.php) di tab lain.
+                // Poll ringan tiap 12 detik; kalau signature berubah dari baseline saat
+                // halaman ini dimuat → refresh otomatis (kalau lagi aman, tidak ada modal
+                // yang terbuka), atau tampilkan banner "Muat Ulang" kalau user sedang
+                // mengisi form supaya inputan yang belum disimpan tidak hilang mendadak.
+                const INITIAL_SCHEDULE_SIGNATURE = <?= json_encode($initialScheduleSignature) ?>;
+                let _scheduleBannerDismissed = false;
+
+                function anyModalOpen() {
+                    return Array.from(document.querySelectorAll('[id$="Modal"]'))
+                        .some(el => getComputedStyle(el).display !== 'none');
+                }
+
+                async function pollScheduleWatch() {
+                    try {
+                        const res = await fetch('?ajax=schedule_watch');
+                        const data = await res.json();
+                        if (!data || !data.signature || data.signature === INITIAL_SCHEDULE_SIGNATURE) return;
+
+                        // Aman untuk refresh otomatis: tidak ada modal terbuka (user tidak
+                        // sedang mengisi form apapun) dan banner belum ditutup manual.
+                        if (!anyModalOpen() && !_scheduleBannerDismissed) {
+                            location.reload();
+                            return;
+                        }
+                        // Kalau lagi sibuk (modal terbuka) atau banner sudah pernah ditutup,
+                        // cukup kasih tahu lewat banner — jangan paksa reload.
+                        const banner = document.getElementById('new-schedule-banner');
+                        if (banner && !banner.classList.contains('show')) {
+                            banner.classList.add('show');
+                        }
+                    } catch (e) {
+                        /* diamkan — koneksi putus sementara bukan hal fatal buat polling */
+                    }
+                }
+
+                function dismissScheduleBanner() {
+                    _scheduleBannerDismissed = true;
+                    document.getElementById('new-schedule-banner').classList.remove('show');
+                }
+
+                setInterval(pollScheduleWatch, 12000);
 
                 // Backdrop click — event delegation so it covers modals added later in DOM
                 document.addEventListener('click', function(e) {

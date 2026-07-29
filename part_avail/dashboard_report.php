@@ -5,6 +5,20 @@ require_once __DIR__ . '/config.php';
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
+// ── Tabel riwayat "Waktu Selesai (Versi Conrod)" — lihat catatan lengkap di
+// history_report.php. Setiap perubahan tersimpan sebagai entri baru (opsi 2),
+// e_reports.conrod_finish_at tetap jadi cache nilai TERBARU.
+$pdo->exec("
+    CREATE TABLE IF NOT EXISTS conrod_finish_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        report_id INT NOT NULL,
+        finish_at DATETIME NOT NULL,
+        recorded_by VARCHAR(150) NOT NULL,
+        recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_report_id (report_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+");
+
 // E-Report bisa diakses semua role yang login: admin_maintenance, technician,
 // admin_conrod, dan superadmin.
 if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_ADMIN_CONROD, ROLE_SUPERADMIN], true)) {
@@ -107,28 +121,121 @@ if (isset($_GET['ajax'])) {
     // — konsisten dengan logika "rangkaian" yang dipakai di history_report.php, supaya
     // laporan yang sudah dilanjutkan & ditutup oleh follow-up tidak ikut muncul di sini.
     if ($_GET['ajax'] === 'pending_followups') {
-        // admin_conrod cuma perlu melihat laporan yang asalnya dari Conrod sendiri
-        // (bubble untuk conrod murni informatif — tidak perlu lihat punya maintenance).
-        $conrodOnlyFilter = $isConrodOnly ? "AND r.foreman IS NOT NULL AND r.foreman <> ''" : "";
+        // admin_conrod cuma boleh lihat laporannya sendiri (reported_by = username-nya) —
+        // sama persis dengan konvensi yang dipakai history_report.php, supaya bubble
+        // di kedua halaman selalu menampilkan isi yang identik untuk role yang sama.
+        $conrodOnlyFilter = $isConrodOnly ? "AND r.reported_by = " . $pdo->quote($reportedBy) : '';
+
+        // "Masih menggantung" itu beda artinya buat admin_conrod vs maintenance:
+        // - maintenance: masih menggantung selama belum ada follow-up 'selesai'.
+        // - admin_conrod: PUNYA status "selesai versi dia sendiri" yang TERPISAH
+        //   (kolom conrod_finish_at) — jadi walau maintenance SUDAH menutup laporan
+        //   itu (follow-up 'selesai'), tetap harus muncul di bubble admin_conrod
+        //   selama dia belum menandai conrod_finish_at miliknya sendiri.
+        $hangingCondition = $isConrodOnly
+            ? "(
+                  (r.status = 'belum selesai' AND NOT EXISTS (
+                      SELECT 1 FROM e_reports f WHERE f.parent_id = r.id AND f.status = 'selesai'
+                  ))
+                  OR (r.foreman IS NOT NULL AND r.foreman <> '' AND r.conrod_finish_at IS NULL)
+              )"
+            : "(r.status = 'belum selesai' AND NOT EXISTS (
+                  SELECT 1 FROM e_reports f WHERE f.parent_id = r.id AND f.status = 'selesai'
+              ))";
+
         $rows = $pdo->query("
             SELECT r.id, r.department, r.line, r.op, r.machine_name, r.machine_type, r.problem,
-                   r.reported_by, r.pic, r.report_date, r.created_at, r.foreman,
+                   r.reported_by, r.pic, r.report_date, r.created_at, r.foreman, r.conrod_finish_at,
+                   r.repair_start,
+                   (SELECT COUNT(*) FROM conrod_finish_log l WHERE l.report_id = r.id) AS conrod_finish_count,
+                   -- Prioritas: 1) kolom foreman (sinyal paling kuat, cuma diisi saat submit
+                   -- dari admin_conrod) 2) kolom source_role yang direkam permanen saat baris
+                   -- ini dibuat 3) fallback lama (JOIN ke users) buat baris lawas sebelum
+                   -- source_role mulai direkam — waktu itu semuanya masih tersimpan default
+                   -- 'admin_maintenance', jadi tidak bisa dipercaya begitu saja.
                    CASE
                        WHEN r.foreman IS NOT NULL AND r.foreman <> '' THEN 'admin_conrod'
-                       ELSE COALESCE(u.role, 'admin_maintenance')
-                   END AS source_role
+                       WHEN r.source_role IS NOT NULL AND r.source_role <> 'admin_maintenance' THEN r.source_role
+                       ELSE COALESCE(u.role, r.source_role, 'admin_maintenance')
+                   END AS source_role,
+                   -- Info status follow-up Maintenance — dipakai supaya admin_conrod tahu
+                   -- apakah laporannya sudah ditindaklanjuti sebelum dia menandai versi
+                   -- waktu selesainya sendiri. Independen dari conrod_finish_at.
+                   (SELECT COUNT(*) FROM e_reports f WHERE f.parent_id = r.id) AS followup_count,
+                   (SELECT COUNT(*) FROM e_reports f WHERE f.parent_id = r.id AND f.status = 'selesai') AS followup_done_count
             FROM e_reports r
             LEFT JOIN users u ON u.username = r.reported_by
             WHERE r.parent_id IS NULL
-              AND r.status = 'belum selesai'
-              $conrodOnlyFilter
-              AND NOT EXISTS (
-                  SELECT 1 FROM e_reports f
-                  WHERE f.parent_id = r.id AND f.status = 'selesai'
-              )
+              AND {$hangingCondition}
+              {$conrodOnlyFilter}
             ORDER BY r.created_at DESC
         ")->fetchAll();
         echo json_encode($rows);
+        exit;
+    }
+
+    // ─── Admin Conrod: tandai "Waktu Selesai (Versi Saya)" pada laporan sendiri ──
+    // Ini CATATAN MANDIRI milik conrod — independen dari status resmi/completed_at
+    // yang jadi otoritas admin_maintenance/technician. Conrod boleh punya versi
+    // waktu selesai sendiri (mis. produksi sudah jalan lagi menurut mereka),
+    // meskipun tiketnya secara resmi belum ditutup maintenance, atau sebaliknya.
+    // Hanya boleh menandai laporan AWAL (parent_id NULL) milik mereka sendiri.
+    if ($_GET['ajax'] === 'mark_conrod_finish' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (!$isConrodOnly) {
+            echo json_encode(['success' => false, 'message' => 'Fitur ini khusus Admin Conrod.']);
+            exit;
+        }
+
+        $reportId   = (int)($_POST['report_id'] ?? 0);
+        $finishDate = trim($_POST['finish_date'] ?? '');
+        $finishTime = trim($_POST['finish_time'] ?? '');
+
+        if (!$reportId || !$finishDate || !$finishTime) {
+            echo json_encode(['success' => false, 'message' => 'Lengkapi tanggal & jam selesai.']);
+            exit;
+        }
+
+        // Pastikan laporan ini memang laporan awal milik conrod yang sedang login —
+        // jangan sampai bisa menandai laporan orang lain lewat ID sembarangan.
+        $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ? AND parent_id IS NULL");
+        $chk->execute([$reportId, $reportedBy]);
+        if (!$chk->fetch()) {
+            echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan atau bukan milik Anda.']);
+            exit;
+        }
+
+        $finishDatetime = $finishDate . ' ' . $finishTime . ':00';
+
+        // Opsi 2: simpan sebagai ENTRI BARU di riwayat, bukan overwrite.
+        $ins = $pdo->prepare("INSERT INTO conrod_finish_log (report_id, finish_at, recorded_by) VALUES (?, ?, ?)");
+        $ins->execute([$reportId, $finishDatetime, $reportedBy]);
+
+        // Kolom di e_reports tetap dijaga sinkron sebagai cache nilai TERBARU.
+        $upd = $pdo->prepare("UPDATE e_reports SET conrod_finish_at = ? WHERE id = ?");
+        $upd->execute([$finishDatetime, $reportId]);
+
+        echo json_encode(['success' => true, 'message' => 'Waktu selesai (versi Anda) berhasil disimpan sebagai entri baru di riwayat.', 'conrod_finish_at' => $finishDatetime]);
+        exit;
+    }
+
+    // ─── Riwayat "Waktu Selesai (Versi Conrod)" untuk satu laporan ────────────
+    if ($_GET['ajax'] === 'conrod_finish_log') {
+        $reportId = (int)($_GET['report_id'] ?? 0);
+        if (!$reportId) {
+            echo json_encode([]);
+            exit;
+        }
+        if ($isConrodOnly) {
+            $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ?");
+            $chk->execute([$reportId, $reportedBy]);
+            if (!$chk->fetch()) {
+                echo json_encode([]);
+                exit;
+            }
+        }
+        $stmt = $pdo->prepare("SELECT id, finish_at, recorded_by, recorded_at FROM conrod_finish_log WHERE report_id = ? ORDER BY recorded_at DESC, id DESC");
+        $stmt->execute([$reportId]);
+        echo json_encode($stmt->fetchAll());
         exit;
     }
 
@@ -189,8 +296,8 @@ if (isset($_GET['ajax'])) {
             $stmt = $pdo->prepare("
                 INSERT INTO e_reports
                   (parent_id, department, `line`, op, shift, machine_name, machine_type, report_date,
-                   repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                   repair_start, repair_finish, duration_minutes, reported_by, pic, problem, action, status, source_role, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt->execute([
                 $rootId,
@@ -209,6 +316,7 @@ if (isset($_GET['ajax'])) {
                 $problem,
                 $action,
                 $status,
+                $role, // role sesi yang sedang login saat submit — direkam permanen, tidak bergantung JOIN ke tabel users lagi
             ]);
             echo json_encode(['success' => true, 'message' => 'Informasi lanjutan berhasil disimpan.']);
         } catch (\Exception $e) {
@@ -291,8 +399,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
         $stmt = $pdo->prepare("
             INSERT INTO e_reports
               (department, `line`, op, shift, machine_name, machine_type, report_date,
-               repair_start, repair_finish, duration_minutes, reported_by, foreman, pic, problem, action, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+               repair_start, repair_finish, duration_minutes, reported_by, foreman, pic, problem, action, status, source_role, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
         $stmt->execute([
             $dept,
@@ -311,6 +419,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             $problem,
             $action,
             $status,
+            $role, // role sesi yang sedang login saat submit — direkam permanen, tidak bergantung JOIN ke tabel users lagi
         ]);
         echo json_encode(['success' => true, 'message' => 'E-Report berhasil disimpan.']);
     } catch (\Exception $e) {
@@ -760,6 +869,102 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             border-color: #fcd34d;
         }
 
+        /* ── Modal: Jadikan Schedule (inline, tanpa pindah halaman) ─────────────── */
+        #modal-convert-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, .55);
+            backdrop-filter: blur(3px);
+            z-index: 300;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #modal-convert-overlay.open {
+            display: flex;
+        }
+
+        #modal-convert-box {
+            background: #fff;
+            border-radius: 18px;
+            width: 90%;
+            max-width: 560px;
+            max-height: 88vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .25);
+            animation: convPopIn .25s cubic-bezier(.34, 1.56, .64, 1);
+        }
+
+        @keyframes convPopIn {
+            from {
+                opacity: 0;
+                transform: scale(.92);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        #modal-convert-box .conv-section-title {
+            font-size: .68rem;
+            font-weight: 800;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        #modal-convert-box .conv-info-box {
+            border-radius: 12px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 12px 14px;
+            margin-bottom: 1.25rem;
+        }
+
+        #modal-convert-box .conv-info-row {
+            display: grid;
+            grid-template-columns: 110px 1fr;
+            gap: 4px 10px;
+            font-size: .78rem;
+            padding: 3px 0;
+        }
+
+        #modal-convert-box .conv-info-row .conv-info-label {
+            font-weight: 700;
+            color: #94a3b8;
+        }
+
+        #modal-convert-box .conv-info-row .conv-info-value {
+            color: #334155;
+            font-weight: 600;
+        }
+
+        #modal-convert-box .conv-sync-check {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin-top: 7px;
+            font-size: .72rem;
+            color: #64748b;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        #modal-convert-box .conv-sync-check input[type="checkbox"] {
+            width: 15px;
+            height: 15px;
+            accent-color: #fb8b24;
+            cursor: pointer;
+        }
+
         /* ── Pending Follow-up Floating Window ───────────────────────────────── */
         #pending-fab {
             position: fixed;
@@ -767,8 +972,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             right: 12px;
             left: auto;
             z-index: 150;
-            width: 52px;
-            height: 52px;
+            width: 44px;
+            height: 44px;
             border-radius: 50%;
             background: linear-gradient(135deg, #f59e0b, #d97706);
             box-shadow: 0 6px 18px rgba(217, 119, 6, .4);
@@ -777,7 +982,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             justify-content: center;
             cursor: grab;
             color: #fff;
-            font-size: 1.15rem;
+            font-size: 1rem;
             touch-action: none;
             transition: transform .15s ease, left .25s cubic-bezier(.2, .8, .2, 1), top .25s cubic-bezier(.2, .8, .2, 1);
         }
@@ -798,15 +1003,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
         #pending-fab-badge {
             position: absolute;
-            top: -5px;
-            right: -5px;
-            min-width: 22px;
-            height: 22px;
-            padding: 0 5px;
+            top: -4px;
+            right: -4px;
+            min-width: 19px;
+            height: 19px;
+            padding: 0 4px;
             border-radius: 999px;
             background: #dc2626;
             color: #fff;
-            font-size: .7rem;
+            font-size: .65rem;
             font-weight: 800;
             display: flex;
             align-items: center;
@@ -818,10 +1023,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
         #pending-window {
             position: fixed;
             top: 70px;
-            left: calc(100vw - 382px);
+            left: calc(100vw - 342px);
             z-index: 151;
-            width: 360px;
-            max-height: 460px;
+            width: 320px;
+            max-height: 420px;
             background: #fff;
             border-radius: 14px;
             box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
@@ -970,134 +1175,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             opacity: .85;
         }
 
-        /* ── Modal: Jadikan Schedule ─────────────────────────────────────────────── */
-        #modal-convert-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(15, 23, 42, .55);
-            backdrop-filter: blur(3px);
-            z-index: 210;
-            align-items: center;
-            justify-content: center;
-        }
-
-        #modal-convert-overlay.open {
-            display: flex;
-        }
-
-        #modal-convert-box {
-            background: #fff;
-            border-radius: 18px;
-            width: 90%;
-            max-width: 560px;
-            max-height: 88vh;
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 24px 60px rgba(0, 0, 0, .25);
-            animation: popIn .25s cubic-bezier(.34, 1.56, .64, 1);
-        }
-
-        @keyframes popIn {
-            from {
-                opacity: 0;
-                transform: scale(.94);
-            }
-
-            to {
-                opacity: 1;
-                transform: scale(1);
-            }
-        }
-
-        #modal-convert-box .form-label {
-            font-size: .68rem;
-            font-weight: 800;
-            color: #64748b;
-            text-transform: uppercase;
-            letter-spacing: .04em;
-            display: block;
-            margin-bottom: 5px;
-        }
-
-        #modal-convert-box .edit-field {
-            width: 100%;
-            padding: 8px 11px;
-            border: 1.5px solid #e2e8f0;
-            border-radius: 10px;
-            font-size: .82rem;
-            color: #1e293b;
-            background: #fff;
-            outline: none;
-            font-family: inherit;
-            transition: border-color .2s, box-shadow .2s;
-        }
-
-        #modal-convert-box .edit-field:focus {
-            border-color: #fb8b24;
-            box-shadow: 0 0 0 3px rgba(249, 115, 22, .12);
-        }
-
-        #modal-convert-box textarea.edit-field {
-            resize: vertical;
-        }
-
-        #modal-convert-box .conv-section-title {
-            font-size: .68rem;
-            font-weight: 800;
-            color: #94a3b8;
-            text-transform: uppercase;
-            letter-spacing: .05em;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        #modal-convert-box .conv-info-box {
-            border-radius: 12px;
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            padding: 12px 14px;
-            margin-bottom: 1.25rem;
-        }
-
-        #modal-convert-box .conv-info-row {
-            display: grid;
-            grid-template-columns: 110px 1fr;
-            gap: 4px 10px;
-            font-size: .78rem;
-            padding: 3px 0;
-        }
-
-        #modal-convert-box .conv-info-row .conv-info-label {
-            font-weight: 700;
-            color: #94a3b8;
-        }
-
-        #modal-convert-box .conv-info-row .conv-info-value {
-            color: #334155;
-            font-weight: 600;
-        }
-
-        #modal-convert-box .conv-sync-check {
-            display: flex;
-            align-items: center;
-            gap: 7px;
-            margin-top: 7px;
-            font-size: .72rem;
-            color: #64748b;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        #modal-convert-box .conv-sync-check input[type="checkbox"] {
-            width: 15px;
-            height: 15px;
-            accent-color: #fb8b24;
-            cursor: pointer;
-        }
-
         /* ── Toast ───────────────────────────────────────────────────────────── */
         #toast {
             position: fixed;
@@ -1220,6 +1297,146 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                 </button>
             </div>
             <div id="pending-window-body"></div>
+        </div>
+
+        <!-- ═══ MODAL: Jadikan Schedule (inline, tanpa pindah ke history_report.php) ═══ -->
+        <div id="modal-convert-overlay" onclick="closeConvertModal(event)">
+            <div id="modal-convert-box">
+                <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+                    <div>
+                        <h3 class="text-base font-bold text-slate-800">Jadikan Schedule</h3>
+                        <p class="text-xs text-slate-400 mt-0.5" id="convert-subtitle"></p>
+                    </div>
+                    <button onclick="closeConvertModal()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="px-6 py-5 overflow-y-auto" style="max-height:70vh;">
+
+                    <!-- Data dari report (read-only) -->
+                    <div class="conv-section-title"><i class="fas fa-industry"></i> Deskripsi Mesin</div>
+                    <div class="conv-info-box">
+                        <div class="conv-info-row">
+                            <span class="conv-info-label">Department / Line</span>
+                            <span class="conv-info-value" id="conv-dept-line">—</span>
+                        </div>
+                        <div class="conv-info-row">
+                            <span class="conv-info-label">OP / Mesin</span>
+                            <span class="conv-info-value" id="conv-op-mesin">—</span>
+                        </div>
+                        <div class="conv-info-row">
+                            <span class="conv-info-label">Machine Type</span>
+                            <span class="conv-info-value" id="conv-machtype">—</span>
+                        </div>
+                    </div>
+
+                    <!-- Pilih tipe -->
+                    <div class="conv-section-title"><i class="fas fa-calendar-check"></i> Tipe Schedule <span class="text-red-400">*</span></div>
+                    <div class="choice-btn-group" id="convert-type-group" style="margin-bottom:1.25rem;">
+                        <button type="button" class="choice-btn" data-val="predictive" onclick="setConvertType(this)">
+                            <i class="fas fa-chart-line"></i> Predictive
+                        </button>
+                        <button type="button" class="choice-btn" data-val="preventive" onclick="setConvertType(this)">
+                            <i class="fas fa-shield-alt"></i> Preventive
+                        </button>
+                    </div>
+                    <input type="hidden" id="convert-inp-type">
+
+                    <!-- Field manual -->
+                    <div class="conv-section-title"><i class="fas fa-clipboard-list"></i> Detail Schedule</div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="col-span-2">
+                            <label class="form-label"><i class="fas fa-cog text-slate-300 mr-1"></i> Name Unit <span class="text-red-400">*</span></label>
+                            <input type="text" id="conv-name-unit" class="form-field" placeholder="Nama unit/part">
+                        </div>
+                        <div class="col-span-2">
+                            <label class="form-label"><i class="fas fa-crosshairs text-slate-300 mr-1"></i> Maintenance Point <span class="text-red-400">*</span></label>
+                            <textarea id="conv-maint-point" class="form-field" style="min-height:60px;" placeholder="Titik/poin perawatan"></textarea>
+                        </div>
+                        <div>
+                            <label class="form-label">Interval (bulan) <span class="text-red-400">*</span></label>
+                            <input type="number" min="1" id="conv-interval" class="form-field" placeholder="mis. 6" oninput="syncConvertChangeDate()">
+                        </div>
+                        <div>
+                            <label class="form-label">Reminder Activity (hari)</label>
+                            <input type="number" min="0" id="conv-reminder" class="form-field" placeholder="mis. 14">
+                        </div>
+                        <div>
+                            <label class="form-label">Use Date (Last Change) <span class="text-red-400">*</span></label>
+                            <input type="date" id="conv-use-date" class="form-field" oninput="syncConvertChangeDate()">
+                        </div>
+                        <div>
+                            <label class="form-label">Change Date Plan (Jadwal Berikutnya) <span class="text-red-400">*</span></label>
+                            <input type="date" id="conv-change-date" class="form-field">
+                            <label class="conv-sync-check">
+                                <input type="checkbox" id="conv-sync-checkbox" checked onchange="syncConvertChangeDate()">
+                                Otomatis: Use Date + Interval
+                            </label>
+                        </div>
+                    </div>
+                    <p class="text-[11px] text-slate-400 mt-3">
+                        Laporan asli tidak akan hilang/berubah — tetap tersimpan di history. Setelah dijadikan schedule,
+                        jadwal berikutnya akan otomatis berulang sesuai interval yang diisi di sini setiap kali report
+                        penyelesaian di-submit.
+                    </p>
+                </div>
+
+                <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-end gap-2 flex-shrink-0">
+                    <button onclick="closeConvertModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
+                        Batal
+                    </button>
+                    <button id="btn-save-convert" onclick="submitConvertSchedule()"
+                        class="px-4 py-2 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5" style="background:#fb8b24;">
+                        <i class="fas fa-save"></i> Simpan Schedule
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ MODAL: Tandai Waktu Selesai (Versi Admin Conrod) ═══ -->
+        <div id="modal-conrod-finish-overlay" onclick="closeMarkConrodFinish(event)" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);z-index:300;align-items:center;justify-content:center;">
+            <div style="background:#fff;border-radius:18px;width:90%;max-width:400px;box-shadow:0 24px 60px rgba(0,0,0,.25);">
+                <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                    <h3 class="text-base font-bold text-slate-800"><i class="fas fa-clock" style="color:#0d9488;"></i> Waktu Selesai (Versi Anda)</h3>
+                    <button onclick="closeMarkConrodFinish()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="px-6 py-5">
+                    <p class="text-xs text-slate-400 mb-4">
+                        Ini catatan mandiri Anda sendiri — kapan menurut Anda masalah ini sudah beres di lapangan.
+                        Ini tidak menutup tiketnya secara resmi; maintenance tetap yang menentukan status resmi
+                        selesai lewat proses follow-up mereka sendiri. Setiap kali disimpan, ini tercatat sebagai
+                        entri baru di riwayat — entri sebelumnya tidak hilang/tertimpa.
+                    </p>
+                    <div id="cf-history-wrap" style="display:none;margin-bottom:14px;">
+                        <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">
+                            <i class="fas fa-history"></i> Riwayat Perubahan
+                        </div>
+                        <div id="cf-history-list" style="max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;"></div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="form-label">Tanggal <span class="text-red-400">*</span></label>
+                            <input type="date" id="cf-finish-date" class="form-field">
+                        </div>
+                        <div>
+                            <label class="form-label">Jam <span class="text-red-400">*</span></label>
+                            <input type="time" id="cf-finish-time" class="form-field">
+                        </div>
+                    </div>
+                </div>
+                <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-end gap-2">
+                    <button onclick="closeMarkConrodFinish()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
+                        Batal
+                    </button>
+                    <button id="btn-save-conrod-finish" onclick="submitMarkConrodFinish()"
+                        class="px-4 py-2 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5" style="background:#0d9488;">
+                        <i class="fas fa-save"></i> Simpan
+                    </button>
+                </div>
+            </div>
         </div>
 
         <div class="p-4" style="height:calc(100vh - 58px);overflow:hidden;">
@@ -1515,12 +1732,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                                 <option value="">— Pilih Laporan Pending —</option>
                                             </select>
                                             <?php if ($canConvertSchedule): ?>
-                                                <a id="btn-jadikan-schedule" href="#" onclick="return false;"
-                                                    style="display:none;background:#fef3c7;color:#b45309;white-space:nowrap;"
+                                                <button type="button" id="btn-jadikan-schedule"
+                                                    style="display:none;background:#fef3c7;color:#b45309;white-space:nowrap;border:none;cursor:pointer;"
                                                     class="flex items-center gap-1.5 px-3.5 rounded-lg text-xs font-semibold hover:opacity-90 transition"
+                                                    onclick="openConvertModalInlineFromFollowup()"
                                                     title="Jadikan laporan ini schedule Predictive/Preventive">
                                                     <i class="fas fa-calendar-plus"></i> Jadikan Schedule
-                                                </a>
+                                                </button>
                                             <?php endif; ?>
                                         </div>
                                     </div>
@@ -1533,6 +1751,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                             <span id="fu-source-badge" style="display:none;"></span>
                                         </label>
                                         <textarea id="fu-original-problem" class="form-field" readonly style="min-height:60px;background:#f8fafc;color:#64748b;"></textarea>
+                                    </div>
+
+                                    <!-- Waktu Kejadian dari Admin Conrod (read-only, referensi) -->
+                                    <div class="col-span-3" id="fu-incident-time-wrap" style="display:none;">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-history text-slate-300 mr-1"></i> Waktu Kejadian
+                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(dari Admin Conrod, laporan sumber)</span>
+                                        </label>
+                                        <input type="text" id="fu-incident-time" class="form-field" readonly style="background:#f8fafc;color:#64748b;cursor:default;">
                                     </div>
 
                                     <!-- Repair Start -->
@@ -1660,103 +1887,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
         </div>
     </div>
 
-    <?php if ($canConvertSchedule): ?>
-        <!-- ── Modal: Jadikan Schedule (Predictive/Preventive) ─────────────────────── -->
-        <div id="modal-convert-overlay" onclick="closeConvertModal(event)">
-            <div id="modal-convert-box">
-                <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
-                    <div>
-                        <h3 class="text-base font-bold text-slate-800">Jadikan Schedule</h3>
-                        <p class="text-xs text-slate-400 mt-0.5" id="convert-subtitle"></p>
-                    </div>
-                    <button onclick="closeConvertModal()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-
-                <div class="px-6 py-5 overflow-y-auto" style="max-height:70vh;">
-
-                    <!-- Data dari report (read-only) -->
-                    <div class="conv-section-title"><i class="fas fa-industry"></i> Deskripsi Mesin</div>
-                    <div class="conv-info-box">
-                        <div class="conv-info-row">
-                            <span class="conv-info-label">Department / Line</span>
-                            <span class="conv-info-value" id="conv-dept-line">—</span>
-                        </div>
-                        <div class="conv-info-row">
-                            <span class="conv-info-label">OP / Mesin</span>
-                            <span class="conv-info-value" id="conv-op-mesin">—</span>
-                        </div>
-                        <div class="conv-info-row">
-                            <span class="conv-info-label">Machine Type</span>
-                            <span class="conv-info-value" id="conv-machtype">—</span>
-                        </div>
-                    </div>
-
-                    <!-- Pilih tipe -->
-                    <div class="conv-section-title"><i class="fas fa-calendar-check"></i> Tipe Schedule <span class="text-red-400">*</span></div>
-                    <div class="choice-btn-group" id="convert-type-group" style="margin-bottom:1.25rem;">
-                        <button type="button" class="choice-btn" data-val="predictive" onclick="setConvertType(this)">
-                            <i class="fas fa-chart-line"></i> Predictive
-                        </button>
-                        <button type="button" class="choice-btn" data-val="preventive" onclick="setConvertType(this)">
-                            <i class="fas fa-shield-alt"></i> Preventive
-                        </button>
-                    </div>
-                    <input type="hidden" id="convert-inp-type">
-
-                    <!-- Field manual -->
-                    <div class="conv-section-title"><i class="fas fa-clipboard-list"></i> Detail Schedule</div>
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="col-span-2">
-                            <label class="form-label"><i class="fas fa-cog text-slate-300 mr-1"></i> Name Unit <span class="text-red-400">*</span></label>
-                            <input type="text" id="conv-name-unit" class="edit-field" placeholder="Nama unit/part">
-                        </div>
-                        <div class="col-span-2">
-                            <label class="form-label"><i class="fas fa-crosshairs text-slate-300 mr-1"></i> Maintenance Point <span class="text-red-400">*</span></label>
-                            <textarea id="conv-maint-point" class="edit-field" style="min-height:60px;" placeholder="Titik/poin perawatan"></textarea>
-                        </div>
-                        <div>
-                            <label class="form-label">Interval (bulan) <span class="text-red-400">*</span></label>
-                            <input type="number" min="1" id="conv-interval" class="edit-field" placeholder="mis. 6" oninput="syncConvertChangeDate()">
-                        </div>
-                        <div>
-                            <label class="form-label">Reminder Activity (hari)</label>
-                            <input type="number" min="0" id="conv-reminder" class="edit-field" placeholder="mis. 14">
-                        </div>
-                        <div>
-                            <label class="form-label">Use Date (Last Change) <span class="text-red-400">*</span></label>
-                            <input type="date" id="conv-use-date" class="edit-field" oninput="syncConvertChangeDate()">
-                        </div>
-                        <div>
-                            <label class="form-label">Change Date Plan (Jadwal Berikutnya) <span class="text-red-400">*</span></label>
-                            <input type="date" id="conv-change-date" class="edit-field">
-                            <label class="conv-sync-check">
-                                <input type="checkbox" id="conv-sync-checkbox" checked onchange="syncConvertChangeDate()">
-                                Otomatis: Use Date + Interval
-                            </label>
-                        </div>
-                    </div>
-                    <p class="text-[11px] text-slate-400 mt-3">
-                        Laporan asli tidak akan hilang/berubah — tetap tersimpan di history. Setelah dijadikan schedule,
-                        jadwal berikutnya akan otomatis berulang sesuai interval yang diisi di sini setiap kali report
-                        penyelesaian di-submit.
-                    </p>
-                </div>
-
-                <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-end gap-2 flex-shrink-0">
-                    <button onclick="closeConvertModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
-                        Batal
-                    </button>
-                    <button id="btn-save-convert" onclick="submitConvertSchedule()"
-                        class="px-4 py-2 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5" style="background:#fb8b24;">
-                        <i class="fas fa-save"></i> Simpan Schedule
-                    </button>
-                </div>
-            </div>
-        </div>
-    <?php endif; ?>
-
     <div id="toast"></div>
 
     <script>
@@ -1853,7 +1983,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
         const PENDING_POS_KEY = 'pending_widget_pos';
         const EDGE_MARGIN = 12; // jarak minimum dari tepi viewport
-        const FAB_SIZE = 52; // harus sama dengan width/height #pending-fab di CSS
+        const FAB_SIZE = 44; // harus sama dengan width/height #pending-fab di CSS
 
         function clampPos(x, y, w, h) {
             const maxX = window.innerWidth - w - EDGE_MARGIN;
@@ -1985,7 +2115,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                 y: fabRect.top
             };
             // Window muncul di posisi bubble terakhir, disesuaikan agar tidak keluar viewport
-            const pos = clampPos(fabRect.left, fabRect.top, 360, 1);
+            const pos = clampPos(fabRect.left, fabRect.top, 320, 1);
             win.style.left = pos.x + 'px';
             win.style.top = pos.y + 'px';
             fab.style.display = 'none';
@@ -2021,10 +2151,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
 
         document.getElementById('pending-window-close').addEventListener('click', closePendingWindow);
 
+        let pendingItemsById = {};
+        let lastPendingSignature = null;
+
+        // Badge status follow-up Maintenance — khusus buat konteks admin_conrod, supaya
+        // dia tahu apakah laporannya sudah disentuh Maintenance sebelum menandai versi
+        // waktu selesainya sendiri. Independen dari conrod_finish_at.
+        function maintenanceFollowupBadge(item) {
+            const followupCount = Number(item.followup_count || 0);
+            const followupDone = Number(item.followup_done_count || 0) > 0;
+            let label, bg, color, icon;
+            if (followupDone) {
+                label = 'Maintenance: sudah diselesaikan resmi';
+                bg = '#d1fae5';
+                color = '#047857';
+                icon = 'fa-check-circle';
+            } else if (followupCount > 0) {
+                label = 'Maintenance: sedang ditindaklanjuti';
+                bg = '#dbeafe';
+                color = '#1d4ed8';
+                icon = 'fa-spinner';
+            } else {
+                label = 'Maintenance: belum ditindaklanjuti';
+                bg = '#f1f5f9';
+                color = '#64748b';
+                icon = 'fa-hourglass-half';
+            }
+            return `<div class="pi-sub" style="display:inline-flex;align-items:center;gap:5px;background:${bg};color:${color};padding:2px 8px;border-radius:999px;font-weight:700;font-size:.68rem;margin-top:2px;">
+                        <i class="fas ${icon}"></i> ${label}
+                    </div>`;
+        }
+
         async function loadPendingFollowups() {
             try {
                 const res = await fetch(`${BASE}?ajax=pending_followups`);
                 const data = await res.json();
+
+                // Change detection: skip render kalau data persis sama dengan hasil
+                // polling sebelumnya — supaya window bubble yang lagi dibuka user
+                // (misal ada "Riwayat" inline yang sedang di-expand) tidak ke-reset
+                // tiap kali polling jalan, padahal tidak ada perubahan data apapun.
+                const signature = JSON.stringify(data);
+                if (signature === lastPendingSignature) return;
+                lastPendingSignature = signature;
+
                 const fab = document.getElementById('pending-fab');
                 const badge = document.getElementById('pending-fab-badge');
                 const win = document.getElementById('pending-window');
@@ -2035,6 +2205,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                     win.style.display = 'none';
                     return;
                 }
+
+                pendingItemsById = {};
+                data.forEach(item => {
+                    pendingItemsById[item.id] = item;
+                });
 
                 badge.textContent = data.length > 99 ? '99+' : data.length;
                 const firstShow = fab.style.display !== 'flex' && win.style.display !== 'flex';
@@ -2047,35 +2222,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                     fab.style.display = 'flex';
                 }
 
-                // Simpan data mentah per-id supaya bisa dipakai ulang oleh modal Jadikan Schedule
-                // tanpa perlu fetch ulang ke server.
-                pendingItemsById = {};
-                data.forEach(item => {
-                    pendingItemsById[item.id] = item;
-                });
-
                 bodyEl.innerHTML = data.map(item => {
                     const loc = [item.department, item.line, item.op && item.op !== '-' ? item.op : null]
                         .filter(Boolean).join(' / ');
                     const dateFmt = item.report_date ? item.report_date.slice(0, 10) : '—';
                     const meta = sourceRoleMeta(item.source_role);
                     const srcBadge = `<span class="src-badge" style="background:${meta.bg};color:${meta.text};"><span class="sb-dot" style="background:${meta.dot};"></span>${meta.label}</span>`;
-                    const showActions = CAN_FOLLOWUP || CAN_CONVERT_SCHEDULE;
-                    const actionsHtml = showActions ? `
+
+                    // Kalau conrod sudah menandai versi waktu selesainya sendiri, maintenance/technician
+                    // perlu tahu ini SEBELUM mereka menyelesaikan tiketnya secara resmi — sekadar konteks,
+                    // bukan status resmi (status resmi tetap ditentukan lewat "Selesaikan").
+                    // Info status follow-up Maintenance — cuma relevan buat admin_conrod,
+                    // supaya dia tahu progres resminya sebelum menandai versi sendiri.
+                    const followupBadge = IS_CONROD_ONLY ? maintenanceFollowupBadge(item) : '';
+
+                    const finishCount = Number(item.conrod_finish_count || 0);
+                    const conrodFinishInfo = item.conrod_finish_at ? `
+                            <div class="pi-sub" style="color:#0d9488;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                <span><i class="fas fa-clock"></i> Ditandai selesai (versi Conrod): ${escText(item.conrod_finish_at.replace('T', ' ').slice(0, 16))}</span>
+                                ${finishCount > 1 ? `<span style="cursor:pointer;text-decoration:underline;color:#0f766e;" onclick="event.stopPropagation(); toggleConrodFinishHistoryInline(${item.id})">Riwayat (${finishCount})</span>` : ''}
+                            </div>
+                            <div id="pi-history-${item.id}" style="display:none;"></div>` : '';
+
+                    let actionRow;
+                    if (IS_CONROD_ONLY) {
+                        // Conrod tidak menindaklanjuti tiketnya sendiri, tapi boleh mencatat
+                        // versi waktu selesai MEREKA sendiri — independen dari status resmi.
+                        actionRow = item.conrod_finish_at ? `
                             <div class="pi-action">
-                                ${CAN_FOLLOWUP ? `
+                                <span class="pi-btn-selesaikan" style="background:#ccfbf1;color:#0d9488;cursor:default;">
+                                    <i class="fas fa-check"></i> Selesai (versi Anda): ${escText(item.conrod_finish_at.replace('T', ' ').slice(0, 16))}
+                                </span>
+                                <button type="button" class="pi-btn-selesaikan" style="background:#f1f5f9;color:#64748b;border:none;cursor:pointer;"
+                                   onclick="openMarkConrodFinish(${item.id})" title="Ubah waktu">
+                                    <i class="fas fa-pen"></i>
+                                </button>
+                            </div>` : `
+                            <div class="pi-action">
+                                <button type="button" class="pi-btn-selesaikan" style="background:#ccfbf1;color:#0d9488;border:none;cursor:pointer;"
+                                   onclick="openMarkConrodFinish(${item.id})"
+                                   title="Catat waktu selesai versi Anda sendiri">
+                                    <i class="fas fa-clock"></i> Tandai Waktu Selesai (Versi Saya)
+                                </button>
+                            </div>`;
+                    } else {
+                        actionRow = `
+                            <div class="pi-action">
                                 <a class="pi-btn-selesaikan"
                                    href="history_report.php?open=${encodeURIComponent(item.id)}"
                                    title="Buka form penyelesaian laporan ini">
                                     <i class="fas fa-check-circle"></i> Selesaikan
-                                </a>` : ''}
+                                </a>
                                 ${CAN_CONVERT_SCHEDULE ? `
-                                <a class="pi-btn-selesaikan" style="background:#fef3c7;color:#b45309;"
-                                   href="#" onclick="openConvertModalForId(${item.id}); return false;"
+                                <button type="button" class="pi-btn-selesaikan" style="background:#fef3c7;color:#b45309;border:none;cursor:pointer;"
+                                   onclick="openConvertModalInlineById(${item.id})"
                                    title="Jadikan laporan ini schedule Predictive/Preventive">
                                     <i class="fas fa-calendar-plus"></i> Jadikan Schedule
-                                </a>` : ''}
-                            </div>` : '';
+                                </button>` : ''}
+                            </div>`;
+                    }
                     return `
                         <div class="pending-item">
                             <div class="pi-top">
@@ -2086,7 +2291,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                             </div>
                             <div class="pi-sub">${escText(item.problem || '')}</div>
                             <div class="pi-sub">PIC: ${escText(item.pic || '—')} · ${dateFmt}</div>
-                            ${actionsHtml}
+                            ${followupBadge}
+                            ${conrodFinishInfo}
+                            ${actionRow}
                         </div>`;
                 }).join('');
             } catch (e) {
@@ -2094,139 +2301,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             }
         }
 
-        <?php if ($canConvertSchedule): ?>
-            // ── Modal: Jadikan Schedule (dibuka langsung dari dashboard_report, tanpa
-            // pindah ke history_report.php) ──────────────────────────────────────────
-            let currentConvertRow = null;
-
-            function openConvertModalForId(id) {
-                const r = followupSources[id] || pendingItemsById[id];
-                if (!r) {
-                    showToast('Data laporan tidak ditemukan, coba muat ulang.', 'error');
-                    return;
-                }
-                currentConvertRow = r;
-
-                document.getElementById('convert-subtitle').textContent = `Dari E-Report #${r.id}`;
-                document.getElementById('conv-dept-line').textContent = `${r.department || '—'} / ${r.line || '—'}`;
-                document.getElementById('conv-op-mesin').textContent = `${r.op || '—'} / ${r.machine_name || '—'}`;
-                document.getElementById('conv-machtype').textContent = r.machine_type || '—';
-
-                // Reset field
-                document.getElementById('conv-name-unit').value = '';
-                document.getElementById('conv-maint-point').value = '';
-                document.getElementById('conv-interval').value = '';
-                document.getElementById('conv-reminder').value = '';
-                document.getElementById('conv-use-date').value = (r.report_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
-                document.getElementById('conv-change-date').value = '';
-                document.getElementById('convert-inp-type').value = '';
-                document.querySelectorAll('#convert-type-group .choice-btn').forEach(b => b.classList.remove('active'));
-
-                // Default: Change Date Plan mengikuti Use Date + Interval secara otomatis
-                document.getElementById('conv-sync-checkbox').checked = true;
-                document.getElementById('conv-change-date').readOnly = true;
-                document.getElementById('conv-change-date').classList.add('bg-slate-50');
-
-                document.getElementById('modal-convert-overlay').classList.add('open');
-            }
-
-            function closeConvertModal(e) {
-                if (e && e.target !== e.currentTarget) return;
-                document.getElementById('modal-convert-overlay').classList.remove('open');
-            }
-
-            function setConvertType(btn) {
-                document.querySelectorAll('#convert-type-group .choice-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                document.getElementById('convert-inp-type').value = btn.dataset.val;
-            }
-
-            // Sinkronkan Change Date Plan = Use Date (Last Change) + Interval bulan,
-            // hanya jika checkbox "Otomatis" dicentang. User tetap bisa uncheck untuk isi manual.
-            function syncConvertChangeDate() {
-                const checkbox = document.getElementById('conv-sync-checkbox');
-                const changeDateInput = document.getElementById('conv-change-date');
-
-                changeDateInput.readOnly = checkbox.checked;
-                changeDateInput.classList.toggle('bg-slate-50', checkbox.checked);
-
-                if (!checkbox.checked) return;
-
-                const useDate = document.getElementById('conv-use-date').value;
-                const interval = parseInt(document.getElementById('conv-interval').value);
-                if (!useDate || !interval || interval <= 0) return;
-
-                const d = new Date(useDate + 'T00:00:00');
-                d.setMonth(d.getMonth() + interval);
-                changeDateInput.value = d.toISOString().slice(0, 10);
-            }
-
-            function submitConvertSchedule() {
-                if (!currentConvertRow) return;
-                const reportId = currentConvertRow.id;
-
-                const type = document.getElementById('convert-inp-type').value;
-                const nameUnit = document.getElementById('conv-name-unit').value.trim();
-                const maintPoint = document.getElementById('conv-maint-point').value.trim();
-                const interval = document.getElementById('conv-interval').value;
-                const reminder = document.getElementById('conv-reminder').value || '0';
-                const useDate = document.getElementById('conv-use-date').value;
-                const changeDate = document.getElementById('conv-change-date').value;
-
-                if (!type) {
-                    showToast('Pilih tipe schedule (Predictive/Preventive) dulu.', 'error');
-                    return;
-                }
-                if (!nameUnit || !maintPoint || !interval || parseInt(interval) <= 0 || !useDate || !changeDate) {
-                    showToast('Lengkapi semua field wajib.', 'error');
-                    return;
-                }
-
-                const btn = document.getElementById('btn-save-convert');
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
-
-                const fd = new FormData();
-                fd.append('report_id', reportId);
-                fd.append('schedule_type', type);
-                fd.append('name_unit', nameUnit);
-                fd.append('maintenance_point', maintPoint);
-                fd.append('interval_month', interval);
-                fd.append('reminder_activity', reminder);
-                fd.append('use_date', useDate);
-                fd.append('change_date_plan', changeDate);
-
-                // Endpoint konversi tetap di history_report.php (satu-satunya sumber logika
-                // penyimpanan schedule) — dipanggil lewat fetch supaya user tidak perlu
-                // pindah halaman dari dashboard_report.
-                fetch('history_report.php?ajax=convert_to_schedule', {
-                        method: 'POST',
-                        body: fd
-                    })
-                    .then(r => r.json())
-                    .then(res => {
-                        if (res.success) {
-                            showToast(res.message || 'Berhasil dijadikan schedule.', 'success');
-                            closeConvertModal();
-                            loadPendingFollowups();
-                            if (typeof loadFollowupSources === 'function') loadFollowupSources();
-                        } else {
-                            showToast(res.message || 'Gagal menyimpan.', 'error');
-                        }
-                    })
-                    .catch(() => showToast('Koneksi error.', 'error'))
-                    .finally(() => {
-                        btn.disabled = false;
-                        btn.innerHTML = '<i class="fas fa-save"></i> Simpan Schedule';
-                    });
-            }
-        <?php endif; ?>
-
         makeDraggable(document.getElementById('pending-fab'), document.getElementById('pending-fab'), openPendingWindow);
         makeDraggable(document.getElementById('pending-window'), document.getElementById('pending-window-header'), null);
 
         loadPendingFollowups();
-        setInterval(loadPendingFollowups, 60000); // refresh tiap 1 menit, biar count selalu akurat
+        setInterval(loadPendingFollowups, 10000); // refresh tiap 10 detik; aman berkat change-detection di atas
 
         // Jaga widget tidak "terjebak" di luar viewport jika browser di-resize
         window.addEventListener('resize', () => {
@@ -2558,7 +2637,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
         // ── Tab switcher: Laporan Baru <-> Lanjutan (khusus admin_maintenance dkk) ──
         // ═══════════════════════════════════════════════════════════════════════════
         let followupSources = {};
-        let pendingItemsById = {}; // cache data laporan pending (dari bubble) untuk modal Jadikan Schedule
 
         function switchReportTab(tab) {
             if (!CAN_FOLLOWUP) return;
@@ -2684,10 +2762,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const box = document.getElementById('fu-original-problem');
             const badge = document.getElementById('fu-source-badge');
             const scheduleBtn = document.getElementById('btn-jadikan-schedule');
+            const incidentWrap = document.getElementById('fu-incident-time-wrap');
+            const incidentBox = document.getElementById('fu-incident-time');
             if (!id || !followupSources[id]) {
                 box.value = '';
                 badge.style.display = 'none';
                 if (scheduleBtn) scheduleBtn.style.display = 'none';
+                incidentWrap.style.display = 'none';
+                incidentBox.value = '';
                 resetLeftPanelLockedEmpty();
                 checkFollowupFieldsFilled();
                 return;
@@ -2699,16 +2781,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             badge.className = 'src-badge';
             badge.style.cssText = `display:inline-flex;background:${meta.bg};color:${meta.text};margin-left:6px;`;
             badge.innerHTML = `<span class="sb-dot" style="background:${meta.dot};"></span>${meta.label}`;
+            // Waktu Kejadian (repair_start) — cuma relevan & tersedia buat laporan yang
+            // sumbernya dari Admin Conrod, supaya maintenance tahu kapan kejadiannya
+            // dilaporkan pertama kali sebelum mereka melanjutkan pekerjaannya.
+            if (src.repair_start) {
+                incidentBox.value = src.repair_start.replace('T', ' ').slice(0, 16);
+                incidentWrap.style.display = 'block';
+            } else {
+                incidentBox.value = '';
+                incidentWrap.style.display = 'none';
+            }
             if (scheduleBtn) {
-                if (CAN_CONVERT_SCHEDULE) {
-                    scheduleBtn.onclick = () => {
-                        openConvertModalForId(id);
-                        return false;
-                    };
-                    scheduleBtn.style.display = 'flex';
-                } else {
-                    scheduleBtn.style.display = 'none';
-                }
+                scheduleBtn.style.display = CAN_CONVERT_SCHEDULE ? 'flex' : 'none';
             }
             checkFollowupFieldsFilled();
         }
@@ -2853,6 +2937,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             document.getElementById('sel-followup-source').value = '';
             document.getElementById('fu-original-problem').value = '';
             document.getElementById('fu-source-badge').style.display = 'none';
+            document.getElementById('fu-incident-time-wrap').style.display = 'none';
+            document.getElementById('fu-incident-time').value = '';
             resetLeftPanelLockedEmpty();
             document.getElementById('fu-start-date').value = '';
             document.getElementById('fu-start-time').value = '';
@@ -2924,6 +3010,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                     if (data.success) {
                         showToast(data.message || 'E-Report berhasil disimpan!', 'success');
                         resetForm();
+                        loadPendingFollowups();
                     } else {
                         showToast(data.message || 'Gagal menyimpan.', 'error');
                     }
@@ -2966,6 +3053,254 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             document.querySelectorAll('#shift-btn-group .choice-btn').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('#status-btn-group .choice-btn').forEach(b => b.classList.remove('active-done', 'active-pending'));
             checkAllFieldsFilled();
+        }
+
+        // ── Modal: Jadikan Schedule (inline, tanpa pindah ke history_report.php) ───────
+        let convertReportData = null;
+
+        function openConvertModalInlineById(id) {
+            const item = pendingItemsById[id];
+            if (item) openConvertModalInline(item);
+        }
+
+        function openConvertModalInlineFromFollowup() {
+            const id = document.getElementById('sel-followup-source').value;
+            const src = followupSources[id];
+            if (src) openConvertModalInline(src);
+        }
+
+        function openConvertModalInline(report) {
+            if (!report) return;
+            convertReportData = report;
+
+            document.getElementById('convert-subtitle').textContent = `Dari E-Report #${report.id}`;
+            document.getElementById('conv-dept-line').textContent = `${report.department || '—'} / ${report.line || '—'}`;
+            document.getElementById('conv-op-mesin').textContent = `${report.op || '—'} / ${report.machine_name || '—'}`;
+            document.getElementById('conv-machtype').textContent = report.machine_type || '—';
+
+            document.getElementById('conv-name-unit').value = '';
+            document.getElementById('conv-maint-point').value = '';
+            document.getElementById('conv-interval').value = '';
+            document.getElementById('conv-reminder').value = '';
+            document.getElementById('conv-use-date').value = (report.report_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+            document.getElementById('conv-change-date').value = '';
+            document.getElementById('convert-inp-type').value = '';
+            document.querySelectorAll('#convert-type-group .choice-btn').forEach(b => b.classList.remove('active'));
+
+            // Default: Change Date Plan mengikuti Use Date + Interval secara otomatis
+            document.getElementById('conv-sync-checkbox').checked = true;
+            document.getElementById('conv-change-date').readOnly = true;
+            document.getElementById('conv-change-date').classList.add('bg-slate-50');
+
+            document.getElementById('modal-convert-overlay').classList.add('open');
+        }
+
+        function closeConvertModal(e) {
+            if (e && e.target !== e.currentTarget) return;
+            document.getElementById('modal-convert-overlay').classList.remove('open');
+        }
+
+        function setConvertType(btn) {
+            document.querySelectorAll('#convert-type-group .choice-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('convert-inp-type').value = btn.dataset.val;
+        }
+
+        // Sinkronkan Change Date Plan = Use Date (Last Change) + Interval bulan,
+        // hanya jika checkbox "Otomatis" dicentang. User tetap bisa uncheck untuk isi manual.
+        function syncConvertChangeDate() {
+            const checkbox = document.getElementById('conv-sync-checkbox');
+            const changeDateInput = document.getElementById('conv-change-date');
+
+            changeDateInput.readOnly = checkbox.checked;
+            changeDateInput.classList.toggle('bg-slate-50', checkbox.checked);
+
+            if (!checkbox.checked) return;
+
+            const useDate = document.getElementById('conv-use-date').value;
+            const interval = parseInt(document.getElementById('conv-interval').value);
+            if (!useDate || !interval || interval <= 0) return;
+
+            const d = new Date(useDate + 'T00:00:00');
+            d.setMonth(d.getMonth() + interval);
+            changeDateInput.value = d.toISOString().slice(0, 10);
+        }
+
+        function submitConvertSchedule() {
+            if (!convertReportData) return;
+            const reportId = convertReportData.id;
+
+            const type = document.getElementById('convert-inp-type').value;
+            const nameUnit = document.getElementById('conv-name-unit').value.trim();
+            const maintPoint = document.getElementById('conv-maint-point').value.trim();
+            const interval = document.getElementById('conv-interval').value;
+            const reminder = document.getElementById('conv-reminder').value || '0';
+            const useDate = document.getElementById('conv-use-date').value;
+            const changeDate = document.getElementById('conv-change-date').value;
+
+            if (!type) {
+                showToast('Pilih tipe schedule (Predictive/Preventive) dulu.', 'error');
+                return;
+            }
+            if (!nameUnit || !maintPoint || !interval || parseInt(interval) <= 0 || !useDate || !changeDate) {
+                showToast('Lengkapi semua field wajib.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('btn-save-convert');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+            const fd = new FormData();
+            fd.append('report_id', reportId);
+            fd.append('schedule_type', type);
+            fd.append('name_unit', nameUnit);
+            fd.append('maintenance_point', maintPoint);
+            fd.append('interval_month', interval);
+            fd.append('reminder_activity', reminder);
+            fd.append('use_date', useDate);
+            fd.append('change_date_plan', changeDate);
+
+            // Endpoint konversi tetap di history_report.php (satu sumber logika, sesi login sama)
+            // — cuma UI-nya yang sekarang tampil langsung di dashboard_report.php.
+            fetch('history_report.php?ajax=convert_to_schedule', {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        showToast(res.message || 'Berhasil dijadikan schedule.', 'success');
+                        closeConvertModal();
+                        loadPendingFollowups();
+                        if (CAN_FOLLOWUP) loadFollowupSources();
+                    } else {
+                        showToast(res.message || 'Gagal menyimpan.', 'error');
+                    }
+                })
+                .catch(() => showToast('Koneksi error.', 'error'))
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-save"></i> Simpan Schedule';
+                });
+        }
+
+        // Toggle daftar riwayat "Waktu Selesai (Versi Conrod)" langsung inline di
+        // dalam kartu floating bubble, tanpa perlu buka modal — cukup buat intip cepat.
+        function toggleConrodFinishHistoryInline(id) {
+            const box = document.getElementById(`pi-history-${id}`);
+            if (!box) return;
+            if (box.style.display === 'block') {
+                box.style.display = 'none';
+                return;
+            }
+            box.style.display = 'block';
+            box.innerHTML = '<div class="pi-sub" style="color:#94a3b8;">Memuat riwayat...</div>';
+            fetch(`${BASE}?ajax=conrod_finish_log&report_id=${id}`)
+                .then(r => r.json())
+                .then(rows => {
+                    if (!Array.isArray(rows) || rows.length === 0) {
+                        box.innerHTML = '';
+                        return;
+                    }
+                    box.innerHTML = `<div style="margin-top:2px;padding:6px 8px;background:#f8fafc;border-radius:8px;display:flex;flex-direction:column;gap:4px;">` +
+                        rows.map((row, idx) => `
+                            <div style="font-size:.68rem;color:${idx===0?'#0d9488':'#64748b'};font-weight:${idx===0?'700':'500'};">
+                                <i class="fas fa-clock"></i> ${escText((row.finish_at||'').replace('T',' ').slice(0,16))}
+                                <span style="color:#94a3b8;">· dicatat ${escText((row.recorded_at||'').replace('T',' ').slice(0,16))}</span>
+                            </div>`).join('') +
+                        `</div>`;
+                })
+                .catch(() => {
+                    box.innerHTML = '';
+                });
+        }
+
+        // ── Admin Conrod: Tandai Waktu Selesai (Versi Saya) ─────────────────────────
+        let conrodFinishReportId = null;
+
+        function openMarkConrodFinish(id) {
+            conrodFinishReportId = id;
+            const item = pendingItemsById[id];
+            const now = new Date();
+            if (item && item.conrod_finish_at) {
+                const d = item.conrod_finish_at.replace('T', ' ');
+                document.getElementById('cf-finish-date').value = d.slice(0, 10);
+                document.getElementById('cf-finish-time').value = d.slice(11, 16);
+            } else {
+                document.getElementById('cf-finish-date').value = now.toISOString().slice(0, 10);
+                document.getElementById('cf-finish-time').value = now.toTimeString().slice(0, 5);
+            }
+            document.getElementById('modal-conrod-finish-overlay').style.display = 'flex';
+            loadConrodFinishHistory(id);
+        }
+
+        // Riwayat perubahan "Waktu Selesai (Versi Conrod)" — opsi 2: tiap perubahan
+        // tersimpan sebagai entri baru, jadi ditampilkan sebagai daftar, terbaru di atas.
+        function loadConrodFinishHistory(reportId) {
+            const wrap = document.getElementById('cf-history-wrap');
+            const list = document.getElementById('cf-history-list');
+            wrap.style.display = 'none';
+            list.innerHTML = '';
+            fetch(`${BASE}?ajax=conrod_finish_log&report_id=${reportId}`)
+                .then(r => r.json())
+                .then(rows => {
+                    if (!Array.isArray(rows) || rows.length === 0) return;
+                    wrap.style.display = 'block';
+                    list.innerHTML = rows.map((row, idx) => `
+                        <div style="display:flex;align-items:center;gap:8px;background:${idx===0?'#f0fdfa':'#f8fafc'};border:1px solid ${idx===0?'#99f6e4':'#e2e8f0'};border-radius:8px;padding:6px 10px;font-size:.72rem;">
+                            <i class="fas fa-clock" style="color:${idx===0?'#0d9488':'#94a3b8'};"></i>
+                            <span style="font-weight:700;color:#334155;">${escText((row.finish_at||'').replace('T',' ').slice(0,16))}</span>
+                            <span style="color:#94a3b8;">· dicatat ${escText((row.recorded_at||'').replace('T',' ').slice(0,16))}</span>
+                            ${idx===0 ? '<span style="margin-left:auto;color:#0d9488;font-weight:700;">Terbaru</span>' : ''}
+                        </div>`).join('');
+                })
+                .catch(() => {});
+        }
+
+        function closeMarkConrodFinish(e) {
+            if (e && e.target !== e.currentTarget) return;
+            document.getElementById('modal-conrod-finish-overlay').style.display = 'none';
+        }
+
+        function submitMarkConrodFinish() {
+            if (!conrodFinishReportId) return;
+            const finishDate = document.getElementById('cf-finish-date').value;
+            const finishTime = document.getElementById('cf-finish-time').value;
+            if (!finishDate || !finishTime) {
+                showToast('Lengkapi tanggal & jam.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('btn-save-conrod-finish');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+            const fd = new FormData();
+            fd.append('report_id', conrodFinishReportId);
+            fd.append('finish_date', finishDate);
+            fd.append('finish_time', finishTime);
+
+            fetch(`${BASE}?ajax=mark_conrod_finish`, {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        showToast(res.message || 'Berhasil disimpan.', 'success');
+                        closeMarkConrodFinish();
+                        loadPendingFollowups();
+                        if (conrodFinishReportId) loadConrodFinishHistory(conrodFinishReportId);
+                    } else {
+                        showToast(res.message || 'Gagal menyimpan.', 'error');
+                    }
+                })
+                .catch(() => showToast('Koneksi error.', 'error'))
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-save"></i> Simpan';
+                });
         }
 
         function escHtml(str) {
