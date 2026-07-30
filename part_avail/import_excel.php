@@ -216,7 +216,7 @@ try {
     ");
     $stmtCheck = $pdo->prepare("
         SELECT id FROM schedules
-        WHERE machine_name = ? AND maintenance_point = ? AND operation_process = ?
+        WHERE department = ? AND line <=> ? AND machine_name = ? AND maintenance_point = ? AND operation_process = ?
         LIMIT 1
     ");
 
@@ -227,28 +227,11 @@ try {
     $errors  = [];
     $importEmailQueue = []; // Antrian email notifikasi
 
-    // ── Cache lookup: plant_name (lowercase) → id dari tabel plants ──────
-    // Dibuat sekali sebelum loop agar tidak query DB per baris
-    $plantCache = [];
-    try {
-        $plantRows = $pdo->query("SELECT id, plant_name FROM plants")->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($plantRows as $p) {
-            $plantCache[mb_strtolower(trim($p['plant_name']))] = (int)$p['id'];
-        }
-    } catch (\Exception $e) {
-        error_log('[Import] Gagal load tabel plants: ' . $e->getMessage());
-    }
-
-    // ── Cache lookup: line_name (lowercase) → id dari tabel line ─────────
-    $lineCache = [];
-    try {
-        $lineRows = $pdo->query("SELECT id, line_name FROM line")->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($lineRows as $ln) {
-            $lineCache[mb_strtolower(trim($ln['line_name']))] = (int)$ln['id'];
-        }
-    } catch (\Exception $e) {
-        error_log('[Import] Gagal load tabel line: ' . $e->getMessage());
-    }
+    // NOTE: Department & Line disimpan sebagai NAMA STRING langsung (konsisten dengan
+    // machine_list & tabel schedules_preventive), BUKAN di-resolve ke ID dari tabel
+    // plants/line lama. Resolve ke ID adalah sumber bug "line ketuker" (mis. line '4'
+    // ke-import jadi id numerik yang kebetulan menunjuk ke line lain di tabel `line`
+    // legacy) — perbaikan ini menghilangkan akar masalah tersebut.
 
     for ($r = $headerRowNum + 1; $r <= $highestRow; $r++) {
 
@@ -268,29 +251,10 @@ try {
             continue;
         }
 
-        // ── Resolve department: nama → id dari tabel plants ──────────────
-        $deptKey = mb_strtolower(trim($dept));
-        if (isset($plantCache[$deptKey])) {
-            $deptId = $plantCache[$deptKey];
-        } else {
-            $errors[] = "Baris $r: Department '{$dept}' tidak ditemukan di tabel plants — dilewati.";
-            $skipped++;
-            continue;
-        }
-
-        // ── Resolve line: nama → id dari tabel line ──────────────────────
-        $lineRaw = cleanStr($get('line'));
-        $lineId  = null;
-        if ($lineRaw !== null) {
-            $lineKey = mb_strtolower(trim($lineRaw));
-            if (isset($lineCache[$lineKey])) {
-                $lineId = $lineCache[$lineKey];
-            } else {
-                // Line tidak ditemukan — catat warning tapi tidak skip
-                // karena line bisa nullable tergantung struktur DB Anda
-                $errors[] = "Baris $r: Line '{$lineRaw}' tidak ditemukan di tabel line — diisi NULL.";
-            }
-        }
+        // Department & Line dipakai langsung sebagai nama string (bukan ID)
+        $deptName = $dept;
+        $lineRaw  = cleanStr($get('line'));
+        $lineName = $lineRaw; // boleh null jika kosong di Excel
 
         $maintPoint = cleanStr($get('maintenance_point'));
         if ($maintPoint === null) {
@@ -347,8 +311,8 @@ try {
         $maintStatus = $needsAction ? 'soon'  : 'done';
 
         $params = [
-            ':department'        => $deptId,
-            ':line'              => $lineId,
+            ':department'        => $deptName,
+            ':line'              => $lineName,
             ':operation_process' => $opProcess,
             ':machine_name'      => $machineName,
             ':process_machine'   => cleanStr($get('process_machine')),
@@ -366,7 +330,9 @@ try {
 
         try {
             // UPSERT: cek apakah sudah ada data dengan kombinasi kunci yang sama
-            $stmtCheck->execute([$machineName, $maintPoint, $opProcess]);
+            // (department + line ikut disertakan, supaya machine yang sama tipe/model-nya
+            // tapi ada di line lain TIDAK saling menimpa satu sama lain)
+            $stmtCheck->execute([$deptName, $lineName, $machineName, $maintPoint, $opProcess]);
             $existingId = $stmtCheck->fetchColumn();
 
             if ($existingId) {

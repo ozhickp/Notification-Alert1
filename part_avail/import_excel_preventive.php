@@ -208,7 +208,7 @@ try {
     ");
     $stmtCheck = $pdo->prepare("
         SELECT id FROM schedules_preventive
-        WHERE machine_name = ? AND maintenance_point = ? AND operation_process = ?
+        WHERE department = ? AND line <=> ? AND machine_name = ? AND maintenance_point = ? AND operation_process = ?
         LIMIT 1
     ");
 
@@ -313,7 +313,9 @@ try {
 
         try {
             // UPSERT: cek apakah sudah ada data dengan kombinasi kunci yang sama
-            $stmtCheck->execute([$machineName, $maintPoint, $opProcess]);
+            // (department + line ikut disertakan, supaya machine yang sama tipe/model-nya
+            // tapi ada di line lain TIDAK saling menimpa satu sama lain)
+            $stmtCheck->execute([$deptName, $lineName, $machineName, $maintPoint, $opProcess]);
             $existingId = $stmtCheck->fetchColumn();
 
             if ($existingId) {
