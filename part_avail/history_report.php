@@ -2953,9 +2953,16 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 alert('Pilih tanggal / bulan terlebih dahulu, lalu klik Cari.');
                 return;
             }
-            const file = currentMode === 'daily' ?
+            // Ikutkan filter Department & Sumber Laporan yang sedang aktif di tabel,
+            // supaya file yang terdownload persis sama dengan yang sedang dilihat —
+            // bukan selalu semua data periode itu.
+            const dept = document.getElementById('inp-dept')?.value || '';
+            const source = document.getElementById('inp-source')?.value || '';
+            let file = currentMode === 'daily' ?
                 `export_history_report.php?mode=daily&tanggal=${encodeURIComponent(value)}` :
                 `export_history_report.php?mode=monthly&bulan=${encodeURIComponent(value)}`;
+            if (dept) file += `&dept=${encodeURIComponent(dept)}`;
+            if (source) file += `&source=${encodeURIComponent(source)}`;
             window.open(file, '_blank');
         }
 

@@ -1416,7 +1416,52 @@ HTML;
     <title>Predictive Maintenance Alert System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
+        /* ── Global type & shape refinement ── */
+        html,
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Tailwind's 3xl/2xl radii read as very "bubbly" — tone them down slightly
+           for a calmer, more professional edge across every card/input/button that
+           uses these utility classes, without touching the HTML markup itself. */
+        .rounded-3xl {
+            border-radius: 16px !important;
+        }
+
+        .rounded-2xl {
+            border-radius: 12px !important;
+        }
+
+        /* Softer, more restrained shadows than Tailwind's defaults */
+        .shadow-sm {
+            box-shadow: 0 1px 2px rgba(15, 23, 42, .05), 0 1px 3px rgba(15, 23, 42, .04) !important;
+        }
+
+        .shadow-md {
+            box-shadow: 0 4px 10px rgba(15, 23, 42, .07) !important;
+        }
+
+        .shadow-xl {
+            box-shadow: 0 8px 24px rgba(15, 23, 42, .08) !important;
+        }
+
+        /* Tailwind's tracking-widest (0.1em) reads quite loud on uppercase table
+           headers/labels — dial it back site-wide for a calmer, more refined feel. */
+        .tracking-widest {
+            letter-spacing: .045em !important;
+        }
+
+        table thead th {
+            font-weight: 600 !important;
+        }
+
         #importOverlay {
             display: none;
             position: fixed;
@@ -1464,11 +1509,11 @@ HTML;
             display: inline-flex;
             align-items: center;
             padding: .2rem .72rem;
-            border-radius: 9999px;
+            border-radius: 8px;
             font-size: .68rem;
-            font-weight: 800;
+            font-weight: 700;
             border: 1px solid transparent;
-            letter-spacing: .05em;
+            letter-spacing: .03em;
             text-transform: uppercase;
             white-space: nowrap;
         }
@@ -1934,18 +1979,18 @@ HTML;
                 <!-- HEADER -->
                 <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                     <div>
-                        <h1 class="text-3xl font-bold text-gray-800">🛠️ Maintenance Dashboard</h1>
-                        <p class="text-gray-500 mt-1">Preventive and Predictive Maintenance</p>
+                        <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Maintenance Dashboard</h1>
+                        <p class="text-slate-500 mt-1 text-sm">Preventive and Predictive Maintenance</p>
                     </div>
                     <div class="flex items-center gap-3 flex-wrap">
-                        <div class="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-xl">
-                            <div class="w-7 h-7 rounded-full bg-[#5f0f40] flex items-center justify-center flex-shrink-0">
+                        <div class="flex items-center gap-2.5 bg-white border border-slate-200 px-3.5 py-2 rounded-xl shadow-sm">
+                            <div class="w-7 h-7 rounded-lg bg-[#5f0f40] flex items-center justify-center flex-shrink-0">
                                 <i class="fas fa-user text-white text-xs"></i>
                             </div>
-                            <span class="text-sm font-bold text-slate-700"><?= htmlspecialchars($displayName) ?></span>
+                            <span class="text-sm font-semibold text-slate-700"><?= htmlspecialchars($displayName) ?></span>
                         </div>
                         <a href="logout_user.php" onclick="return confirm('Apakah Anda yakin ingin keluar?')"
-                            class="bg-red-100 hover:bg-red-200 text-red-600 px-5 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2 text-sm">
+                            class="bg-white hover:bg-red-50 border border-slate-200 hover:border-red-200 text-slate-500 hover:text-red-600 px-4 py-2 rounded-xl font-semibold transition-all flex items-center gap-2 text-sm shadow-sm">
                             <i class="fas fa-sign-out-alt"></i> Logout
                         </a>
                     </div>
@@ -2054,33 +2099,49 @@ HTML;
 
 
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-                        <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
-                            style="background:#fee2e2;border-color:#fca5a5;" onclick="openStatusModal('overdue')">
-                            <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#b91c1c;">
-                                Overdue <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
-                            </p>
-                            <p class="text-3xl font-black" style="color:#b91c1c;" id="cardCntOverdue"><?= $cntOverdue ?></p>
+                        <div class="p-4 rounded-2xl border border-slate-200 bg-white shadow-sm cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md flex items-center gap-3.5"
+                            style="border-left:4px solid #dc2626;" onclick="openStatusModal('overdue')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#fef2f2;color:#dc2626;">
+                                <i class="fas fa-triangle-exclamation text-sm"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10.5px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Overdue</p>
+                                <p class="text-2xl font-black text-slate-800" id="cardCntOverdue"><?= $cntOverdue ?></p>
+                            </div>
+                            <i class="fas fa-chevron-right text-[10px] text-slate-300"></i>
                         </div>
-                        <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
-                            style="background:#fef9c3;border-color:#fde047;" onclick="openStatusModal('alert')">
-                            <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#854d0e;">
-                                Alert <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
-                            </p>
-                            <p class="text-3xl font-black" style="color:#854d0e;" id="cardCntAlert"><?= $cntAlert ?></p>
+                        <div class="p-4 rounded-2xl border border-slate-200 bg-white shadow-sm cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md flex items-center gap-3.5"
+                            style="border-left:4px solid #b45309;" onclick="openStatusModal('alert')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#fffbeb;color:#b45309;">
+                                <i class="fas fa-bell text-sm"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10.5px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Alert</p>
+                                <p class="text-2xl font-black text-slate-800" id="cardCntAlert"><?= $cntAlert ?></p>
+                            </div>
+                            <i class="fas fa-chevron-right text-[10px] text-slate-300"></i>
                         </div>
-                        <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
-                            style="background:#ffedd5;border-color:#fdba74;" onclick="openStatusModal('reminder')">
-                            <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#c2410c;">
-                                Reminder <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
-                            </p>
-                            <p class="text-3xl font-black" style="color:#c2410c;" id="cardCntReminder"><?= $cntReminder ?></p>
+                        <div class="p-4 rounded-2xl border border-slate-200 bg-white shadow-sm cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md flex items-center gap-3.5"
+                            style="border-left:4px solid #c2410c;" onclick="openStatusModal('reminder')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#fff7ed;color:#c2410c;">
+                                <i class="fas fa-clock text-sm"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10.5px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Reminder</p>
+                                <p class="text-2xl font-black text-slate-800" id="cardCntReminder"><?= $cntReminder ?></p>
+                            </div>
+                            <i class="fas fa-chevron-right text-[10px] text-slate-300"></i>
                         </div>
-                        <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
-                            style="background:#d1fae5;border-color:#6ee7b7;" onclick="openStatusModal('secure')">
-                            <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#065f46;">
-                                Secure <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
-                            </p>
-                            <p class="text-3xl font-black" style="color:#065f46;" id="cardCntSecure"><?= $cntSecure ?></p>
+                        <div class="p-4 rounded-2xl border border-slate-200 bg-white shadow-sm cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md flex items-center gap-3.5"
+                            style="border-left:4px solid #059669;" onclick="openStatusModal('secure')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#ecfdf5;color:#059669;">
+                                <i class="fas fa-circle-check text-sm"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10.5px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Secure</p>
+                                <p class="text-2xl font-black text-slate-800" id="cardCntSecure"><?= $cntSecure ?></p>
+                            </div>
+                            <i class="fas fa-chevron-right text-[10px] text-slate-300"></i>
                         </div>
                     </div>
 
@@ -2337,33 +2398,49 @@ HTML;
 
                     <!-- STAT CARDS -->
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-                        <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
-                            style="background:#fee2e2;border-color:#fca5a5;" onclick="openPrevStatusModal('overdue')">
-                            <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#b91c1c;">
-                                Overdue <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
-                            </p>
-                            <p class="text-3xl font-black" style="color:#b91c1c;" id="cardPrevCntOverdue"><?= $pCntOverdue ?></p>
+                        <div class="p-4 rounded-2xl border border-slate-200 bg-white shadow-sm cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md flex items-center gap-3.5"
+                            style="border-left:4px solid #dc2626;" onclick="openPrevStatusModal('overdue')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#fef2f2;color:#dc2626;">
+                                <i class="fas fa-triangle-exclamation text-sm"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10.5px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Overdue</p>
+                                <p class="text-2xl font-black text-slate-800" id="cardPrevCntOverdue"><?= $pCntOverdue ?></p>
+                            </div>
+                            <i class="fas fa-chevron-right text-[10px] text-slate-300"></i>
                         </div>
-                        <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
-                            style="background:#fef9c3;border-color:#fde047;" onclick="openPrevStatusModal('alert')">
-                            <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#854d0e;">
-                                Alert <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
-                            </p>
-                            <p class="text-3xl font-black" style="color:#854d0e;" id="cardPrevCntAlert"><?= $pCntAlert ?></p>
+                        <div class="p-4 rounded-2xl border border-slate-200 bg-white shadow-sm cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md flex items-center gap-3.5"
+                            style="border-left:4px solid #b45309;" onclick="openPrevStatusModal('alert')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#fffbeb;color:#b45309;">
+                                <i class="fas fa-bell text-sm"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10.5px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Alert</p>
+                                <p class="text-2xl font-black text-slate-800" id="cardPrevCntAlert"><?= $pCntAlert ?></p>
+                            </div>
+                            <i class="fas fa-chevron-right text-[10px] text-slate-300"></i>
                         </div>
-                        <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
-                            style="background:#ffedd5;border-color:#fdba74;" onclick="openPrevStatusModal('reminder')">
-                            <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#c2410c;">
-                                Reminder <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
-                            </p>
-                            <p class="text-3xl font-black" style="color:#c2410c;" id="cardPrevCntReminder"><?= $pCntReminder ?></p>
+                        <div class="p-4 rounded-2xl border border-slate-200 bg-white shadow-sm cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md flex items-center gap-3.5"
+                            style="border-left:4px solid #c2410c;" onclick="openPrevStatusModal('reminder')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#fff7ed;color:#c2410c;">
+                                <i class="fas fa-clock text-sm"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10.5px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Reminder</p>
+                                <p class="text-2xl font-black text-slate-800" id="cardPrevCntReminder"><?= $pCntReminder ?></p>
+                            </div>
+                            <i class="fas fa-chevron-right text-[10px] text-slate-300"></i>
                         </div>
-                        <div class="p-5 rounded-3xl border shadow-sm cursor-pointer transition hover:-translate-y-1 hover:shadow-md"
-                            style="background:#d1fae5;border-color:#6ee7b7;" onclick="openPrevStatusModal('secure')">
-                            <p class="text-[10px] font-black uppercase tracking-widest mb-1 flex items-center" style="color:#065f46;">
-                                Secure <i class="fas fa-chevron-right text-[8px] ml-auto opacity-50"></i>
-                            </p>
-                            <p class="text-3xl font-black" style="color:#065f46;" id="cardPrevCntSecure"><?= $pCntSecure ?></p>
+                        <div class="p-4 rounded-2xl border border-slate-200 bg-white shadow-sm cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md flex items-center gap-3.5"
+                            style="border-left:4px solid #059669;" onclick="openPrevStatusModal('secure')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#ecfdf5;color:#059669;">
+                                <i class="fas fa-circle-check text-sm"></i>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10.5px] font-bold uppercase tracking-wide text-slate-400 mb-0.5">Secure</p>
+                                <p class="text-2xl font-black text-slate-800" id="cardPrevCntSecure"><?= $pCntSecure ?></p>
+                            </div>
+                            <i class="fas fa-chevron-right text-[10px] text-slate-300"></i>
                         </div>
                     </div>
 

@@ -28,34 +28,111 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 $mode    = $_GET['mode']    ?? 'daily';
 $tanggal = $_GET['tanggal'] ?? '';
 $bulan   = $_GET['bulan']   ?? '';
+$dept    = trim($_GET['dept']   ?? '');
+$source  = trim($_GET['source'] ?? '');
+
+// ── Helper: nama bulan Indonesia — dipakai untuk label periode & tidak
+// bergantung ke setlocale() (sering tidak konsisten antar server).
+function bulanIndo(int $m): string
+{
+    $bulan = [
+        1 => 'Januari',
+        2 => 'Februari',
+        3 => 'Maret',
+        4 => 'April',
+        5 => 'Mei',
+        6 => 'Juni',
+        7 => 'Juli',
+        8 => 'Agustus',
+        9 => 'September',
+        10 => 'Oktober',
+        11 => 'November',
+        12 => 'Desember',
+    ];
+    return $bulan[$m] ?? (string) $m;
+}
 
 // ── Validasi + filename ───────────────────────────────────────────────────────
 if ($mode === 'daily') {
     if ($tanggal === '') die('Pilih tanggal terlebih dahulu.');
+    $dt = DateTime::createFromFormat('Y-m-d', $tanggal);
+    if (!$dt) die('Format tanggal tidak valid.');
     $whereDate    = "DATE(r.created_at) = " . $pdo->quote($tanggal);
-    $periodeLabel = 'Tanggal : ' . $tanggal;
-    $dtParts      = explode('-', $tanggal);
-    $filename     = 'History_EReport_daily_' . implode('_', $dtParts) . '.xlsx';
+    // Tanggal Indonesia, mis. "30 Juli 2026"
+    $periodeLabel = 'Tanggal : ' . $dt->format('d') . ' ' . bulanIndo((int) $dt->format('n')) . ' ' . $dt->format('Y');
+    // Nama file: dd_mm_yyyy
+    $filename     = 'History_EReport_daily_' . $dt->format('d_m_Y');
 } elseif ($mode === 'monthly') {
     if ($bulan === '') die('Pilih bulan terlebih dahulu.');
+    $bulanParts = explode('-', $bulan); // [YYYY, MM]
+    if (count($bulanParts) !== 2) die('Format bulan tidak valid.');
+    [$tahunNum, $bulanNum] = $bulanParts;
     $whereDate    = "DATE_FORMAT(r.created_at, '%Y-%m') = " . $pdo->quote($bulan);
-    $periodeLabel = 'Bulan : ' . $bulan;
-    $dtParts      = explode('-', $bulan);
-    $filename     = 'History_EReport_monthly_' . implode('_', $dtParts) . '.xlsx';
+    // Bulan Indonesia, mis. "Juli 2026"
+    $periodeLabel = 'Bulan : ' . bulanIndo((int) $bulanNum) . ' ' . $tahunNum;
+    // Nama file: mm_yyyy
+    $filename     = 'History_EReport_monthly_' . $bulanNum . '_' . $tahunNum;
 } else {
     die('Mode tidak valid.');
 }
 
-// admin_conrod cuma export laporan yang dia buat sendiri (format Excel tetap sama)
+// ── Judul utama sheet — beda untuk admin_conrod (khusus laporan Connecting Rod
+// Engine Stop) vs role lain (format E-Report umum, tidak berubah).
 if ($isConrodOnly) {
-    $whereDate .= " AND r.reported_by = " . $pdo->quote($currentUsername);
+    $reportTitle = $mode === 'daily'
+        ? 'DAILY REPORT CONNECTING ROD ENGINE STOP'
+        : 'MONTHLY REPORT CONNECTING ROD ENGINE STOP';
+} else {
+    $reportTitle = $mode === 'daily'
+        ? 'HISTORY E-REPORT MAINTENANCE'
+        : 'MONTHLY E-REPORT MAINTENANCE';
 }
+
+// admin_conrod: sama seperti tabel di history_report.php — laporan yang dia buat
+// sendiri, DITAMBAH follow-up yang dibuat maintenance/technician atas laporan
+// awalnya (follow-up itu reported_by-nya bukan dia, jadi harus dicek lewat
+// parent_id supaya tidak hilang dari hasil export).
+if ($isConrodOnly) {
+    $whereDate .= " AND (r.reported_by = " . $pdo->quote($currentUsername) . " OR r.parent_id IN (
+        SELECT id FROM e_reports WHERE reported_by = " . $pdo->quote($currentUsername) . " AND parent_id IS NULL
+    ))";
+}
+
+// ── Filter Department & Sumber Laporan — sinkron dengan filter yang aktif di
+// tabel history_report.php, supaya file yang terdownload persis sama dengan
+// apa yang lagi dilihat user (bukan selalu semua data periode itu).
+if ($dept !== '') {
+    $whereDate .= " AND r.department = " . $pdo->quote($dept);
+    $periodeLabel .= '  |  Dept: ' . $dept;
+    $filename      .= '_' . preg_replace('/[^A-Za-z0-9]+/', '', $dept);
+}
+
+if ($source === 'conrod' || $source === 'maintenance') {
+    // Logika identik dengan history_report.php: lihat root (laporan awal) dari
+    // rangkaian follow-up-nya untuk menentukan asal laporan, bukan baris itu sendiri.
+    $rootConrodExpr = "EXISTS (
+        SELECT 1 FROM e_reports rt
+        LEFT JOIN users ru ON ru.username = rt.reported_by
+        WHERE rt.id = COALESCE(r.parent_id, r.id)
+          AND (
+                (rt.foreman IS NOT NULL AND rt.foreman <> '')
+             OR (rt.source_role IS NOT NULL AND rt.source_role = 'admin_conrod')
+             OR (rt.source_role IS NULL AND ru.role = 'admin_conrod')
+          )
+    )";
+    $whereDate .= $source === 'conrod' ? " AND {$rootConrodExpr}" : " AND NOT {$rootConrodExpr}";
+    $periodeLabel .= '  |  Sumber: ' . ($source === 'conrod' ? 'Admin Conrod' : 'Maintenance / Technician');
+    $filename      .= '_' . $source;
+}
+
+$filename .= '.xlsx';
 
 // ── Query ─────────────────────────────────────────────────────────────────────
 $rows = $pdo->query("
     SELECT r.id, r.parent_id, r.report_date, r.department, r.line, r.op, r.shift,
            r.machine_name, r.machine_type, r.repair_start, r.repair_finish,
-           r.reported_by, r.pic, r.problem, r.action, r.status, r.created_at
+           r.reported_by, r.pic, r.problem, r.action, r.status, r.created_at,
+           r.foreman, r.source_role
     FROM e_reports r
     WHERE {$whereDate}
     ORDER BY r.report_date ASC, r.created_at ASC
@@ -82,7 +159,7 @@ foreach ($rows as $r) {
 // kembalikan "No" root tersebut — dipakai sebagai "Chain ID" supaya semua
 // record dalam satu rantai follow-up bisa di-filter/sort jadi satu grup,
 // terlepas dari posisi tanggal/barisnya di sheet.
-function findChainRootNo($row, array $rowsById, array $idToNo)
+function findChainRoot($row, array $rowsById)
 {
     $current = $row;
     $guard   = 0; // safety guard, cegah infinite loop kalau data parent_id circular
@@ -90,7 +167,27 @@ function findChainRootNo($row, array $rowsById, array $idToNo)
         $current = $rowsById[$current['parent_id']];
         $guard++;
     }
-    return $idToNo[$current['id']] ?? null;
+    return $current;
+}
+
+function findChainRootNo($row, array $rowsById, array $idToNo)
+{
+    $root = findChainRoot($row, $rowsById);
+    return $idToNo[$root['id']] ?? null;
+}
+
+// ── Helper: info sumber laporan (admin_conrod) — dilihat dari record akar
+// (root) rantai, bukan dari baris itu sendiri, supaya baris lanjutan
+// (follow-up dari admin_maintenance/technician) tetap menampilkan info
+// Foreman conrod yang jadi asal laporannya. Sinyal utama: kolom `foreman`
+// terisi (sama seperti logika di dashboard_report.php).
+function conrodSourceLabel($row, array $rowsById)
+{
+    $root = findChainRoot($row, $rowsById);
+    if (!empty($root['foreman'])) {
+        return 'Conrod • Foreman: ' . $root['foreman'];
+    }
+    return '—';
 }
 
 // ── Helper: rujukan "continuation of work from" harus menunjuk ke nomor urut "No" yang
@@ -167,6 +264,7 @@ $colHeaders = [
     'Department',
     'Line',
     'OP',
+    'Sumber (Conrod)',
     'machine name',
     'machine type',
     'Shift',
@@ -196,20 +294,21 @@ $colWidths = [
     'C' => 18,  // Department
     'D' => 14,  // Line
     'E' => 8,   // OP
-    'F' => 24,  // machine name
-    'G' => 16,  // machine type
-    'H' => 10,  // Shift
-    'I' => 18,  // Repair Start
-    'J' => 18,  // Repair Finish
-    'K' => 10,  // duration (mnt)
-    'L' => 16,  // Reported By
-    'M' => 16,  // PIC/Technician
-    'N' => 38,  // Problem / Alarm
-    'O' => 38,  // Corrective Action
-    'P' => 12,  // Chain ID
-    'Q' => 14,  // continuation of work from
-    'R' => 14,  // Status
-    'S' => 18   // Submitted At
+    'F' => 20,  // Sumber (Conrod)
+    'G' => 24,  // machine name
+    'H' => 16,  // machine type
+    'I' => 10,  // Shift
+    'J' => 18,  // Repair Start
+    'K' => 18,  // Repair Finish
+    'L' => 10,  // duration (mnt)
+    'M' => 16,  // Reported By
+    'N' => 16,  // PIC/Technician
+    'O' => 38,  // Problem / Alarm
+    'P' => 38,  // Corrective Action
+    'Q' => 12,  // Chain ID
+    'R' => 14,  // continuation of work from
+    'S' => 14,  // Status
+    'T' => 18   // Submitted At
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -229,13 +328,13 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet);
     }
 
-    $sheet->mergeCells('A1:S1');
-    $sheet->setCellValue('A1', 'HISTORY E-REPORT MAINTENANCE');
+    $sheet->mergeCells('A1:T1');
+    $sheet->setCellValue('A1', $reportTitle);
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet->getRowDimension(1)->setRowHeight(45);
-    $sheet->mergeCells('A2:S2');
+    $sheet->mergeCells('A2:T2');
     $sheet->setCellValue('A2', $periodeLabel);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
@@ -265,7 +364,7 @@ if ($mode === 'daily') {
             $r['reported_by'],
             $r['created_at']
         );
-        $sheet->mergeCells("A{$infoRow}:S{$infoRow}");
+        $sheet->mergeCells("A{$infoRow}:T{$infoRow}");
         $sheet->setCellValue("A{$infoRow}", $infoText);
         $sheet->getStyle("A{$infoRow}")->applyFromArray($styleInfo);
         $sheet->getRowDimension($infoRow)->setRowHeight(18);
@@ -273,7 +372,7 @@ if ($mode === 'daily') {
 
         $hdrRow = $startRow;
         $sheet->fromArray($colHeaders, NULL, "A{$hdrRow}");
-        $sheet->getStyle("A{$hdrRow}:S{$hdrRow}")->applyFromArray($styleHdr);
+        $sheet->getStyle("A{$hdrRow}:T{$hdrRow}")->applyFromArray($styleHdr);
         // [FIX-WRAP-HDR] -1 = auto-height, supaya header yang wrap (2+ baris) full terlihat
         $sheet->getRowDimension($hdrRow)->setRowHeight(-1);
         $startRow++;
@@ -286,6 +385,7 @@ if ($mode === 'daily') {
             $r['department']    ?? '—',
             $r['line']          ?? '—',
             $r['op']            ?? '—',
+            conrodSourceLabel($r, $rowsById),
             $r['machine_name']  ?? '—',
             $r['machine_type']  ?? '—',
             $r['shift']         ?? '—',
@@ -301,12 +401,12 @@ if ($mode === 'daily') {
             statusLabel($r['status']),
             $r['created_at']    ? date('d-M-Y H:i', strtotime($r['created_at']))     : '—',
         ], NULL, "A{$startRow}");
-        $sheet->getStyle("A{$startRow}:S{$startRow}")->getAlignment()
+        $sheet->getStyle("A{$startRow}:T{$startRow}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
         // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
         $sheet->getRowDimension($startRow)->setRowHeight(-1);
 
-        foreach (['A', 'E', 'H', 'K', 'P', 'Q', 'R'] as $col) {
+        foreach (['A', 'E', 'I', 'L', 'Q', 'R', 'S'] as $col) {
             $sheet->getStyle("{$col}{$startRow}")
                 ->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         }
@@ -318,15 +418,15 @@ if ($mode === 'daily') {
         if ($chainRootNo !== null && isset($noToId[$chainRootNo], $idToActualRow[$noToId[$chainRootNo]])) {
             $rootActualRow = $idToActualRow[$noToId[$chainRootNo]];
             if ($rootActualRow !== $startRow) {
-                setInternalLink($sheet, "P{$startRow}", $rootActualRow);
+                setInternalLink($sheet, "Q{$startRow}", $rootActualRow);
             }
         }
         if (!empty($r['parent_id']) && isset($idToActualRow[$r['parent_id']])) {
-            setInternalLink($sheet, "Q{$startRow}", $idToActualRow[$r['parent_id']]);
+            setInternalLink($sheet, "R{$startRow}", $idToActualRow[$r['parent_id']]);
         }
         $idToActualRow[$r['id']] = $startRow;
 
-        $sheet->getStyle("A{$infoRow}:S{$startRow}")->applyFromArray($styleBorder);
+        $sheet->getStyle("A{$infoRow}:T{$startRow}")->applyFromArray($styleBorder);
         $startRow += 2;
     }
 
@@ -353,20 +453,20 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet);
     }
 
-    $sheet->mergeCells('A1:S1');
-    $sheet->setCellValue('A1', 'MONTHLY E-REPORT MAINTENANCE');
+    $sheet->mergeCells('A1:T1');
+    $sheet->setCellValue('A1', $reportTitle);
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet->getRowDimension(1)->setRowHeight(45);
-    $sheet->mergeCells('A2:S2');
+    $sheet->mergeCells('A2:T2');
     $sheet->setCellValue('A2', $periodeLabel);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
 
     // Header kolom — warna hijau (198754), sama seperti sheet Summary sebelumnya
     $sheet->fromArray($colHeaders, NULL, 'A4');
-    $sheet->getStyle('A4:S4')->applyFromArray([
+    $sheet->getStyle('A4:T4')->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
@@ -384,9 +484,9 @@ if ($mode === 'daily') {
         $curDate = substr($r['report_date'], 0, 10);
 
         if ($curDate !== $prevDate) {
-            $sheet->mergeCells("A{$row}:S{$row}");
+            $sheet->mergeCells("A{$row}:T{$row}");
             $sheet->setCellValue("A{$row}", "— " . date('d F Y', strtotime($curDate)) . " —");
-            $sheet->getStyle("A{$row}:S{$row}")->applyFromArray($styleDivider);
+            $sheet->getStyle("A{$row}:T{$row}")->applyFromArray($styleDivider);
             $sheet->getRowDimension($row)->setRowHeight(14);
             $row++;
             $prevDate = $curDate;
@@ -400,6 +500,7 @@ if ($mode === 'daily') {
             $r['department']    ?? '—',
             $r['line']          ?? '—',
             $r['op']            ?? '—',
+            conrodSourceLabel($r, $rowsById),
             $r['machine_name']  ?? '—',
             $r['machine_type']  ?? '—',
             $r['shift']         ?? '—',
@@ -422,11 +523,11 @@ if ($mode === 'daily') {
         if ($chainRootNo !== null && isset($noToId[$chainRootNo], $idToActualRow[$noToId[$chainRootNo]])) {
             $rootActualRow = $idToActualRow[$noToId[$chainRootNo]];
             if ($rootActualRow !== $row) {
-                setInternalLink($sheet, "P{$row}", $rootActualRow);
+                setInternalLink($sheet, "Q{$row}", $rootActualRow);
             }
         }
         if (!empty($r['parent_id']) && isset($idToActualRow[$r['parent_id']])) {
-            setInternalLink($sheet, "Q{$row}", $idToActualRow[$r['parent_id']]);
+            setInternalLink($sheet, "R{$row}", $idToActualRow[$r['parent_id']]);
         }
         $idToActualRow[$r['id']] = $row;
 
@@ -442,33 +543,33 @@ if ($mode === 'daily') {
     if (!empty($dataRows)) {
         $first = $dataRows[0];
         $last  = $dataRows[count($dataRows) - 1];
-        $sheet->getStyle("A{$first}:S{$last}")->getAlignment()
+        $sheet->getStyle("A{$first}:T{$last}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
-        foreach (['A', 'E', 'H', 'K', 'P', 'Q', 'R'] as $col) {
+        foreach (['A', 'E', 'I', 'L', 'Q', 'R', 'S'] as $col) {
             $sheet->getStyle("{$col}{$first}:{$col}{$last}")->getAlignment()
                 ->setHorizontal(Alignment::HORIZONTAL_CENTER);
         }
     }
 
     if ($row > 5) {
-        $sheet->getStyle("A4:S" . ($row - 1))->applyFromArray($styleBorder);
+        $sheet->getStyle("A4:T" . ($row - 1))->applyFromArray($styleBorder);
     }
 
     // AutoFilter di header — supaya user bisa filter/sort langsung by Chain ID
     // untuk lihat seluruh rantai follow-up sekaligus, terlepas dari tanggalnya.
     if (!empty($dataRows)) {
-        $sheet->setAutoFilter("A4:S" . $dataRows[count($dataRows) - 1]);
+        $sheet->setAutoFilter("A4:T" . $dataRows[count($dataRows) - 1]);
     }
 
     // ── Baris Total : total record + total durasi — style sama seperti baris
     // Total di sheet Summary sebelumnya (dark fill, bold, putih)
     $totalMenit = totalDurasiMenit($rows);
-    $sheet->mergeCells("A{$row}:S{$row}");
+    $sheet->mergeCells("A{$row}:T{$row}");
     $sheet->setCellValue(
         "A{$row}",
         "TOTAL : " . count($rows) . " record   |   Total Durasi : " . formatDurasi($totalMenit)
     );
-    $sheet->getStyle("A{$row}:S{$row}")->applyFromArray([
+    $sheet->getStyle("A{$row}:T{$row}")->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
