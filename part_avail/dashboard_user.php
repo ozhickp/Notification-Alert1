@@ -45,8 +45,12 @@ if (!function_exists('computeNextChangeDate')) {
 // tempat yang membaca department/line — baik untuk tabel utama maupun endpoint
 // get_schedule/get_prev_schedule (buat isi modal Edit) — supaya keduanya selalu
 // konsisten menampilkan NAMA, bukan angka ID mentah.
-// Urutan resolusi: 1) lookup langsung via FK plants/line (paling akurat),
-// 2) fallback pencocokan machine_name + operation_process ke machine_list.
+// Urutan resolusi: 1) pencocokan machine_name + operation_process ke machine_list
+// (SUMBER KANONIK, diutamakan) — supaya nilai numerik yang LEGAL (mis. line "4"
+// di department CONNECTING ROD, yang lines-nya memang bernomor) tidak salah
+// ditebak sebagai ID FK lama dan malah ketimpa nilai lain yang tidak terkait.
+// 2) fallback lookup langsung via FK plants/line HANYA kalau machine_list tidak
+// ketemu — ini benar-benar upaya terakhir untuk baris lama yang datanya cacat.
 if (!function_exists('resolveDeptLineName')) {
     function resolveDeptLineName(PDO $pdo, array $row): array
     {
@@ -56,6 +60,22 @@ if (!function_exists('resolveDeptLineName')) {
             return $row;
         }
 
+        // 1) Utamakan pencocokan ke machine_list (sumber kanonik)
+        $stmt = $pdo->prepare(
+            "SELECT department, `line`, machine_name, op
+             FROM machine_list
+             WHERE machine_name = ? AND op = ?
+             LIMIT 1"
+        );
+        $stmt->execute([$row['machine_name'] ?? '', $row['operation_process'] ?? '']);
+        $mlRow = $stmt->fetch(PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
+        if ($mlRow) {
+            if ($deptIsId) { $row['department'] = $mlRow['department']; $deptIsId = false; }
+            if ($lineIsId)  { $row['line'] = $mlRow['line']; $lineIsId = false; }
+        }
+
+        // 2) Kalau machine_list tidak ketemu, baru coba lookup ID FK lama (upaya terakhir)
         if ($deptIsId) {
             $stmt = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
             $stmt->execute([(int)$row['department']]);
@@ -63,7 +83,6 @@ if (!function_exists('resolveDeptLineName')) {
             $stmt->closeCursor();
             if ($plantName !== false && $plantName !== null && $plantName !== '') {
                 $row['department'] = $plantName;
-                $deptIsId = false;
             }
         }
         if ($lineIsId) {
@@ -73,23 +92,6 @@ if (!function_exists('resolveDeptLineName')) {
             $stmt->closeCursor();
             if ($lineName !== false && $lineName !== null && $lineName !== '') {
                 $row['line'] = $lineName;
-                $lineIsId = false;
-            }
-        }
-
-        if ($deptIsId || $lineIsId) {
-            $stmt = $pdo->prepare(
-                "SELECT department, `line`, machine_name, op
-                 FROM machine_list
-                 WHERE machine_name = ? AND op = ?
-                 LIMIT 1"
-            );
-            $stmt->execute([$row['machine_name'] ?? '', $row['operation_process'] ?? '']);
-            $mlRow = $stmt->fetch(PDO::FETCH_ASSOC);
-            $stmt->closeCursor();
-            if ($mlRow) {
-                if ($deptIsId) $row['department'] = $mlRow['department'];
-                if ($lineIsId) $row['line'] = $mlRow['line'];
             }
         }
 
@@ -1071,10 +1073,12 @@ $stmt->closeCursor();
 
 // ── FALLBACK TAMPILAN: beberapa baris lama menyimpan department/line ────────
 // sebagai ID angka FK (department → plants.id, line → line.id), bukan nama
-// string ("Connecting Rod", "5", dst). Diutamakan lookup LANGSUNG ke tabel
-// plants & line (akurat sesuai relasi FK). Kalau ID tidak ditemukan di sana,
-// baru fallback ke pencocokan machine_name + operation_process ke machine_list
-// (cara lama, dipertahankan untuk baris yang datanya tidak lengkap).
+// string ("Connecting Rod", "5", dst). Diutamakan pencocokan machine_name +
+// operation_process ke machine_list (SUMBER KANONIK) — supaya nilai numerik
+// yang LEGAL (mis. line "4" di department CONNECTING ROD) tidak salah ditebak
+// sebagai ID FK lama dan malah ketimpa nilai line lain yang tidak terkait.
+// Lookup langsung ke plants/line HANYA dipakai kalau machine_list tidak
+// ketemu — upaya terakhir untuk baris lama yang datanya benar-benar tidak lengkap.
 $schedNeedsLookup = array_filter($schedules, function ($r) {
     return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
         || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
@@ -1095,14 +1099,28 @@ if (!empty($schedNeedsLookup)) {
             continue;
         }
 
-        // 1) Utamakan lookup langsung via FK plants/line (paling akurat)
+        // 1) Utamakan pencocokan ke machine_list (sumber kanonik)
+        $stmtMlSched->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '']);
+        $mlRowSched = $stmtMlSched->fetch(PDO::FETCH_ASSOC);
+        $stmtMlSched->closeCursor();
+        if ($mlRowSched) {
+            if ($deptIsId) {
+                $schedRow['department'] = $mlRowSched['department'];
+                $deptIsId = false;
+            }
+            if ($lineIsId) {
+                $schedRow['line'] = $mlRowSched['line'];
+                $lineIsId = false;
+            }
+        }
+
+        // 2) Kalau machine_list tidak ketemu, baru coba lookup ID FK lama (upaya terakhir)
         if ($deptIsId) {
             $stmtPlantById->execute([(int)$schedRow['department']]);
             $plantName = $stmtPlantById->fetchColumn();
             $stmtPlantById->closeCursor();
             if ($plantName !== false && $plantName !== null && $plantName !== '') {
                 $schedRow['department'] = $plantName;
-                $deptIsId = false;
             }
         }
         if ($lineIsId) {
@@ -1111,23 +1129,6 @@ if (!empty($schedNeedsLookup)) {
             $stmtLineById->closeCursor();
             if ($lineName !== false && $lineName !== null && $lineName !== '') {
                 $schedRow['line'] = $lineName;
-                $lineIsId = false;
-            }
-        }
-
-        // 2) Kalau masih belum ketemu (ID tidak ada di plants/line), fallback lama
-        //    via pencocokan machine_name + operation_process ke machine_list.
-        if ($deptIsId || $lineIsId) {
-            $stmtMlSched->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '']);
-            $mlRowSched = $stmtMlSched->fetch(PDO::FETCH_ASSOC);
-            $stmtMlSched->closeCursor();
-            if ($mlRowSched) {
-                if ($deptIsId) {
-                    $schedRow['department'] = $mlRowSched['department'];
-                }
-                if ($lineIsId) {
-                    $schedRow['line'] = $mlRowSched['line'];
-                }
             }
         }
     }
@@ -1181,9 +1182,12 @@ try {
 
     // ── FALLBACK TAMPILAN: beberapa baris lama menyimpan department/line ────────
     // sebagai ID angka FK (department → plants.id, line → line.id), bukan nama
-    // string ("ASSEMBLING", "LINE 1"). Diutamakan lookup LANGSUNG ke tabel
-    // plants & line (akurat sesuai relasi FK). Kalau ID tidak ditemukan di sana,
-    // baru fallback ke pencocokan machine_name + operation_process ke machine_list.
+    // string ("ASSEMBLING", "LINE 1"). Diutamakan pencocokan machine_name +
+    // operation_process ke machine_list (SUMBER KANONIK) — supaya nilai numerik
+    // yang LEGAL (mis. line "4" di department CONNECTING ROD) tidak salah
+    // ditebak sebagai ID FK lama dan malah ketimpa nilai line lain yang tidak
+    // terkait. Lookup langsung ke plants/line HANYA dipakai kalau machine_list
+    // tidak ketemu — upaya terakhir untuk baris lama yang datanya cacat.
     $prevNeedsLookup = array_filter($prevSchedules, function ($r) {
         return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
             || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
@@ -1204,14 +1208,28 @@ try {
                 continue;
             }
 
-            // 1) Utamakan lookup langsung via FK plants/line (paling akurat)
+            // 1) Utamakan pencocokan ke machine_list (sumber kanonik)
+            $stmtMl->execute([$prevRow['machine_name'] ?? '', $prevRow['operation_process'] ?? '']);
+            $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
+            $stmtMl->closeCursor();
+            if ($mlRow) {
+                if ($deptIsId) {
+                    $prevRow['department'] = $mlRow['department'];
+                    $deptIsId = false;
+                }
+                if ($lineIsId) {
+                    $prevRow['line'] = $mlRow['line'];
+                    $lineIsId = false;
+                }
+            }
+
+            // 2) Kalau machine_list tidak ketemu, baru coba lookup ID FK lama (upaya terakhir)
             if ($deptIsId) {
                 $stmtPrevPlantById->execute([(int)$prevRow['department']]);
                 $plantName = $stmtPrevPlantById->fetchColumn();
                 $stmtPrevPlantById->closeCursor();
                 if ($plantName !== false && $plantName !== null && $plantName !== '') {
                     $prevRow['department'] = $plantName;
-                    $deptIsId = false;
                 }
             }
             if ($lineIsId) {
@@ -1220,22 +1238,6 @@ try {
                 $stmtPrevLineById->closeCursor();
                 if ($lineName !== false && $lineName !== null && $lineName !== '') {
                     $prevRow['line'] = $lineName;
-                    $lineIsId = false;
-                }
-            }
-
-            // 2) Kalau masih belum ketemu, fallback lama via machine_list.
-            if ($deptIsId || $lineIsId) {
-                $stmtMl->execute([$prevRow['machine_name'] ?? '', $prevRow['operation_process'] ?? '']);
-                $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
-                $stmtMl->closeCursor();
-                if ($mlRow) {
-                    if ($deptIsId) {
-                        $prevRow['department'] = $mlRow['department'];
-                    }
-                    if ($lineIsId) {
-                        $prevRow['line'] = $mlRow['line'];
-                    }
                 }
             }
         }
