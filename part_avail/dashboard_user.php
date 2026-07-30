@@ -71,8 +71,14 @@ if (!function_exists('resolveDeptLineName')) {
         $mlRow = $stmt->fetch(PDO::FETCH_ASSOC);
         $stmt->closeCursor();
         if ($mlRow) {
-            if ($deptIsId) { $row['department'] = $mlRow['department']; $deptIsId = false; }
-            if ($lineIsId)  { $row['line'] = $mlRow['line']; $lineIsId = false; }
+            if ($deptIsId) {
+                $row['department'] = $mlRow['department'];
+                $deptIsId = false;
+            }
+            if ($lineIsId) {
+                $row['line'] = $mlRow['line'];
+                $lineIsId = false;
+            }
         }
 
         // 2) Kalau machine_list tidak ketemu, baru coba lookup ID FK lama (upaya terakhir)
@@ -1195,10 +1201,21 @@ try {
     if (!empty($prevNeedsLookup)) {
         $stmtPrevPlantById = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
         $stmtPrevLineById  = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
+        // Cek kombinasi department+line APA ADANYA dulu — kalau sudah persis cocok
+        // dengan machine_list, nilai tsb TERBUKTI valid (bukan ID FK lama) walau
+        // kebetulan berupa digit murni (mis. line "4"), jadi jangan disentuh sama sekali.
+        $stmtMlExact = $pdo->prepare(
+            "SELECT 1 FROM machine_list
+             WHERE machine_name = ? AND op = ? AND department = ? AND `line` = ?
+             LIMIT 1"
+        );
+        // Fallback longgar (hanya dipakai kalau exact match di atas gagal) — tetap
+        // diberi filter department supaya tidak menimpa line dengan data dari
+        // department lain yang kebetulan punya machine_name+op sama.
         $stmtMl = $pdo->prepare(
             "SELECT department, `line`, machine_name, op
              FROM machine_list
-             WHERE machine_name = ? AND op = ?
+             WHERE machine_name = ? AND op = ? AND department = ?
              LIMIT 1"
         );
         foreach ($prevSchedules as &$prevRow) {
@@ -1208,10 +1225,35 @@ try {
                 continue;
             }
 
-            // 1) Utamakan pencocokan ke machine_list (sumber kanonik)
-            $stmtMl->execute([$prevRow['machine_name'] ?? '', $prevRow['operation_process'] ?? '']);
-            $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
-            $stmtMl->closeCursor();
+            // 0) Kalau department (yang bukan ID) + line SAAT INI sudah persis
+            //    cocok di machine_list, berarti data ini SUDAH BENAR — stop di sini.
+            if (!$deptIsId) {
+                $stmtMlExact->execute([
+                    $prevRow['machine_name'] ?? '',
+                    $prevRow['operation_process'] ?? '',
+                    $prevRow['department'] ?? '',
+                    $prevRow['line'] ?? '',
+                ]);
+                $isAlreadyValid = (bool)$stmtMlExact->fetchColumn();
+                $stmtMlExact->closeCursor();
+                if ($isAlreadyValid) {
+                    continue;
+                }
+            }
+
+            // 1) Utamakan pencocokan ke machine_list (sumber kanonik), dibatasi ke
+            //    department yang sama supaya tidak salah ambil line dari department lain
+            if (!$deptIsId) {
+                $stmtMl->execute([
+                    $prevRow['machine_name'] ?? '',
+                    $prevRow['operation_process'] ?? '',
+                    $prevRow['department'] ?? '',
+                ]);
+                $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
+                $stmtMl->closeCursor();
+            } else {
+                $mlRow = null;
+            }
             if ($mlRow) {
                 if ($deptIsId) {
                     $prevRow['department'] = $mlRow['department'];
