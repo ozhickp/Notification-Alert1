@@ -41,6 +41,114 @@ function remainingClassStr(int $days, int $reminder = 30): string
     return                         'secure';
 }
 
+/**
+ * Resolve department/line yang masih tersimpan sebagai ID FK lama (angka)
+ * menjadi nama string, TANPA menebak nilai numerik yang legal (mis. line
+ * "4" di department CONNECTING ROD) sebagai ID lama. Sumber kanonik adalah
+ * machine_list; lookup langsung ke plants/line HANYA dipakai sebagai upaya
+ * terakhir. Logic ini harus tetap identik dengan dashboard_user.php &
+ * monitor.php supaya tampilan department/line konsisten di semua halaman —
+ * termasuk saat auto-refresh AJAX setiap 30 detik.
+ */
+function resolveDeptLineFallback(PDO $pdo, array $rows): array
+{
+    $needsLookup = array_filter($rows, function ($r) {
+        return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
+            || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
+    });
+    if (empty($needsLookup)) {
+        return $rows;
+    }
+
+    $stmtPlantById = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
+    $stmtLineById  = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
+    $stmtMlExact = $pdo->prepare(
+        "SELECT 1 FROM machine_list
+         WHERE machine_name = ? AND op = ? AND department = ? AND `line` = ?
+         LIMIT 1"
+    );
+    $stmtMlByDept = $pdo->prepare(
+        "SELECT department, `line`, machine_name, op
+         FROM machine_list
+         WHERE machine_name = ? AND op = ? AND department = ?
+         LIMIT 1"
+    );
+    $stmtMl = $pdo->prepare(
+        "SELECT department, `line`, machine_name, op
+         FROM machine_list
+         WHERE machine_name = ? AND op = ?
+         LIMIT 1"
+    );
+
+    foreach ($rows as &$row) {
+        $deptIsId = isset($row['department']) && $row['department'] !== '' && ctype_digit((string)$row['department']);
+        $lineIsId = isset($row['line']) && $row['line'] !== '' && ctype_digit((string)$row['line']);
+        if (!$deptIsId && !$lineIsId) {
+            continue;
+        }
+        $deptWasOriginallyId = $deptIsId;
+
+        // 0) Kalau department (bukan ID) + line saat ini sudah persis cocok
+        //    di machine_list, data ini SUDAH BENAR — jangan disentuh.
+        if (!$deptIsId) {
+            $stmtMlExact->execute([
+                $row['machine_name'] ?? '',
+                $row['operation_process'] ?? '',
+                $row['department'] ?? '',
+                $row['line'] ?? '',
+            ]);
+            $isAlreadyValid = (bool)$stmtMlExact->fetchColumn();
+            $stmtMlExact->closeCursor();
+            if ($isAlreadyValid) {
+                continue;
+            }
+        }
+
+        // 1) Utamakan pencocokan ke machine_list (sumber kanonik)
+        if (!$deptIsId) {
+            $stmtMlByDept->execute([$row['machine_name'] ?? '', $row['operation_process'] ?? '', $row['department'] ?? '']);
+            $mlRow = $stmtMlByDept->fetch(PDO::FETCH_ASSOC);
+            $stmtMlByDept->closeCursor();
+        } else {
+            $stmtMl->execute([$row['machine_name'] ?? '', $row['operation_process'] ?? '']);
+            $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
+            $stmtMl->closeCursor();
+        }
+        if ($mlRow) {
+            if ($deptIsId) {
+                $row['department'] = $mlRow['department'];
+                $deptIsId = false;
+            }
+            if ($lineIsId) {
+                $row['line'] = $mlRow['line'];
+                $lineIsId = false;
+            }
+        }
+
+        // 2) Kalau machine_list tidak ketemu, baru coba lookup ID FK lama
+        if ($deptIsId) {
+            $stmtPlantById->execute([(int)$row['department']]);
+            $plantName = $stmtPlantById->fetchColumn();
+            $stmtPlantById->closeCursor();
+            if ($plantName !== false && $plantName !== null && $plantName !== '') {
+                $row['department'] = $plantName;
+            }
+        }
+        // Fallback ID lama HANYA kalau department juga ASLINYA berupa ID.
+        if ($lineIsId && $deptWasOriginallyId) {
+            $stmtLineById->execute([(int)$row['line']]);
+            $lineName = $stmtLineById->fetchColumn();
+            $stmtLineById->closeCursor();
+            if ($lineName !== false && $lineName !== null && $lineName !== '') {
+                $row['line'] = $lineName;
+            }
+        }
+    }
+    unset($row);
+
+    return $rows;
+}
+
 $out = [];
 
 // ── TODAY schedules (predictive + preventive) ──────────────────────────
@@ -50,14 +158,13 @@ if ($type === 'today' || $type === 'all') {
     try {
         $rows = $GLOBALS['pdo']->query("
             SELECT s.*,
-                   COALESCE(p.plant_name, s.department) AS department,
-                   COALESCE(l.line_name, s.line) AS line
+                   s.department AS department,
+                   s.line AS line
             FROM schedules s
-            LEFT JOIN plants p ON p.id = s.department
-            LEFT JOIN line l ON l.id = s.line
             WHERE s.change_date_plan = '$todayStr'
             ORDER BY s.remaining_day ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
+        $rows = resolveDeptLineFallback($GLOBALS['pdo'], $rows);
         foreach ($rows as $r) {
             $todayPred[] = [
                 'machine'  => $r['machine_name'] ?? '-',
@@ -76,14 +183,13 @@ if ($type === 'today' || $type === 'all') {
     try {
         $rows = $GLOBALS['pdo']->query("
             SELECT s.*,
-                   COALESCE(p.plant_name, s.department) AS department,
-                   COALESCE(l.line_name, s.line) AS line
+                   s.department AS department,
+                   s.line AS line
             FROM schedules_preventive s
-            LEFT JOIN plants p ON p.id = s.department
-            LEFT JOIN line l ON l.id = s.line
             WHERE s.change_date_plan = '$todayStr'
             ORDER BY s.remaining_day ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
+        $rows = resolveDeptLineFallback($GLOBALS['pdo'], $rows);
         foreach ($rows as $r) {
             $todayPrev[] = [
                 'machine'  => $r['machine_name'] ?? '-',
@@ -111,13 +217,12 @@ if ($type === 'schedules' || $type === 'all') {
     try {
         $rows = $GLOBALS['pdo']->query("
             SELECT s.*,
-                   COALESCE(p.plant_name, s.department) AS department,
-                   COALESCE(l.line_name, s.line) AS line
+                   s.department AS department,
+                   s.line AS line
             FROM schedules s
-            LEFT JOIN plants p ON p.id = s.department
-            LEFT JOIN line l ON l.id = s.line
             ORDER BY s.remaining_day ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
+        $rows = resolveDeptLineFallback($GLOBALS['pdo'], $rows);
         foreach ($rows as $r) {
             $days     = (int)$r['remaining_day'];
             $reminder = (int)($r['reminder_activity'] ?? 30);
@@ -149,13 +254,12 @@ if ($type === 'schedules' || $type === 'all') {
     try {
         $rows = $GLOBALS['pdo']->query("
             SELECT s.*,
-                   COALESCE(p.plant_name, s.department) AS department,
-                   COALESCE(l.line_name, s.line) AS line
+                   s.department AS department,
+                   s.line AS line
             FROM schedules_preventive s
-            LEFT JOIN plants p ON p.id = s.department
-            LEFT JOIN line l ON l.id = s.line
             ORDER BY s.remaining_day ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
+        $rows = resolveDeptLineFallback($GLOBALS['pdo'], $rows);
         foreach ($rows as $r) {
             $days     = (int)($r['remaining_day'] ?? 0);
             $reminder = (int)($r['reminder_activity'] ?? 30);

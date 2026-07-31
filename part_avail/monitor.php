@@ -33,13 +33,104 @@ $schedules = [];
 try {
     $schedules = $pdo->query("
         SELECT s.*,
-               COALESCE(p.plant_name, s.department) AS department,
-               COALESCE(l.line_name, s.line) AS line
+               s.department AS department,
+               s.line AS line
         FROM schedules s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         ORDER BY s.remaining_day ASC
     ")->fetchAll(PDO::FETCH_ASSOC);
+
+    // ── FALLBACK TAMPILAN: beberapa baris lama menyimpan department/line ────
+    // sebagai ID angka FK (department → plants.id, line → line.id), bukan
+    // nama string. Diutamakan pencocokan machine_name + operation_process ke
+    // machine_list (SUMBER KANONIK) — supaya nilai numerik yang LEGAL (mis.
+    // line "4" di department CONNECTING ROD) tidak salah ditebak sebagai ID
+    // FK lama dan malah ketimpa nilai line lain yang tidak terkait (lihat
+    // fix yang sama di dashboard_user.php).
+    $schedNeedsLookup = array_filter($schedules, function ($r) {
+        return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
+            || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
+    });
+    if (!empty($schedNeedsLookup)) {
+        $stmtPlantById = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
+        $stmtLineById  = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
+        $stmtMlSchedExact = $pdo->prepare(
+            "SELECT 1 FROM machine_list
+             WHERE machine_name = ? AND op = ? AND department = ? AND `line` = ?
+             LIMIT 1"
+        );
+        $stmtMlSchedByDept = $pdo->prepare(
+            "SELECT department, `line`, machine_name, op
+             FROM machine_list
+             WHERE machine_name = ? AND op = ? AND department = ?
+             LIMIT 1"
+        );
+        $stmtMlSched = $pdo->prepare(
+            "SELECT department, `line`, machine_name, op
+             FROM machine_list
+             WHERE machine_name = ? AND op = ?
+             LIMIT 1"
+        );
+        foreach ($schedules as &$schedRow) {
+            $deptIsId = isset($schedRow['department']) && $schedRow['department'] !== '' && ctype_digit((string)$schedRow['department']);
+            $lineIsId = isset($schedRow['line']) && $schedRow['line'] !== '' && ctype_digit((string)$schedRow['line']);
+            if (!$deptIsId && !$lineIsId) {
+                continue;
+            }
+            $deptWasOriginallyId = $deptIsId;
+
+            if (!$deptIsId) {
+                $stmtMlSchedExact->execute([
+                    $schedRow['machine_name'] ?? '',
+                    $schedRow['operation_process'] ?? '',
+                    $schedRow['department'] ?? '',
+                    $schedRow['line'] ?? '',
+                ]);
+                $isAlreadyValid = (bool)$stmtMlSchedExact->fetchColumn();
+                $stmtMlSchedExact->closeCursor();
+                if ($isAlreadyValid) {
+                    continue;
+                }
+            }
+
+            if (!$deptIsId) {
+                $stmtMlSchedByDept->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '', $schedRow['department'] ?? '']);
+                $mlRowSched = $stmtMlSchedByDept->fetch(PDO::FETCH_ASSOC);
+                $stmtMlSchedByDept->closeCursor();
+            } else {
+                $stmtMlSched->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '']);
+                $mlRowSched = $stmtMlSched->fetch(PDO::FETCH_ASSOC);
+                $stmtMlSched->closeCursor();
+            }
+            if ($mlRowSched) {
+                if ($deptIsId) {
+                    $schedRow['department'] = $mlRowSched['department'];
+                    $deptIsId = false;
+                }
+                if ($lineIsId) {
+                    $schedRow['line'] = $mlRowSched['line'];
+                    $lineIsId = false;
+                }
+            }
+
+            if ($deptIsId) {
+                $stmtPlantById->execute([(int)$schedRow['department']]);
+                $plantName = $stmtPlantById->fetchColumn();
+                $stmtPlantById->closeCursor();
+                if ($plantName !== false && $plantName !== null && $plantName !== '') {
+                    $schedRow['department'] = $plantName;
+                }
+            }
+            if ($lineIsId && $deptWasOriginallyId) {
+                $stmtLineById->execute([(int)$schedRow['line']]);
+                $lineName = $stmtLineById->fetchColumn();
+                $stmtLineById->closeCursor();
+                if ($lineName !== false && $lineName !== null && $lineName !== '') {
+                    $schedRow['line'] = $lineName;
+                }
+            }
+        }
+        unset($schedRow);
+    }
 } catch (\Exception $e) {
     error_log('[Monitor] schedules: ' . $e->getMessage());
 }
@@ -53,13 +144,98 @@ $prevSchedules = [];
 try {
     $prevSchedules = $pdo->query("
         SELECT s.*,
-               COALESCE(p.plant_name, s.department) AS department,
-               COALESCE(l.line_name, s.line) AS line
+               s.department AS department,
+               s.line AS line
         FROM schedules_preventive s
-        LEFT JOIN plants p ON p.id = s.department
-        LEFT JOIN line l ON l.id = s.line
         ORDER BY s.remaining_day ASC
     ")->fetchAll(PDO::FETCH_ASSOC);
+
+    // ── FALLBACK TAMPILAN: sama seperti predictive di atas — jangan langsung
+    // JOIN ke tabel `line` by id, karena nilai numerik string di kolom line
+    // (mis. "4") bisa jadi nama line yang SAH, bukan ID FK lama. Cocokkan ke
+    // machine_list dulu; lookup ID FK lama hanya dipakai sebagai upaya
+    // terakhir untuk baris legacy yang datanya benar-benar tidak lengkap.
+    $prevNeedsLookup = array_filter($prevSchedules, function ($r) {
+        return (isset($r['department']) && $r['department'] !== '' && ctype_digit((string)$r['department']))
+            || (isset($r['line']) && $r['line'] !== '' && ctype_digit((string)$r['line']));
+    });
+    if (!empty($prevNeedsLookup)) {
+        $stmtPrevPlantById = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
+        $stmtPrevLineById  = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
+        $stmtMlExact = $pdo->prepare(
+            "SELECT 1 FROM machine_list
+             WHERE machine_name = ? AND op = ? AND department = ? AND `line` = ?
+             LIMIT 1"
+        );
+        $stmtMl = $pdo->prepare(
+            "SELECT department, `line`, machine_name, op
+             FROM machine_list
+             WHERE machine_name = ? AND op = ? AND department = ?
+             LIMIT 1"
+        );
+        foreach ($prevSchedules as &$prevRow) {
+            $deptIsId = isset($prevRow['department']) && $prevRow['department'] !== '' && ctype_digit((string)$prevRow['department']);
+            $lineIsId = isset($prevRow['line']) && $prevRow['line'] !== '' && ctype_digit((string)$prevRow['line']);
+            if (!$deptIsId && !$lineIsId) {
+                continue;
+            }
+            $deptWasOriginallyId = $deptIsId;
+
+            if (!$deptIsId) {
+                $stmtMlExact->execute([
+                    $prevRow['machine_name'] ?? '',
+                    $prevRow['operation_process'] ?? '',
+                    $prevRow['department'] ?? '',
+                    $prevRow['line'] ?? '',
+                ]);
+                $isAlreadyValid = (bool)$stmtMlExact->fetchColumn();
+                $stmtMlExact->closeCursor();
+                if ($isAlreadyValid) {
+                    continue;
+                }
+            }
+
+            if (!$deptIsId) {
+                $stmtMl->execute([
+                    $prevRow['machine_name'] ?? '',
+                    $prevRow['operation_process'] ?? '',
+                    $prevRow['department'] ?? '',
+                ]);
+                $mlRow = $stmtMl->fetch(PDO::FETCH_ASSOC);
+                $stmtMl->closeCursor();
+            } else {
+                $mlRow = null;
+            }
+            if ($mlRow) {
+                if ($deptIsId) {
+                    $prevRow['department'] = $mlRow['department'];
+                    $deptIsId = false;
+                }
+                if ($lineIsId) {
+                    $prevRow['line'] = $mlRow['line'];
+                    $lineIsId = false;
+                }
+            }
+
+            if ($deptIsId) {
+                $stmtPrevPlantById->execute([(int)$prevRow['department']]);
+                $plantName = $stmtPrevPlantById->fetchColumn();
+                $stmtPrevPlantById->closeCursor();
+                if ($plantName !== false && $plantName !== null && $plantName !== '') {
+                    $prevRow['department'] = $plantName;
+                }
+            }
+            if ($lineIsId && $deptWasOriginallyId) {
+                $stmtPrevLineById->execute([(int)$prevRow['line']]);
+                $lineName = $stmtPrevLineById->fetchColumn();
+                $stmtPrevLineById->closeCursor();
+                if ($lineName !== false && $lineName !== null && $lineName !== '') {
+                    $prevRow['line'] = $lineName;
+                }
+            }
+        }
+        unset($prevRow);
+    }
 } catch (\Exception $e) {
     error_log('[Monitor] schedules_preventive: ' . $e->getMessage());
 }
