@@ -59,15 +59,57 @@ if (!function_exists('resolveDeptLineName')) {
         if (!$deptIsId && !$lineIsId) {
             return $row;
         }
+        // Simpan status ASLI department sebelum step 1 berpotensi mengubahnya —
+        // dipakai di step 2 untuk memastikan fallback ID lama HANYA berlaku untuk
+        // baris legacy sungguhan (department & line sama-sama masih ID angka).
+        $deptWasOriginallyId = $deptIsId;
 
-        // 1) Utamakan pencocokan ke machine_list (sumber kanonik)
-        $stmt = $pdo->prepare(
-            "SELECT department, `line`, machine_name, op
-             FROM machine_list
-             WHERE machine_name = ? AND op = ?
-             LIMIT 1"
-        );
-        $stmt->execute([$row['machine_name'] ?? '', $row['operation_process'] ?? '']);
+        // 0) Kalau department SUDAH berupa nama (bukan ID) dan kombinasi
+        //    department+line+machine+op SAAT INI sudah persis cocok di machine_list,
+        //    berarti line numerik ini TERBUKTI legit (mis. line "4" di CONNECTING
+        //    ROD) — jangan disentuh sama sekali, walau kebetulan berupa digit murni.
+        if (!$deptIsId) {
+            $stmtExact = $pdo->prepare(
+                "SELECT 1 FROM machine_list
+                 WHERE machine_name = ? AND op = ? AND department = ? AND `line` = ?
+                 LIMIT 1"
+            );
+            $stmtExact->execute([
+                $row['machine_name'] ?? '',
+                $row['operation_process'] ?? '',
+                $row['department'] ?? '',
+                $row['line'] ?? '',
+            ]);
+            $isAlreadyValid = (bool)$stmtExact->fetchColumn();
+            $stmtExact->closeCursor();
+            if ($isAlreadyValid) {
+                return $row;
+            }
+        }
+
+        // 1) Utamakan pencocokan ke machine_list (sumber kanonik). Kalau department
+        //    sudah diketahui (bukan ID), WAJIB di-scope ke department yang sama —
+        //    supaya tidak salah ambil baris dari department/line lain yang kebetulan
+        //    punya machine_name+op yang sama persis (ini penyebab bug line "4" jadi "2").
+        if (!$deptIsId) {
+            $stmt = $pdo->prepare(
+                "SELECT department, `line`, machine_name, op
+                 FROM machine_list
+                 WHERE machine_name = ? AND op = ? AND department = ?
+                 LIMIT 1"
+            );
+            $stmt->execute([$row['machine_name'] ?? '', $row['operation_process'] ?? '', $row['department'] ?? '']);
+        } else {
+            // department juga belum diketahui (masih ID) → belum bisa di-scope,
+            // pakai pencocokan longgar sebagai upaya terakhir.
+            $stmt = $pdo->prepare(
+                "SELECT department, `line`, machine_name, op
+                 FROM machine_list
+                 WHERE machine_name = ? AND op = ?
+                 LIMIT 1"
+            );
+            $stmt->execute([$row['machine_name'] ?? '', $row['operation_process'] ?? '']);
+        }
         $mlRow = $stmt->fetch(PDO::FETCH_ASSOC);
         $stmt->closeCursor();
         if ($mlRow) {
@@ -91,7 +133,13 @@ if (!function_exists('resolveDeptLineName')) {
                 $row['department'] = $plantName;
             }
         }
-        if ($lineIsId) {
+        // Fallback ID lama untuk `line` HANYA dipakai kalau department juga
+        // ASLINYA berupa ID (baris legacy sungguhan). Kalau department sudah
+        // berupa nama string (mis. "CONNECTING ROD") tapi machine_list belum
+        // mencatat kombinasi ini, JANGAN coba tebak line sebagai ID lama —
+        // biarkan nilai digit aslinya (mis. "4") apa adanya, karena itu memang
+        // nama line yang sah, bukan ID yang kebetulan menunjuk ke line lain.
+        if ($lineIsId && $deptWasOriginallyId) {
             $stmt = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
             $stmt->execute([(int)$row['line']]);
             $lineName = $stmt->fetchColumn();
@@ -1092,6 +1140,21 @@ $schedNeedsLookup = array_filter($schedules, function ($r) {
 if (!empty($schedNeedsLookup)) {
     $stmtPlantById = $pdo->prepare("SELECT plant_name FROM plants WHERE id = ? LIMIT 1");
     $stmtLineById  = $pdo->prepare("SELECT line_name FROM `line` WHERE id = ? LIMIT 1");
+    // Exact match dulu — kalau department+line saat ini sudah persis cocok di
+    // machine_list, nilai line digit murni (mis. "4") TERBUKTI legit, jangan disentuh.
+    $stmtMlSchedExact = $pdo->prepare(
+        "SELECT 1 FROM machine_list
+         WHERE machine_name = ? AND op = ? AND department = ? AND `line` = ?
+         LIMIT 1"
+    );
+    // Fallback di-scope per department supaya tidak salah ambil baris dari
+    // department/line lain yang kebetulan punya machine_name+op yang sama.
+    $stmtMlSchedByDept = $pdo->prepare(
+        "SELECT department, `line`, machine_name, op
+         FROM machine_list
+         WHERE machine_name = ? AND op = ? AND department = ?
+         LIMIT 1"
+    );
     $stmtMlSched = $pdo->prepare(
         "SELECT department, `line`, machine_name, op
          FROM machine_list
@@ -1104,11 +1167,36 @@ if (!empty($schedNeedsLookup)) {
         if (!$deptIsId && !$lineIsId) {
             continue;
         }
+        // Status ASLI department, dipakai step 2 supaya fallback ID lama untuk
+        // `line` hanya berlaku untuk baris legacy sungguhan.
+        $deptWasOriginallyId = $deptIsId;
 
-        // 1) Utamakan pencocokan ke machine_list (sumber kanonik)
-        $stmtMlSched->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '']);
-        $mlRowSched = $stmtMlSched->fetch(PDO::FETCH_ASSOC);
-        $stmtMlSched->closeCursor();
+        // 0) Exact match: department (bukan ID) + line saat ini sudah cocok persis
+        if (!$deptIsId) {
+            $stmtMlSchedExact->execute([
+                $schedRow['machine_name'] ?? '',
+                $schedRow['operation_process'] ?? '',
+                $schedRow['department'] ?? '',
+                $schedRow['line'] ?? '',
+            ]);
+            $isAlreadyValid = (bool)$stmtMlSchedExact->fetchColumn();
+            $stmtMlSchedExact->closeCursor();
+            if ($isAlreadyValid) {
+                continue;
+            }
+        }
+
+        // 1) Utamakan pencocokan ke machine_list (sumber kanonik), di-scope ke
+        //    department yang sama kalau sudah diketahui (bukan ID)
+        if (!$deptIsId) {
+            $stmtMlSchedByDept->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '', $schedRow['department'] ?? '']);
+            $mlRowSched = $stmtMlSchedByDept->fetch(PDO::FETCH_ASSOC);
+            $stmtMlSchedByDept->closeCursor();
+        } else {
+            $stmtMlSched->execute([$schedRow['machine_name'] ?? '', $schedRow['operation_process'] ?? '']);
+            $mlRowSched = $stmtMlSched->fetch(PDO::FETCH_ASSOC);
+            $stmtMlSched->closeCursor();
+        }
         if ($mlRowSched) {
             if ($deptIsId) {
                 $schedRow['department'] = $mlRowSched['department'];
@@ -1129,7 +1217,9 @@ if (!empty($schedNeedsLookup)) {
                 $schedRow['department'] = $plantName;
             }
         }
-        if ($lineIsId) {
+        // Fallback ID lama HANYA kalau department juga ASLINYA berupa ID —
+        // kalau department sudah nama string, jangan tebak line sebagai ID lama.
+        if ($lineIsId && $deptWasOriginallyId) {
             $stmtLineById->execute([(int)$schedRow['line']]);
             $lineName = $stmtLineById->fetchColumn();
             $stmtLineById->closeCursor();
@@ -1224,6 +1314,9 @@ try {
             if (!$deptIsId && !$lineIsId) {
                 continue;
             }
+            // Status ASLI department, dipakai step 2 supaya fallback ID lama untuk
+            // `line` hanya berlaku untuk baris legacy sungguhan.
+            $deptWasOriginallyId = $deptIsId;
 
             // 0) Kalau department (yang bukan ID) + line SAAT INI sudah persis
             //    cocok di machine_list, berarti data ini SUDAH BENAR — stop di sini.
@@ -1274,7 +1367,9 @@ try {
                     $prevRow['department'] = $plantName;
                 }
             }
-            if ($lineIsId) {
+            // Fallback ID lama HANYA kalau department juga ASLINYA berupa ID —
+            // kalau department sudah nama string, jangan tebak line sebagai ID lama.
+            if ($lineIsId && $deptWasOriginallyId) {
                 $stmtPrevLineById->execute([(int)$prevRow['line']]);
                 $lineName = $stmtPrevLineById->fetchColumn();
                 $stmtPrevLineById->closeCursor();
