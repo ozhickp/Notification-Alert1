@@ -1,3 +1,7 @@
+<?php
+if (session_status() === PHP_SESSION_NONE) session_start();
+unset($_SESSION['checksheet_unlocked'], $_SESSION['checksheet_unlocked_at']);
+?>
 <!DOCTYPE html>
 <html lang="id">
 
@@ -224,7 +228,7 @@
             </a>
 
             <!-- Checksheet -->
-            <a href="dashboard_checksheet.php" class="menu-card card-checksheet group bg-white p-6 rounded-3xl flex flex-col items-start">
+            <a href="checksheet_gate.php" class="menu-card card-checksheet group bg-white p-6 rounded-3xl flex flex-col items-start">
                 <div class="card-icon group-hover:text-white">
                     <i class="fas fa-clipboard-list text-lg"></i>
                 </div>

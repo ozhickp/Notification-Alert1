@@ -2,6 +2,21 @@
 // history_checksheet.php
 require_once __DIR__ . '/config.php';
 
+// ─── Gate akses: wajib unlock via checksheet_gate.php (key 6 digit) ────────
+// Sama seperti dashboard_checksheet.php — halaman ini juga bagian dari area
+// Checksheet, jadi harus tunduk ke gate yang sama.
+if (session_status() === PHP_SESSION_NONE) session_start();
+if (empty($_SESSION['checksheet_unlocked'])) {
+    if (isset($_GET['ajax'])) {
+        header('Content-Type: application/json');
+        http_response_code(403);
+        echo json_encode(['error' => 'unauthorized']);
+        exit;
+    }
+    header('Location: checksheet_gate.php?redirect=history_checksheet.php');
+    exit;
+}
+
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 // ─── AJAX: fetch history data ─────────────────────────────────────────────────

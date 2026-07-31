@@ -2,6 +2,21 @@
 // dashboard_checksheet.php
 require_once __DIR__ . '/config.php';
 
+// ─── Gate akses: wajib unlock via checksheet_gate.php (key 6 digit) ────────
+// Dipisah dari login_user.php karena Checksheet dipakai divisi lain yang
+// tidak punya akun E-Report — jadi jangan pakai requireRole() biasa di sini.
+if (session_status() === PHP_SESSION_NONE) session_start();
+if (empty($_SESSION['checksheet_unlocked'])) {
+    if (isset($_GET['ajax'])) {
+        header('Content-Type: application/json');
+        http_response_code(403);
+        echo json_encode(['error' => 'unauthorized']);
+        exit;
+    }
+    header('Location: checksheet_gate.php?redirect=dashboard_checksheet.php');
+    exit;
+}
+
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 // ─── Helper: resolve category_key dari machine_type + department/line ────────
