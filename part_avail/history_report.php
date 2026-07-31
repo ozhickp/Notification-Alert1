@@ -1328,6 +1328,23 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             border-color: #fcd34d;
         }
 
+        /* ── Modal: Tandai Waktu Selesai (Versi Admin Conrod) ────────────────────── */
+        #modal-conrod-finish-overlay .form-label {
+            font-size: .68rem;
+            font-weight: 800;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        #modal-conrod-finish-overlay .form-field {
+            width: 100%;
+            box-sizing: border-box;
+            height: 40px;
+        }
+
         /* ── Edit form (inside modal) ────────────────────────────────────────────── */
         #modal-edit-wrap .form-label,
         #modal-convert-box .form-label {
@@ -1682,12 +1699,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     </div>
                     <div id="cf-history-list" style="max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;"></div>
                 </div>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
+                <div class="grid grid-cols-2 gap-3 items-start">
+                    <div class="flex flex-col">
                         <label class="form-label">Tanggal <span class="text-red-400">*</span></label>
                         <input type="date" id="cf-finish-date" class="form-field">
                     </div>
-                    <div>
+                    <div class="flex flex-col">
                         <label class="form-label">Jam <span class="text-red-400">*</span></label>
                         <input type="time" id="cf-finish-time" class="form-field">
                     </div>
