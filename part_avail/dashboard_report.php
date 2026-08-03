@@ -1,13 +1,9 @@
 <?php
-// dashboard_report.php
 session_start();
 require_once __DIR__ . '/config.php';
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-// ── Tabel riwayat "Waktu Selesai (Versi Conrod)" — lihat catatan lengkap di
-// history_report.php. Setiap perubahan tersimpan sebagai entri baru (opsi 2),
-// e_reports.conrod_finish_at tetap jadi cache nilai TERBARU.
 $pdo->exec("
     CREATE TABLE IF NOT EXISTS conrod_finish_log (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -122,10 +118,14 @@ if (isset($_GET['ajax'])) {
     // — konsisten dengan logika "rangkaian" yang dipakai di history_report.php, supaya
     // laporan yang sudah dilanjutkan & ditutup oleh follow-up tidak ikut muncul di sini.
     if ($_GET['ajax'] === 'pending_followups') {
-        // admin_conrod cuma boleh lihat laporannya sendiri (reported_by = username-nya) —
-        // sama persis dengan konvensi yang dipakai history_report.php, supaya bubble
-        // di kedua halaman selalu menampilkan isi yang identik untuk role yang sama.
-        $conrodOnlyFilter = $isConrodOnly ? "AND r.reported_by = " . $pdo->quote($reportedBy) : '';
+        // admin_maintenance, technician, superadmin melihat daftar pending yang SAMA,
+        // lintas semua user. admin_conrod juga melihat lintas semua sesama admin_conrod
+        // (bukan cuma laporan milik sendiri) — supaya siapapun yang sedang bertugas bisa
+        // memantau/menindaklanjuti — TAPI tidak boleh lihat laporan yang berasal dari
+        // admin_maintenance/technician.
+        $conrodVisibilityFilter = $isConrodOnly
+            ? "AND ((r.foreman IS NOT NULL AND r.foreman <> '') OR r.source_role = 'admin_conrod' OR (r.source_role IS NULL AND u.role = 'admin_conrod'))"
+            : "";
 
         // "Masih menggantung" itu beda artinya buat admin_conrod vs maintenance:
         // - maintenance: masih menggantung selama belum ada follow-up 'selesai'.
@@ -168,19 +168,21 @@ if (isset($_GET['ajax'])) {
             LEFT JOIN users u ON u.username = r.reported_by
             WHERE r.parent_id IS NULL
               AND {$hangingCondition}
-              {$conrodOnlyFilter}
+              {$conrodVisibilityFilter}
             ORDER BY r.created_at DESC
         ")->fetchAll();
         echo json_encode($rows);
         exit;
     }
 
-    // ─── Admin Conrod: tandai "Waktu Selesai (Versi Saya)" pada laporan sendiri ──
-    // Ini CATATAN MANDIRI milik conrod — independen dari status resmi/completed_at
+    // ─── Admin Conrod: tandai "Waktu Selesai (Versi Conrod)" pada laporan awal ──
+    // Ini CATATAN MANDIRI milik tim conrod — independen dari status resmi/completed_at
     // yang jadi otoritas admin_maintenance/technician. Conrod boleh punya versi
     // waktu selesai sendiri (mis. produksi sudah jalan lagi menurut mereka),
     // meskipun tiketnya secara resmi belum ditutup maintenance, atau sebaliknya.
-    // Hanya boleh menandai laporan AWAL (parent_id NULL) milik mereka sendiri.
+    // Bisa dilakukan oleh admin_conrod MANAPUN (bukan cuma pelapor asli) — supaya
+    // shift/orang lain di tim conrod bisa menutup laporan rekannya. `recorded_by`
+    // tetap mencatat siapa yang benar-benar menandainya (audit trail).
     if ($_GET['ajax'] === 'mark_conrod_finish' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$isConrodOnly) {
             echo json_encode(['success' => false, 'message' => 'Fitur ini khusus Admin Conrod.']);
@@ -196,12 +198,17 @@ if (isset($_GET['ajax'])) {
             exit;
         }
 
-        // Pastikan laporan ini memang laporan awal milik conrod yang sedang login —
-        // jangan sampai bisa menandai laporan orang lain lewat ID sembarangan.
-        $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ? AND parent_id IS NULL");
-        $chk->execute([$reportId, $reportedBy]);
+        // Pastikan laporan ini memang laporan awal (parent_id NULL) yang berasal dari
+        // tim conrod (foreman terisi ATAU source_role = admin_conrod) — supaya endpoint
+        // ini tidak dipakai untuk menandai laporan yang bukan urusan conrod sama sekali.
+        $chk = $pdo->prepare("
+            SELECT id FROM e_reports
+            WHERE id = ? AND parent_id IS NULL
+              AND ((foreman IS NOT NULL AND foreman <> '') OR source_role = 'admin_conrod')
+        ");
+        $chk->execute([$reportId]);
         if (!$chk->fetch()) {
-            echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan atau bukan milik Anda.']);
+            echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan atau bukan laporan Conrod.']);
             exit;
         }
 
@@ -215,24 +222,19 @@ if (isset($_GET['ajax'])) {
         $upd = $pdo->prepare("UPDATE e_reports SET conrod_finish_at = ? WHERE id = ?");
         $upd->execute([$finishDatetime, $reportId]);
 
-        echo json_encode(['success' => true, 'message' => 'Waktu selesai (versi Anda) berhasil disimpan sebagai entri baru di riwayat.', 'conrod_finish_at' => $finishDatetime]);
+        echo json_encode(['success' => true, 'message' => 'Waktu selesai (versi Conrod) berhasil disimpan sebagai entri baru di riwayat.', 'conrod_finish_at' => $finishDatetime]);
         exit;
     }
 
     // ─── Riwayat "Waktu Selesai (Versi Conrod)" untuk satu laporan ────────────
+    // Bisa dilihat siapa saja yang berhak akses E-Report (admin_conrod, admin_maintenance,
+    // technician, superadmin) — bukan cuma pemilik laporan. Menandai/mengubah waktu selesai
+    // tetap dikunci ke pemilik laporan lewat endpoint mark_conrod_finish di bawah.
     if ($_GET['ajax'] === 'conrod_finish_log') {
         $reportId = (int)($_GET['report_id'] ?? 0);
         if (!$reportId) {
             echo json_encode([]);
             exit;
-        }
-        if ($isConrodOnly) {
-            $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ?");
-            $chk->execute([$reportId, $reportedBy]);
-            if (!$chk->fetch()) {
-                echo json_encode([]);
-                exit;
-            }
         }
         $stmt = $pdo->prepare("SELECT id, finish_at, recorded_by, recorded_at FROM conrod_finish_log WHERE report_id = ? ORDER BY recorded_at DESC, id DESC");
         $stmt->execute([$reportId]);
@@ -2257,7 +2259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                         actionRow = item.conrod_finish_at ? `
                             <div class="pi-action">
                                 <span class="pi-btn-selesaikan" style="background:#ccfbf1;color:#0d9488;cursor:default;">
-                                    <i class="fas fa-check"></i> Selesai (versi Anda): ${escText(item.conrod_finish_at.replace('T', ' ').slice(0, 16))}
+                                    <i class="fas fa-check"></i> Selesai (versi Conrod): ${escText(item.conrod_finish_at.replace('T', ' ').slice(0, 16))}
                                 </span>
                                 <button type="button" class="pi-btn-selesaikan" style="background:#f1f5f9;color:#64748b;border:none;cursor:pointer;"
                                    onclick="openMarkConrodFinish(${item.id})" title="Ubah waktu">
@@ -2267,8 +2269,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                             <div class="pi-action">
                                 <button type="button" class="pi-btn-selesaikan" style="background:#ccfbf1;color:#0d9488;border:none;cursor:pointer;"
                                    onclick="openMarkConrodFinish(${item.id})"
-                                   title="Catat waktu selesai versi Anda sendiri">
-                                    <i class="fas fa-clock"></i> Tandai Waktu Selesai (Versi Saya)
+                                   title="Catat waktu selesai versi Conrod (bisa ditandai admin_conrod manapun)">
+                                    <i class="fas fa-clock"></i> Tandai Waktu Selesai (Versi Conrod)
                                 </button>
                             </div>`;
                     } else {
@@ -3222,7 +3224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                 });
         }
 
-        // ── Admin Conrod: Tandai Waktu Selesai (Versi Saya) ─────────────────────────
+        // ── Admin Conrod: Tandai Waktu Selesai (Versi Conrod) ───────────────────────
         let conrodFinishReportId = null;
 
         function openMarkConrodFinish(id) {

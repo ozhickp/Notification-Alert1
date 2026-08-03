@@ -6,7 +6,7 @@ require_once __DIR__ . '/config.php';
 // Sama seperti dashboard_checksheet.php — halaman ini juga bagian dari area
 // Checksheet, jadi harus tunduk ke gate yang sama.
 if (session_status() === PHP_SESSION_NONE) session_start();
-if (empty($_SESSION['checksheet_unlocked'])) {
+if (empty($_SESSION['checksheet_unlocked']) || ($_SESSION['checksheet_area'] ?? '') !== 'maintenance') {
     if (isset($_GET['ajax'])) {
         header('Content-Type: application/json');
         http_response_code(403);

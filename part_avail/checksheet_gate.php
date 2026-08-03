@@ -1,22 +1,29 @@
 <?php
 
-define('CHECKSHEET_ACCESS_KEY', '482703');
+define('CHECKSHEET_ACCESS_KEY_MAINTENANCE', '482703');
+define('CHECKSHEET_ACCESS_KEY_PAINTING', '190420');
+
+// Daftar halaman yang boleh diakses per area + halaman default-nya (index 0)
+$areaRedirects = [
+    'maintenance' => ['dashboard_checksheet.php', 'history_checksheet.php'],
+    'painting'    => ['dashboard_checksheet_painting.php', 'history_checksheet_painting.php'],
+];
 
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 // Logout / kunci ulang (dipanggil dari tombol "Kunci" di sidebar checksheet)
 if (isset($_GET['logout'])) {
-    unset($_SESSION['checksheet_unlocked'], $_SESSION['checksheet_unlocked_at']);
+    unset($_SESSION['checksheet_unlocked'], $_SESSION['checksheet_unlocked_at'], $_SESSION['checksheet_area']);
     header('Location: checksheet_gate.php');
     exit;
 }
 
-// Kalau sudah unlock, langsung lempar ke halaman tujuan
-$redirect = $_GET['redirect'] ?? 'dashboard_checksheet.php';
-if (!in_array($redirect, ['dashboard_checksheet.php', 'history_checksheet.php'], true)) {
-    $redirect = 'dashboard_checksheet.php';
-}
-if (!empty($_SESSION['checksheet_unlocked'])) {
+// Kalau sudah unlock, langsung lempar ke halaman tujuan (sesuai area yang sudah dibuka)
+if (!empty($_SESSION['checksheet_unlocked']) && !empty($_SESSION['checksheet_area'])) {
+    $area          = $_SESSION['checksheet_area'];
+    $allowedForArea = $areaRedirects[$area] ?? $areaRedirects['maintenance'];
+    $requested      = $_GET['redirect'] ?? '';
+    $redirect       = in_array($requested, $allowedForArea, true) ? $requested : $allowedForArea[0];
     header('Location: ' . $redirect);
     exit;
 }
@@ -35,23 +42,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$isLocked) {
 
     if ($inputKey === '' || !ctype_digit($inputKey) || strlen($inputKey) > 6) {
         $error = 'Key harus berupa angka, maksimal 6 digit.';
-    } elseif (hash_equals(CHECKSHEET_ACCESS_KEY, $inputKey)) {
-        // Key benar
-        $_SESSION['checksheet_unlocked']    = true;
-        $_SESSION['checksheet_unlocked_at'] = $now;
-        unset($_SESSION['checksheet_attempts'], $_SESSION['checksheet_locked_until']);
-        header('Location: ' . $redirect);
-        exit;
     } else {
-        // Key salah
-        $attempts++;
-        $_SESSION['checksheet_attempts'] = $attempts;
-        if ($attempts >= $maxAttempts) {
-            $_SESSION['checksheet_locked_until'] = $now + $lockSeconds;
-            $_SESSION['checksheet_attempts']     = 0;
-            $isLocked = true;
+        // Cocokkan ke salah satu dari 2 key; area ditentukan dari key mana yang cocok
+        $matchedArea = null;
+        if (hash_equals(CHECKSHEET_ACCESS_KEY_MAINTENANCE, $inputKey)) {
+            $matchedArea = 'maintenance';
+        } elseif (hash_equals(CHECKSHEET_ACCESS_KEY_PAINTING, $inputKey)) {
+            $matchedArea = 'painting';
+        }
+
+        if ($matchedArea !== null) {
+            // Key benar
+            $_SESSION['checksheet_unlocked']    = true;
+            $_SESSION['checksheet_unlocked_at'] = $now;
+            $_SESSION['checksheet_area']        = $matchedArea;
+            unset($_SESSION['checksheet_attempts'], $_SESSION['checksheet_locked_until']);
+
+            $allowedForArea = $areaRedirects[$matchedArea];
+            $requested      = $_GET['redirect'] ?? '';
+            $redirect       = in_array($requested, $allowedForArea, true) ? $requested : $allowedForArea[0];
+
+            header('Location: ' . $redirect);
+            exit;
         } else {
-            $error = 'Key salah. Sisa percobaan: ' . ($maxAttempts - $attempts) . '.';
+            // Key salah
+            $attempts++;
+            $_SESSION['checksheet_attempts'] = $attempts;
+            if ($attempts >= $maxAttempts) {
+                $_SESSION['checksheet_locked_until'] = $now + $lockSeconds;
+                $_SESSION['checksheet_attempts']     = 0;
+                $isLocked = true;
+            } else {
+                $error = 'Key salah. Sisa percobaan: ' . ($maxAttempts - $attempts) . '.';
+            }
         }
     }
 }

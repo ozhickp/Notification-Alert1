@@ -1,17 +1,9 @@
 <?php
-// history_report.php
 session_start();
 require_once __DIR__ . '/config.php';
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-// ── Tabel riwayat "Waktu Selesai (Versi Conrod)" ────────────────────────────────
-// Opsi 2 (dipilih user): setiap kali admin_conrod menandai/mengubah waktu selesai
-// versi mereka sendiri, itu tersimpan sebagai ENTRI BARU di sini (bukan overwrite),
-// supaya riwayat perubahannya kelihatan (mis. pertama ditandai jam 10, diubah lagi
-// jam 14). Kolom e_reports.conrod_finish_at tetap dipertahankan sebagai cache nilai
-// TERBARU saja, supaya semua query/logic lama (status menggantung, badge, dsb.)
-// yang bergantung pada kolom itu tidak perlu diubah.
 $pdo->exec("
     CREATE TABLE IF NOT EXISTS conrod_finish_log (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -73,8 +65,21 @@ if (!function_exists('computeInitialScheduleStatus')) {
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
     header('Content-Type: application/json');
     if ($isConrodOnly) {
-        $stmt = $pdo->prepare("SELECT DISTINCT department FROM e_reports WHERE department IS NOT NULL AND department <> '' AND reported_by = ? ORDER BY department ASC");
-        $stmt->execute([$currentUsername]);
+        // admin_conrod cuma lihat department dari laporan TIM CONROD (siapapun conrod-nya),
+        // bukan cuma department dari laporan miliknya sendiri — dan tidak termasuk department
+        // yang cuma pernah dipakai di laporan admin_maintenance/technician.
+        $stmt = $pdo->query("
+            SELECT DISTINCT r.department
+            FROM e_reports r
+            LEFT JOIN users u ON u.username = r.reported_by
+            WHERE r.department IS NOT NULL AND r.department <> ''
+              AND (
+                    (r.foreman IS NOT NULL AND r.foreman <> '')
+                 OR r.source_role = 'admin_conrod'
+                 OR (r.source_role IS NULL AND u.role = 'admin_conrod')
+              )
+            ORDER BY r.department ASC
+        ");
     } else {
         $stmt = $pdo->query("SELECT DISTINCT department FROM e_reports WHERE department IS NOT NULL AND department <> '' ORDER BY department ASC");
     }
@@ -90,7 +95,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
 // bukan daftar kerja lintas tim, karena admin_conrod tidak menindaklanjuti sendiri.
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'pending_followups') {
     header('Content-Type: application/json');
-    $extraWhere = $isConrodOnly ? "AND r.reported_by = " . $pdo->quote($currentUsername) : "";
+    // admin_conrod sekarang melihat laporan dari SEMUA admin_conrod (bukan cuma
+    // miliknya sendiri), supaya siapapun di tim conrod bisa saling memantau —
+    // tapi TETAP tidak boleh lihat laporan yang berasal dari admin_maintenance/technician.
+    $extraWhere = $isConrodOnly
+        ? "AND ((r.foreman IS NOT NULL AND r.foreman <> '') OR r.source_role = 'admin_conrod' OR (r.source_role IS NULL AND u.role = 'admin_conrod'))"
+        : "";
 
     // Sama seperti di dashboard_report.php: admin_conrod punya status "selesai versi
     // dia sendiri" yang terpisah (conrod_finish_at), jadi tetap dianggap menggantung
@@ -137,10 +147,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'pending_followups') {
     exit;
 }
 
-// ─── AJAX: Admin Conrod — tandai "Waktu Selesai (Versi Saya)" pada laporan sendiri ──
+// ─── AJAX: Admin Conrod — tandai "Waktu Selesai (Versi Conrod)" pada laporan tim ──
 // Sama persis dengan endpoint di dashboard_report.php: CATATAN MANDIRI milik conrod,
-// independen dari status resmi/completed_at. Hanya boleh menandai laporan AWAL
-// (parent_id NULL) milik mereka sendiri.
+// independen dari status resmi/completed_at. Bisa dilakukan oleh admin_conrod MANAPUN
+// (bukan cuma pelapor asli) — supaya shift/orang lain di tim conrod bisa menutup
+// laporan rekannya. `recorded_by` tetap mencatat siapa yang benar-benar menandai.
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'mark_conrod_finish' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     if (!$isConrodOnly) {
@@ -157,12 +168,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'mark_conrod_finish' && $_SERVER['
         exit;
     }
 
-    // Pastikan laporan ini memang laporan awal milik conrod yang sedang login —
-    // jangan sampai bisa menandai laporan orang lain lewat ID sembarangan.
-    $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ? AND parent_id IS NULL");
-    $chk->execute([$reportId, $reportedBy]);
+    // Pastikan laporan ini memang laporan awal (parent_id NULL) yang berasal dari
+    // tim conrod (foreman terisi ATAU source_role = admin_conrod) — bukan cek milik
+    // sendiri lagi, supaya admin_conrod manapun bisa menandai laporan rekan setimnya.
+    $chk = $pdo->prepare("
+        SELECT id FROM e_reports
+        WHERE id = ? AND parent_id IS NULL
+          AND ((foreman IS NOT NULL AND foreman <> '') OR source_role = 'admin_conrod')
+    ");
+    $chk->execute([$reportId]);
     if (!$chk->fetch()) {
-        echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan atau bukan milik Anda.']);
+        echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan atau bukan laporan Conrod.']);
         exit;
     }
 
@@ -184,22 +200,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'mark_conrod_finish' && $_SERVER['
 
 // ─── AJAX: riwayat "Waktu Selesai (Versi Conrod)" untuk satu laporan ───────────
 // Dipakai buat menampilkan histori perubahan (opsi 2) — bukan cuma nilai terakhir.
-// admin_conrod hanya boleh lihat riwayat laporan miliknya sendiri; role lain (yang
-// memang berhak lihat laporan ini lewat endpoint detail/pending) boleh lihat juga.
+// Bisa dilihat siapa saja yang berhak akses E-Report (admin_conrod, admin_maintenance,
+// technician, superadmin) — bukan cuma pemilik laporan. Menandai/mengubah waktu selesai
+// tetap dijaga terpisah lewat endpoint mark_conrod_finish.
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'conrod_finish_log') {
     header('Content-Type: application/json');
     $reportId = (int)($_GET['report_id'] ?? 0);
     if (!$reportId) {
         echo json_encode([]);
         exit;
-    }
-    if ($isConrodOnly) {
-        $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ?");
-        $chk->execute([$reportId, $currentUsername]);
-        if (!$chk->fetch()) {
-            echo json_encode([]);
-            exit;
-        }
     }
     $stmt = $pdo->prepare("SELECT id, finish_at, recorded_by, recorded_at FROM conrod_finish_log WHERE report_id = ? ORDER BY recorded_at DESC, id DESC");
     $stmt->execute([$reportId]);
@@ -213,8 +222,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     @ini_set('display_errors', 0);
     header('Content-Type: application/json');
 
-    $mode   = $_GET['mode']   ?? 'daily';
-    $value  = $_GET['value']  ?? '';
+    $mode      = $_GET['mode']   ?? 'daily'; // 'daily' | 'monthly' | 'range'
+    $value     = $_GET['value']  ?? '';       // dipakai untuk mode daily/monthly
+    $startDate = trim($_GET['start'] ?? '');  // dipakai untuk mode range (tampilan saja)
+    $endDate   = trim($_GET['end']   ?? '');
     $page   = max(1, (int)($_GET['page']  ?? 1));
     $limit  = max(20, (int)($_GET['limit'] ?? 20));
     $offset = ($page - 1) * $limit;
@@ -222,28 +233,50 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $dept   = isset($_GET['dept']) ? trim($_GET['dept']) : '';
     $source = isset($_GET['source']) ? trim($_GET['source']) : '';
 
-    if ($value === '') {
+    if ($mode === 'range') {
+        if ($startDate === '' || $endDate === '') {
+            echo json_encode(['rows' => [], 'total' => 0]);
+            exit;
+        }
+    } elseif ($value === '') {
         echo json_encode(['rows' => [], 'total' => 0]);
         exit;
     }
 
     if ($mode === 'daily') {
-        $where = "WHERE DATE(r.created_at) = ?";
-    } else {
-        $where = "WHERE DATE_FORMAT(r.created_at, '%Y-%m') = ?";
+        $where  = "WHERE DATE(r.created_at) = ?";
+        $params = [$value];
+    } elseif ($mode === 'range') {
+        // Rentang tanggal bebas — HANYA untuk tampilan tabel/web. Export Excel
+        // (export_history_report.php) tetap terkunci ke mode daily/monthly saja,
+        // tidak menerima mode range ini.
+        $where  = "WHERE DATE(r.created_at) BETWEEN ? AND ?";
+        $params = [$startDate, $endDate];
+    } else { // monthly
+        $where  = "WHERE DATE_FORMAT(r.created_at, '%Y-%m') = ?";
+        $params = [$value];
     }
-    $params = [$value];
 
-    // admin_conrod cuma boleh lihat laporan yang dia buat sendiri, DITAMBAH follow-up
-    // yang dibuat maintenance/technician atas laporan-laporan miliknya itu — supaya
-    // begitu tiketnya diselesaikan orang lain, dia tetap bisa lihat itu di history-nya
-    // sendiri (follow-up-nya kan direported_by oleh maintenance/technician, bukan dia).
+    // Ekspresi SQL: apakah laporan AWAL (root) dari rangkaian baris ini berasal dari
+    // tim admin_conrod (foreman terisi / source_role admin_conrod, dengan fallback ke
+    // role user pelapor untuk baris lawas). Dipakai untuk 2 hal: (1) membatasi
+    // visibilitas admin_conrod, dan (2) filter dropdown "sumber laporan" di UI.
+    $rootConrodExpr = "EXISTS (
+        SELECT 1 FROM e_reports rt
+        LEFT JOIN users ru ON ru.username = rt.reported_by
+        WHERE rt.id = COALESCE(r.parent_id, r.id)
+          AND (
+                (rt.foreman IS NOT NULL AND rt.foreman <> '')
+             OR (rt.source_role IS NOT NULL AND rt.source_role = 'admin_conrod')
+             OR (rt.source_role IS NULL AND ru.role = 'admin_conrod')
+          )
+    )";
+
+    // admin_conrod sekarang bisa lihat laporan dari SEMUA admin_conrod (bukan cuma
+    // miliknya sendiri) beserta seluruh follow-up-nya — tapi TETAP tidak boleh lihat
+    // laporan/rangkaian yang berasal dari admin_maintenance/technician.
     if ($isConrodOnly) {
-        $where .= " AND (r.reported_by = ? OR r.parent_id IN (
-            SELECT id FROM e_reports WHERE reported_by = ? AND parent_id IS NULL
-        ))";
-        $params[] = $currentUsername;
-        $params[] = $currentUsername;
+        $where .= " AND {$rootConrodExpr}";
     }
 
     // Filter department
@@ -252,20 +285,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
         $params[] = $dept;
     }
 
-    // Filter sumber laporan: cek apakah laporan AWAL (root) dari rangkaian baris ini
-    // berasal dari Admin Conrod (foreman terisi / source_role admin_conrod) atau bukan.
-    // Sama persis dengan konvensi CASE fallback yang dipakai di pending_followups.
+    // Filter sumber laporan manual dari UI (dropdown "Sumber": Conrod / Maintenance).
+    // Untuk admin_conrod, filter "maintenance" otomatis tidak akan mengembalikan apa-apa
+    // karena sudah dibatasi ke {$rootConrodExpr} di atas — itu memang perilaku yang benar.
     if ($source === 'conrod' || $source === 'maintenance') {
-        $rootConrodExpr = "EXISTS (
-            SELECT 1 FROM e_reports rt
-            LEFT JOIN users ru ON ru.username = rt.reported_by
-            WHERE rt.id = COALESCE(r.parent_id, r.id)
-              AND (
-                    (rt.foreman IS NOT NULL AND rt.foreman <> '')
-                 OR (rt.source_role IS NOT NULL AND rt.source_role = 'admin_conrod')
-                 OR (rt.source_role IS NULL AND ru.role = 'admin_conrod')
-              )
-        )";
         $where .= $source === 'conrod' ? " AND {$rootConrodExpr}" : " AND NOT {$rootConrodExpr}";
     }
 
@@ -336,18 +359,19 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     $stmt->execute([$id]);
     $row = $stmt->fetch();
 
-    // admin_conrod cuma boleh lihat detail: laporan yang dia buat sendiri, ATAU
-    // follow-up yang parent_id-nya mengarah ke laporan awal miliknya sendiri —
-    // supaya tidak bisa mengintip laporan/thread milik orang lain lewat ID sembarangan,
-    // tapi tetap bisa lihat siapapun yang menyelesaikan tiketnya sendiri.
-    if ($row && $isConrodOnly && $row['reported_by'] !== $currentUsername) {
-        $isOwnThread = false;
-        if ($row['parent_id']) {
-            $chk = $pdo->prepare("SELECT id FROM e_reports WHERE id = ? AND reported_by = ?");
-            $chk->execute([$row['parent_id'], $currentUsername]);
-            $isOwnThread = (bool)$chk->fetch();
-        }
-        if (!$isOwnThread) {
+    // admin_conrod cuma boleh lihat detail laporan yang ROOT-nya berasal dari tim
+    // conrod (siapapun conrod-nya, bukan cuma dirinya sendiri) — supaya tidak bisa
+    // mengintip laporan/thread milik admin_maintenance/technician lewat ID sembarangan.
+    if ($row && $isConrodOnly) {
+        $rootIdForCheck = $row['parent_id'] ?: $row['id'];
+        $chk = $pdo->prepare("
+            SELECT r.id FROM e_reports r
+            LEFT JOIN users u ON u.username = r.reported_by
+            WHERE r.id = ?
+              AND ((r.foreman IS NOT NULL AND r.foreman <> '') OR r.source_role = 'admin_conrod' OR (r.source_role IS NULL AND u.role = 'admin_conrod'))
+        ");
+        $chk->execute([$rootIdForCheck]);
+        if (!$chk->fetch()) {
             echo json_encode(null);
             exit;
         }
@@ -532,10 +556,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'thread') {
     $stmt->execute([$rootId, $rootId]);
     $items = $stmt->fetchAll();
 
-    // admin_conrod cuma boleh lihat thread yang ROOT laporannya dia buat sendiri.
+    // admin_conrod cuma boleh lihat thread yang ROOT laporannya berasal dari tim
+    // conrod (siapapun conrod-nya), bukan cuma thread yang dia buat sendiri.
     if ($isConrodOnly) {
-        $root = $items[0] ?? null;
-        if (!$root || $root['reported_by'] !== $currentUsername) {
+        $chk = $pdo->prepare("
+            SELECT r.id FROM e_reports r
+            LEFT JOIN users u ON u.username = r.reported_by
+            WHERE r.id = ?
+              AND ((r.foreman IS NOT NULL AND r.foreman <> '') OR r.source_role = 'admin_conrod' OR (r.source_role IS NULL AND u.role = 'admin_conrod'))
+        ");
+        $chk->execute([$rootId]);
+        if (!$chk->fetch()) {
             echo json_encode(['root_id' => null, 'items' => []]);
             exit;
         }
@@ -1807,15 +1838,32 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                                 class="px-4 py-2 text-xs font-bold transition-all bg-white text-slate-500 hover:bg-slate-50">
                                 <i class="fas fa-calendar-alt mr-1.5"></i>Bulanan
                             </button>
+                            <button id="btn-mode-range" onclick="setMode('range')"
+                                class="px-4 py-2 text-xs font-bold transition-all bg-white text-slate-500 hover:bg-slate-50">
+                                <i class="fas fa-calendar-week mr-1.5"></i>Rentang
+                            </button>
                         </div>
                     </div>
 
-                    <div>
+                    <div id="single-date-wrap">
                         <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
                             <span id="picker-label">Tanggal</span>
                         </label>
                         <input type="date" id="inp-date" class="form-field" style="min-width:170px;">
                     </div>
+
+                    <div id="range-date-wrap" style="display:none;" class="flex gap-2 items-end">
+                        <div>
+                            <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Dari Tanggal</label>
+                            <input type="date" id="inp-date-start" class="form-field" style="min-width:150px;">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Sampai Tanggal</label>
+                            <input type="date" id="inp-date-end" class="form-field" style="min-width:150px;">
+                        </div>
+                    </div>
+                    <!-- Catatan: mode "Rentang" cuma untuk TAMPILAN tabel di web. Export Excel
+                         tetap terkunci ke Harian/Bulanan saja — lihat fungsi exportData(). -->
 
                     <button onclick="loadHistory(1)"
                         class="px-5 py-2.5 rounded-xl text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm"
@@ -2764,19 +2812,34 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             currentMode = mode;
             const daily = document.getElementById('btn-mode-daily');
             const month = document.getElementById('btn-mode-monthly');
+            const range = document.getElementById('btn-mode-range');
             const inp = document.getElementById('inp-date');
             const lbl = document.getElementById('picker-label');
+            const singleWrap = document.getElementById('single-date-wrap');
+            const rangeWrap = document.getElementById('range-date-wrap');
             const activeClass = 'px-4 py-2 text-xs font-bold transition-all bg-[#fb8b24] text-white';
             const inactiveClass = 'px-4 py-2 text-xs font-bold transition-all bg-white text-slate-500 hover:bg-slate-50';
+
+            daily.className = mode === 'daily' ? activeClass : inactiveClass;
+            month.className = mode === 'monthly' ? activeClass : inactiveClass;
+            range.className = mode === 'range' ? activeClass : inactiveClass;
+
+            if (mode === 'range') {
+                singleWrap.style.display = 'none';
+                rangeWrap.style.display = 'flex';
+                const today = new Date().toISOString().split('T')[0];
+                if (!document.getElementById('inp-date-start').value) document.getElementById('inp-date-start').value = today;
+                if (!document.getElementById('inp-date-end').value) document.getElementById('inp-date-end').value = today;
+                return;
+            }
+
+            singleWrap.style.display = 'block';
+            rangeWrap.style.display = 'none';
             if (mode === 'daily') {
-                daily.className = activeClass;
-                month.className = inactiveClass;
                 inp.type = 'date';
                 lbl.textContent = 'Tanggal';
                 inp.value = new Date().toISOString().split('T')[0];
             } else {
-                daily.className = inactiveClass;
-                month.className = activeClass;
                 inp.type = 'month';
                 lbl.textContent = 'Bulan';
                 inp.value = new Date().toISOString().slice(0, 7);
@@ -2811,16 +2874,33 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         }
 
         function loadHistory(page = 1, silent = false) {
-            const value = document.getElementById('inp-date').value;
             const searchQuery = document.getElementById('inp-search').value.trim();
             const limitSelect = document.getElementById('inp-limit').value;
             const dept = document.getElementById('inp-dept')?.value || '';
             const source = document.getElementById('inp-source')?.value || '';
 
-            if (!value) {
-                if (!silent) showToast('Pilih tanggal / bulan terlebih dahulu.', 'error');
-                return;
+            let periodParams = '';
+            if (currentMode === 'range') {
+                const startVal = document.getElementById('inp-date-start').value;
+                const endVal = document.getElementById('inp-date-end').value;
+                if (!startVal || !endVal) {
+                    if (!silent) showToast('Pilih tanggal awal & akhir terlebih dahulu.', 'error');
+                    return;
+                }
+                if (startVal > endVal) {
+                    if (!silent) showToast('Tanggal awal tidak boleh lebih besar dari tanggal akhir.', 'error');
+                    return;
+                }
+                periodParams = `&start=${encodeURIComponent(startVal)}&end=${encodeURIComponent(endVal)}`;
+            } else {
+                const value = document.getElementById('inp-date').value;
+                if (!value) {
+                    if (!silent) showToast('Pilih tanggal / bulan terlebih dahulu.', 'error');
+                    return;
+                }
+                periodParams = `&value=${encodeURIComponent(value)}`;
             }
+
             currentPage = page;
             limitPerPage = parseInt(limitSelect) || 20;
 
@@ -2838,7 +2918,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             // Load departments sekali saja saat pertama kali cari
             if (!deptLoaded) loadDepartments();
 
-            fetch(`history_report.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&dept=${encodeURIComponent(dept)}&source=${encodeURIComponent(source)}`)
+            fetch(`history_report.php?ajax=history&mode=${currentMode}${periodParams}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&dept=${encodeURIComponent(dept)}&source=${encodeURIComponent(source)}`)
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('hist-loading').style.display = 'none';
@@ -2965,6 +3045,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
         // ── Export Excel ──────────────────────────────────────────────────────────────
         function exportData() {
+            // Export Excel SENGAJA cuma didukung untuk mode Harian/Bulanan — mode
+            // "Rentang" cuma untuk tampilan tabel di web, jadi kalau lagi di mode itu,
+            // minta user pindah dulu ke Harian/Bulanan sebelum export.
+            if (currentMode === 'range') {
+                alert('Export Excel hanya mendukung mode Harian atau Bulanan. Silakan pilih salah satu mode tersebut dulu untuk export.');
+                return;
+            }
+
             const value = document.getElementById('inp-date').value;
             if (!value) {
                 alert('Pilih tanggal / bulan terlebih dahulu, lalu klik Cari.');
