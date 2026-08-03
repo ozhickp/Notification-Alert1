@@ -33,6 +33,7 @@ if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role
 }
 $reportedBy = $_SESSION['username'] ?? 'Unknown';
 $role       = $_SESSION['role'];
+$userNik    = $_SESSION['nik'] ?? '';
 
 // Label yang tampil di UI untuk role saat ini (topbar), supaya user selalu
 // tahu dia sedang login sebagai apa.
@@ -1272,7 +1273,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                     </div>
                     <div class="leading-tight">
                         <div class="text-sm font-bold text-slate-700"><?= htmlspecialchars($reportedBy) ?></div>
-                        <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider"><?= htmlspecialchars($roleLabel) ?></div>
+                        <?php if ($userNik !== ''): ?>
+                            <div class="text-[9px] font-bold text-slate-400 tracking-wider"><?= htmlspecialchars($userNik) ?></div>
+                            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider"><?= htmlspecialchars($roleLabel) ?></div>
+                        <?php else: ?>
+                            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider"><?= htmlspecialchars($roleLabel) ?></div>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <a href="logout_user.php" onclick="return confirm('Apakah Anda yakin ingin keluar?')"

@@ -40,13 +40,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         // Cari user berdasarkan username ATAU email, role selain superadmin
         $stmt = $pdo->prepare("
-            SELECT id, username, email_user, password, role, is_active
+            SELECT id, username, email_user, nik, password, role, is_active
             FROM users
-            WHERE (username = ? OR email_user = ?)
+            WHERE (username = ? OR email_user = ? OR nik = ?)
               AND role IN ('admin_maintenance', 'technician', 'admin_conrod')
             LIMIT 1
         ");
-        $stmt->execute([$identifier, $identifier]);
+        $stmt->execute([$identifier, $identifier, $identifier]);
         $user = $stmt->fetch();
 
         if (!$user) {
@@ -61,6 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_id']   = $user['id'];
             $_SESSION['username']  = $user['username'];
             $_SESSION['role']      = $user['role'];
+            $_SESSION['nik']       = $user['nik'] ?? null;
             header('Location: ' . resolveRedirect($user['role'], $requestedRedirect, $redirect_map));
             exit;
         }
@@ -256,10 +257,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <!-- Username / Email -->
                 <div>
-                    <label class="label-text block mb-1.5">Username atau Email</label>
+                    <label class="label-text block mb-1.5">Username, Email, atau NIK</label>
                     <input type="text" name="identifier" required
                         value="<?= htmlspecialchars($_POST['identifier'] ?? '') ?>"
-                        placeholder="contoh: john_doe atau john@contoh.com"
+                        placeholder="contoh: john_doe, john@contoh.com, atau NIK"
                         class="input-field w-full rounded-xl px-4 py-3 text-sm text-black" />
                 </div>
 
