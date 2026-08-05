@@ -3038,14 +3038,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
         }
 
         function resetForm() {
-            document.getElementById('sel-dept').value = '';
-            const selLine = document.getElementById('sel-line');
-            const selOp = document.getElementById('sel-op');
-            selLine.innerHTML = '<option value="">— Pilih Line —</option>';
-            selOp.innerHTML = '<option value="">— Pilih OP —</option>';
-            selLine.disabled = selOp.disabled = true;
-            clearMachineField();
-            document.getElementById('inp-type').value = '';
+            if (IS_CONROD_ONLY) {
+                // Department admin_conrod terkunci ke 1 department saja (auto-selected &
+                // disabled sejak awal — lihat loadDepartmentOptions()). JANGAN dikosongkan
+                // seperti role lain, karena dropdown-nya disabled sehingga onchange tidak
+                // akan pernah terpicu lagi dan user jadi tidak bisa memilih Line sama sekali
+                // setelah submit pertama. Cukup panggil ulang loadLines() dengan department
+                // yang sama supaya Line/OP/Mesin ter-reset & Line kembali bisa dipilih.
+                loadLines();
+            } else {
+                document.getElementById('sel-dept').value = '';
+                const selLine = document.getElementById('sel-line');
+                const selOp = document.getElementById('sel-op');
+                selLine.innerHTML = '<option value="">— Pilih Line —</option>';
+                selOp.innerHTML = '<option value="">— Pilih OP —</option>';
+                selLine.disabled = selOp.disabled = true;
+                clearMachineField();
+                document.getElementById('inp-type').value = '';
+            }
             document.getElementById('inp-start-date').value = '';
             document.getElementById('inp-start-time').value = '';
             setValIfExists('inp-finish-date', '');

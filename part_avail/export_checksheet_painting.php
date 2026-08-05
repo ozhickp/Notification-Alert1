@@ -41,13 +41,22 @@ $sub = $stmtSub->fetch();
 if (!$sub) die("Tidak ada data checksheet Painting untuk bulan $bulan.");
 
 $stmtDet = $pdo->prepare("
-    SELECT unit_name, no, part, action_status, result, note
+    SELECT id, unit_name, no, part, action_status, result, note
     FROM painting_checksheet_submission_details
     WHERE submission_id = ?
     ORDER BY id
 ");
 $stmtDet->execute([$sub['id']]);
 $details = $stmtDet->fetchAll();
+
+// Item mana saja yang pernah diedit (untuk kolom penanda "Diedit")
+$stmtEdited = $pdo->prepare("
+    SELECT DISTINCT detail_id
+    FROM painting_checksheet_edit_log
+    WHERE submission_id = ?
+");
+$stmtEdited->execute([$sub['id']]);
+$editedDetailIds = array_flip($stmtEdited->fetchAll(PDO::FETCH_COLUMN));
 
 // ── Konstanta style ───────────────────────────────────────────────────────────
 $resultColors = [
@@ -69,20 +78,20 @@ if (file_exists('assets/company_logo.jpg')) {
     $logo->setWorksheet($sheet);
 }
 
-$sheet->mergeCells('A1:F1');
+$sheet->mergeCells('A1:G1');
 $sheet->setCellValue('A1', 'PAINTING MONTHLY CHECK SHEET REPORT');
 $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
 $sheet->getStyle('A1')->getAlignment()
     ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
 $sheet->getRowDimension(1)->setRowHeight(45);
 
-$sheet->mergeCells('A2:F2');
+$sheet->mergeCells('A2:G2');
 $sheet->setCellValue('A2', 'Bulan : ' . date('F Y', strtotime($bulan . '-01')));
 $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
 $sheet->getStyle('A2')->getFont()->setSize(11);
 
 $infoRow = 3;
-$sheet->mergeCells("A{$infoRow}:F{$infoRow}");
+$sheet->mergeCells("A{$infoRow}:G{$infoRow}");
 $sheet->setCellValue("A{$infoRow}", sprintf(
     "Checker: %s  |  Tanggal Cek: %s  |  Submitted: %s",
     $sub['checker'],
@@ -97,8 +106,8 @@ $sheet->getStyle("A{$infoRow}")->applyFromArray([
 $sheet->getRowDimension($infoRow)->setRowHeight(18);
 
 $headerRow = 5;
-$sheet->fromArray(['No', 'Unit', 'Part yang Dicek', 'Action', 'Result', 'Keterangan'], NULL, "A{$headerRow}");
-$sheet->getStyle("A{$headerRow}:F{$headerRow}")->applyFromArray([
+$sheet->fromArray(['No', 'Unit', 'Part yang Dicek', 'Action', 'Result', 'Keterangan', 'Diedit'], NULL, "A{$headerRow}");
+$sheet->getStyle("A{$headerRow}:G{$headerRow}")->applyFromArray([
     'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
     'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '0F766E']],
     'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -114,9 +123,9 @@ $checkedCount = 0;
 
 foreach ($details as $d) {
     if ($d['unit_name'] !== $prevUnit) {
-        $sheet->mergeCells("A{$row}:F{$row}");
+        $sheet->mergeCells("A{$row}:G{$row}");
         $sheet->setCellValue("A{$row}", $d['unit_name']);
-        $sheet->getStyle("A{$row}:F{$row}")->applyFromArray([
+        $sheet->getStyle("A{$row}:G{$row}")->applyFromArray([
             'font' => ['bold' => true, 'size' => 9, 'color' => ['rgb' => '0F766E']],
             'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'E6F5F3']],
         ]);
@@ -126,6 +135,7 @@ foreach ($details as $d) {
     }
 
     $actionLabel = $d['action_status'] === 'checked' ? 'Checked' : 'Unchecked';
+    $wasEdited = isset($editedDetailIds[$d['id']]);
     $sheet->fromArray([
         $d['no'],
         $d['unit_name'],
@@ -133,7 +143,16 @@ foreach ($details as $d) {
         $actionLabel,
         $d['result'] ?? '-',
         $d['note'] ?? '',
+        $wasEdited ? 'Ya' : '-',
     ], NULL, "A{$row}");
+
+    if ($wasEdited) {
+        $sheet->getStyle("G{$row}")->applyFromArray([
+            'font'      => ['bold' => true, 'size' => 8, 'color' => ['rgb' => 'B45309']],
+            'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FEF3C7']],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+        ]);
+    }
 
     if ($d['action_status'] === 'checked') $checkedCount++;
     if ($d['result'] === 'OK') $okCount++;
@@ -144,21 +163,21 @@ foreach ($details as $d) {
     $row++;
 }
 
-$sheet->getStyle("A" . ($headerRow + 1) . ":F" . ($row - 1))
+$sheet->getStyle("A" . ($headerRow + 1) . ":G" . ($row - 1))
     ->getAlignment()->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
 
 // Summary row
 $totalItems = count($details);
-$sheet->mergeCells("A{$row}:F{$row}");
+$sheet->mergeCells("A{$row}:G{$row}");
 $sheet->setCellValue("A{$row}", "Summary: {$totalItems} item — Checked: {$checkedCount}  OK: {$okCount}  NG: {$ngCount}");
-$sheet->getStyle("A{$row}:F{$row}")->applyFromArray([
+$sheet->getStyle("A{$row}:G{$row}")->applyFromArray([
     'font'      => ['bold' => true, 'italic' => true, 'size' => 8, 'color' => ['rgb' => '475569']],
     'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'F8FAFC']],
     'alignment' => ['vertical' => Alignment::VERTICAL_CENTER],
 ]);
 $sheet->getRowDimension($row)->setRowHeight(14);
 
-$sheet->getStyle("A{$headerRow}:F{$row}")->applyFromArray([
+$sheet->getStyle("A{$headerRow}:G{$row}")->applyFromArray([
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
 ]);
 
@@ -175,7 +194,7 @@ foreach ($grouped as $result => $rows) {
     foreach ($rows as $r) $sheet->getStyle("E{$r}")->applyFromArray($style);
 }
 
-$fixedWidths = ['A' => 5, 'B' => 24, 'C' => 46, 'D' => 12, 'E' => 10, 'F' => 26];
+$fixedWidths = ['A' => 5, 'B' => 24, 'C' => 46, 'D' => 12, 'E' => 10, 'F' => 26, 'G' => 9];
 foreach ($fixedWidths as $col => $w) $sheet->getColumnDimension($col)->setWidth($w);
 $sheet->freezePane("A" . ($headerRow + 1));
 

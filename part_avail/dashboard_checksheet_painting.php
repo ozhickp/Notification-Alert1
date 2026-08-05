@@ -31,6 +31,39 @@ function paintingPeriodSubmitted(PDO $pdo, string $period): ?array
     return $row ?: null;
 }
 
+// ─── Helper: draft checksheet (disimpan server-side per periode bulan) ────
+// Halaman ini dipakai bareng-bareng via 1 key akses (bukan login per-user),
+// jadi draft di-scope per `period_month` — bukan per-user — supaya siapa
+// pun yang buka halaman ini (device/browser apa pun) akan melihat draft
+// yang sama untuk bulan yang sama.
+function paintingDraftGet(PDO $pdo, string $period): ?array
+{
+    $stmt = $pdo->prepare("SELECT check_date, checker, items_json, updated_at FROM painting_checksheet_drafts WHERE period_month = ? LIMIT 1");
+    $stmt->execute([$period]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+function paintingDraftSave(PDO $pdo, string $period, ?string $checkDate, ?string $checker, string $itemsJson): void
+{
+    $stmt = $pdo->prepare(
+        "INSERT INTO painting_checksheet_drafts (period_month, check_date, checker, items_json)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+            check_date = VALUES(check_date),
+            checker    = VALUES(checker),
+            items_json = VALUES(items_json),
+            updated_at = CURRENT_TIMESTAMP"
+    );
+    $stmt->execute([$period, $checkDate ?: null, $checker ?: null, $itemsJson]);
+}
+
+function paintingDraftDelete(PDO $pdo, string $period): void
+{
+    $stmt = $pdo->prepare("DELETE FROM painting_checksheet_drafts WHERE period_month = ?");
+    $stmt->execute([$period]);
+}
+
 // ─── AJAX Handlers ────────────────────────────────────────────────────────────
 if (isset($_GET['ajax'])) {
     header('Content-Type: application/json');
@@ -69,6 +102,46 @@ if (isset($_GET['ajax'])) {
             'already_filled' => $existing !== null,
             'detail'         => $existing,
         ]);
+        exit;
+    }
+
+    // Ambil draft tersimpan untuk periode tertentu (kalau ada)
+    if ($_GET['ajax'] === 'get_draft' && isset($_GET['period'])) {
+        $draft = paintingDraftGet($pdo, $_GET['period']);
+        echo json_encode(['draft' => $draft]);
+        exit;
+    }
+
+    // Simpan/update draft (auto-save maupun tombol manual "Simpan Draft")
+    if ($_GET['ajax'] === 'save_draft' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $period    = trim($_POST['period_month'] ?? '');
+        $checkDate = trim($_POST['check_date']   ?? '');
+        $checker   = trim($_POST['checker']      ?? '');
+        $itemsJson = $_POST['items']             ?? '[]';
+
+        if (!$period || !preg_match('/^\d{4}-\d{2}$/', $period)) {
+            echo json_encode(['success' => false, 'message' => 'Periode tidak valid.']);
+            exit;
+        }
+        // Periode yang sudah final disubmit tidak boleh lagi punya draft
+        if (paintingPeriodSubmitted($pdo, $period) !== null) {
+            echo json_encode(['success' => false, 'already_submitted' => true, 'message' => 'Periode ini sudah disubmit.']);
+            exit;
+        }
+
+        try {
+            paintingDraftSave($pdo, $period, $checkDate ?: null, $checker ?: null, $itemsJson);
+            echo json_encode(['success' => true, 'saved_at' => date('c')]);
+        } catch (\Exception $e) {
+            echo json_encode(['success' => false, 'message' => 'Gagal menyimpan draft: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // Buang draft untuk periode tertentu (tombol "Hapus Draft")
+    if ($_GET['ajax'] === 'discard_draft' && isset($_GET['period'])) {
+        paintingDraftDelete($pdo, $_GET['period']);
+        echo json_encode(['success' => true]);
         exit;
     }
 
@@ -146,6 +219,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet_pai
         }
 
         $pdo->commit();
+
+        // Checksheet sudah final tersimpan -> draft untuk bulan ini tidak relevan lagi
+        paintingDraftDelete($pdo, $periodMonth);
+
         echo json_encode(['success' => true, 'message' => "Checksheet Painting bulan {$periodMonth} berhasil disimpan."]);
     } catch (\Exception $e) {
         $pdo->rollBack();
@@ -162,6 +239,13 @@ $daysInMonth      = (int)date('t');
 $daysLeft         = $daysInMonth - $dayOfMonth;
 // Ambang "urgent": 7 hari terakhir bulan berjalan dan belum diisi
 $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
+
+// ─── Tanggal awal opsional dari link "Lanjutkan Draft" di checksheet_painting_draft.php ──
+$initialDate = null;
+if (isset($_GET['date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['date']) && strtotime($_GET['date']) !== false) {
+    $initialDate = $_GET['date'];
+}
+$autoResumeDraft = $initialDate !== null && isset($_GET['resume']) && $_GET['resume'] === '1';
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -460,6 +544,17 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
             background: #dcfce7;
             color: #15803d;
             border: 1.5px solid #86efac;
+            transition: opacity .6s ease, max-height .6s ease, margin .6s ease, padding .6s ease;
+            overflow: hidden;
+        }
+
+        .reminder-banner.ok.fade-out {
+            opacity: 0;
+            max-height: 0;
+            margin-bottom: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            border-width: 0;
         }
 
         .reminder-banner.warn {
@@ -655,6 +750,77 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
             cursor: not-allowed;
         }
 
+        .btn-secondary {
+            background: #fff;
+            color: #0f766e;
+            font-weight: 700;
+            font-size: .84rem;
+            padding: 10px 18px;
+            border-radius: 12px;
+            border: 1.5px solid #99f6e4;
+            cursor: pointer;
+            transition: background .15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-secondary:hover {
+            background: #f0fdfa;
+        }
+
+        .btn-secondary:disabled {
+            color: #94a3b8;
+            border-color: #e2e8f0;
+            cursor: not-allowed;
+        }
+
+        /* ── Banner draft ditemukan ── */
+        .draft-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 12px;
+            font-size: .78rem;
+            font-weight: 700;
+            margin-top: 12px;
+            background: #fef9c3;
+            color: #a16207;
+            border: 1.5px solid #fde047;
+        }
+
+        .draft-banner-actions {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .draft-banner-actions button {
+            font-size: .72rem;
+            font-weight: 700;
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            border: none;
+        }
+
+        .draft-btn-resume {
+            background: #0f766e;
+            color: #fff;
+        }
+
+        .draft-btn-discard {
+            background: #fff;
+            color: #dc2626;
+            border: 1.5px solid #fecaca !important;
+        }
+
+        #draft-status {
+            font-weight: 600;
+        }
+
         /* ── Area scroll khusus item checklist (pre-treatment, setting room, dll.) ──
            Tanggal pengecekan / checker / periode di atas, dan progress+submit di
            bawah, SENGAJA tidak ikut ke dalam wrapper ini supaya selalu terlihat
@@ -714,6 +880,10 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                 <i class="fas fa-history"></i>
                 <span class="nav-label">History</span>
             </a>
+            <a href="checksheet_painting_draft.php" onclick="navigateTo(event,'checksheet_painting_draft.php')" class="nav-item" title="Draft">
+                <i class="fas fa-pen-to-square"></i>
+                <span class="nav-label">Draft</span>
+            </a>
         </nav>
 
         <div id="sidebar-footer">
@@ -747,7 +917,7 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
         <div class="p-4">
 
             <?php if ($currentSubmitted): ?>
-                <div class="reminder-banner ok">
+                <div class="reminder-banner ok" id="reminder-ok-banner">
                     <i class="fas fa-circle-check"></i>
                     Checksheet Painting bulan <?= htmlspecialchars(date('F Y', strtotime($currentPeriod . '-01'))) ?> sudah diisi. Terima kasih!
                 </div>
@@ -771,7 +941,7 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                     </div>
                     <div>
                         <label class="form-label block mb-1.5"><i class="fas fa-user-check text-slate-300 mr-1"></i> Checker <span class="text-red-400">*</span></label>
-                        <select id="sel-checker" class="form-field" onchange="validateForm()">
+                        <select id="sel-checker" class="form-field" onchange="validateForm(); scheduleDraftAutosave()">
                             <option value="">— Pilih Checker —</option>
                         </select>
                     </div>
@@ -783,6 +953,13 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                 <div id="period-warning" class="hidden mt-3 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
                     <i class="fas fa-circle-exclamation mr-1"></i> <span id="period-warning-text"></span>
                 </div>
+                <div id="draft-banner" class="draft-banner hidden">
+                    <span><i class="fas fa-clock-rotate-left mr-1"></i> <span id="draft-banner-text"></span></span>
+                    <span class="draft-banner-actions">
+                        <button type="button" class="draft-btn-resume" onclick="resumeDraft()">Lanjutkan Draft</button>
+                        <button type="button" class="draft-btn-discard" onclick="discardDraft()">Hapus Draft</button>
+                    </span>
+                </div>
             </div>
 
             <div id="units-container-wrap" class="units-scroll-wrapper">
@@ -792,10 +969,16 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
             <div class="flex items-center justify-between bg-white border border-slate-200 rounded-2xl p-4 mt-2 sticky bottom-4">
                 <div class="text-xs font-semibold text-slate-500">
                     <span id="progress-label">0 / 0 item sudah dicek</span>
+                    <span id="draft-status" class="ml-2 text-slate-400"></span>
                 </div>
-                <button id="btn-submit" class="btn-primary" onclick="submitChecksheet()" disabled>
-                    <i class="fas fa-paper-plane"></i> Submit Checksheet
-                </button>
+                <div class="flex items-center gap-2">
+                    <button id="btn-save-draft" type="button" class="btn-secondary" onclick="saveDraft(true)">
+                        <i class="fas fa-floppy-disk"></i> Simpan Draft
+                    </button>
+                    <button id="btn-submit" class="btn-primary" onclick="submitChecksheet()" disabled>
+                        <i class="fas fa-paper-plane"></i> Submit Checksheet
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -824,6 +1007,10 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
     <script>
         let unitsData = [];
         let periodLocked = false;
+        let pendingDraft = null; // draft yg ditemukan utk periode aktif, menunggu konfirmasi user
+        let draftSaveTimer = null;
+        const initialDate = <?= json_encode($initialDate) ?>; // dari link "Lanjutkan Draft" (kalau ada)
+        let autoResumeDraft = <?= json_encode($autoResumeDraft) ?>; // auto-terapkan draft sekali saja saat load
 
         // ── Sidebar ───────────────────────────────────────────────────────────────
         function toggleSidebar() {
@@ -875,6 +1062,14 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                 icon.className = 'fas fa-chevron-left';
             }
 
+            // Banner hijau "sudah diisi" cuma informatif (bukan reminder yang perlu
+            // aksi), jadi auto-hilang beberapa detik tiap halaman dibuka — supaya
+            // gak terus nempel padahal sudah gak relevan lagi buat dibaca.
+            const okBanner = document.getElementById('reminder-ok-banner');
+            if (okBanner) {
+                setTimeout(() => okBanner.classList.add('fade-out'), 4000);
+            }
+
             document.getElementById('today-label').textContent =
                 new Date().toLocaleDateString('id-ID', {
                     weekday: 'long',
@@ -884,7 +1079,7 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                 });
 
             const today = new Date().toISOString().slice(0, 10);
-            document.getElementById('inp-check-date').value = today;
+            document.getElementById('inp-check-date').value = initialDate || today;
 
             loadCheckers();
             loadItems();
@@ -925,13 +1120,218 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                         periodLocked = true;
                         warnText.textContent = `Bulan ${period} sudah pernah disubmit oleh ${res.detail.checker} pada ${res.detail.submitted_at}. Cek History untuk melihat detailnya.`;
                         warnBox.classList.remove('hidden');
+                        // Periode sudah final -> jangan tawarkan draft
+                        document.getElementById('draft-banner').classList.add('hidden');
+                        pendingDraft = null;
+                        document.getElementById('btn-save-draft').disabled = true;
                     } else {
                         periodLocked = false;
                         warnBox.classList.add('hidden');
+                        document.getElementById('btn-save-draft').disabled = false;
+                        checkAndOfferDraft(period);
                     }
                     validateForm();
                 });
         }
+
+        // ── Draft: cek apakah ada draft tersimpan utk periode ini ──────────────────
+        function checkAndOfferDraft(period) {
+            fetch('dashboard_checksheet_painting.php?ajax=get_draft&period=' + encodeURIComponent(period))
+                .then(r => r.json())
+                .then(res => {
+                    const banner = document.getElementById('draft-banner');
+                    if (res.draft) {
+                        pendingDraft = res.draft;
+                        const updated = res.draft.updated_at ?
+                            new Date(res.draft.updated_at.replace(' ', 'T')).toLocaleString('id-ID', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            }) : '-';
+                        document.getElementById('draft-banner-text').textContent =
+                            `Ada draft tersimpan untuk periode ini (terakhir diubah ${updated}). Lanjutkan dari draft?`;
+                        banner.classList.remove('hidden');
+
+                        // Datang dari tombol "Lanjutkan" di halaman Draft -> langsung terapkan,
+                        // tidak perlu klik "Lanjutkan Draft" dua kali. Hanya sekali per load halaman.
+                        if (autoResumeDraft) {
+                            autoResumeDraft = false;
+                            resumeDraft();
+                        }
+                    } else {
+                        pendingDraft = null;
+                        banner.classList.add('hidden');
+                    }
+                });
+        }
+
+        function resumeDraft() {
+            if (!pendingDraft) return;
+            applyDraftToForm(pendingDraft);
+            document.getElementById('draft-banner').classList.add('hidden');
+            showToast('Draft berhasil dimuat.', 'success');
+        }
+
+        function discardDraft() {
+            const checkDate = document.getElementById('inp-check-date').value;
+            if (!checkDate) return;
+            const period = checkDate.slice(0, 7);
+            if (!confirm('Hapus draft tersimpan untuk periode ' + period + '? Aksi ini tidak bisa dibatalkan.')) return;
+
+            fetch('dashboard_checksheet_painting.php?ajax=discard_draft&period=' + encodeURIComponent(period))
+                .then(r => r.json())
+                .then(() => {
+                    document.getElementById('draft-banner').classList.add('hidden');
+                    pendingDraft = null;
+                    document.getElementById('draft-status').textContent = '';
+                    showToast('Draft dihapus.', 'success');
+                });
+        }
+
+        // ── Draft: terapkan isi draft ke form yang sedang dirender ──────────────────
+        function applyDraftToForm(draft) {
+            if (draft.checker) document.getElementById('sel-checker').value = draft.checker;
+
+            let items = [];
+            try {
+                items = JSON.parse(draft.items_json || '[]');
+            } catch (e) {
+                items = [];
+            }
+
+            items.forEach(it => {
+                const row = document.querySelector(`.item-row[data-item-id="${it.item_id}"]`);
+                if (!row) return;
+                const chk = row.querySelector('.chk-action');
+                const checked = it.action_status === 'checked';
+                chk.checked = checked;
+                row.querySelectorAll('.result-btn').forEach(b => b.disabled = !checked);
+                row.querySelector('.note-input').disabled = !checked;
+
+                if (checked) {
+                    if (it.result) {
+                        row.dataset.result = it.result;
+                        row.querySelectorAll('.result-btn').forEach(b => {
+                            b.classList.toggle('active', b.textContent.trim() === it.result);
+                        });
+                    }
+                    row.querySelector('.note-input').value = it.note || '';
+                } else {
+                    row.dataset.result = '';
+                }
+            });
+
+            updateProgress();
+            validateForm();
+        }
+
+        // ── Draft: kumpulkan isi form saat ini (dipakai bareng oleh submit & draft) ──
+        function collectFormItems() {
+            const rows = document.querySelectorAll('.item-row:not(.header)');
+            const items = [];
+            rows.forEach(row => {
+                const isChecked = row.querySelector('.chk-action').checked;
+                const result = row.dataset.result || null;
+                const note = row.querySelector('.note-input').value.trim();
+                items.push({
+                    item_id: row.dataset.itemId,
+                    unit_name: row.dataset.unitName,
+                    no: row.dataset.no,
+                    part: row.dataset.part,
+                    action_status: isChecked ? 'checked' : 'unchecked',
+                    result: isChecked ? result : null,
+                    note: isChecked ? note : ''
+                });
+            });
+            return items;
+        }
+
+        // ── Draft: auto-save (debounce 3 detik setelah perubahan terakhir) ──────────
+        function scheduleDraftAutosave() {
+            if (periodLocked) return;
+            clearTimeout(draftSaveTimer);
+            draftSaveTimer = setTimeout(() => saveDraft(false), 3000);
+        }
+
+        // ── Draft: simpan ke server. manual=true dipicu tombol "Simpan Draft" ───────
+        function saveDraft(manual = false) {
+            if (periodLocked) return;
+            const checkDate = document.getElementById('inp-check-date').value;
+            if (!checkDate) {
+                if (manual) showToast('Pilih tanggal pengecekan dulu sebelum menyimpan draft.', 'error');
+                return;
+            }
+            const period = checkDate.slice(0, 7);
+            const checker = document.getElementById('sel-checker').value;
+            const items = collectFormItems();
+
+            // Auto-save diam-diam skip kalau memang belum ada progress apa pun,
+            // supaya tidak bikin draft kosong. Tombol manual tetap boleh menyimpan.
+            const hasProgress = checker || items.some(i => i.action_status === 'checked');
+            if (!hasProgress && !manual) return;
+
+            const statusEl = document.getElementById('draft-status');
+            const btn = document.getElementById('btn-save-draft');
+            if (manual) {
+                btn.disabled = true;
+                statusEl.textContent = 'Menyimpan draft...';
+            }
+
+            const fd = new FormData();
+            fd.append('period_month', period);
+            fd.append('check_date', checkDate);
+            fd.append('checker', checker);
+            fd.append('items', JSON.stringify(items));
+
+            fetch('dashboard_checksheet_painting.php?ajax=save_draft', {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (manual) btn.disabled = false;
+                    if (res.success) {
+                        const t = new Date();
+                        statusEl.textContent = 'Draft tersimpan ' + t.toLocaleTimeString('id-ID', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        });
+                        if (manual) showToast('Draft berhasil disimpan.', 'success');
+                    } else {
+                        if (manual) showToast(res.message || 'Gagal menyimpan draft.', 'error');
+                        else statusEl.textContent = '';
+                    }
+                })
+                .catch(() => {
+                    if (manual) {
+                        btn.disabled = false;
+                        showToast('Gagal menyimpan draft (jaringan).', 'error');
+                    }
+                });
+        }
+
+        // ── Draft: fallback periodik + simpan terakhir saat tab ditutup/pindah ──────
+        setInterval(() => saveDraft(false), 30000);
+
+        window.addEventListener('beforeunload', () => {
+            if (periodLocked) return;
+            const checkDate = document.getElementById('inp-check-date').value;
+            if (!checkDate) return;
+            const period = checkDate.slice(0, 7);
+            const checker = document.getElementById('sel-checker').value;
+            const items = collectFormItems();
+            const hasProgress = checker || items.some(i => i.action_status === 'checked');
+            if (!hasProgress) return;
+
+            const fd = new FormData();
+            fd.append('period_month', period);
+            fd.append('check_date', checkDate);
+            fd.append('checker', checker);
+            fd.append('items', JSON.stringify(items));
+            navigator.sendBeacon('dashboard_checksheet_painting.php?ajax=save_draft', fd);
+        });
 
         function loadItems() {
             fetch('dashboard_checksheet_painting.php?ajax=items')
@@ -979,7 +1379,7 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                             <button type="button" class="result-btn ok" disabled onclick="setResult(this,'OK')">OK</button>
                             <button type="button" class="result-btn ng" disabled onclick="setResult(this,'NG')">NG</button>
                         </div>
-                        <input type="text" class="note-input" placeholder="Catatan (opsional)" disabled>
+                        <input type="text" class="note-input" placeholder="Catatan (opsional)" disabled oninput="scheduleDraftAutosave()">
                     `;
                     card.appendChild(row);
                 });
@@ -1000,6 +1400,7 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                 row.dataset.result = '';
             }
             updateProgress();
+            scheduleDraftAutosave();
         }
 
         function setResult(btn, value) {
@@ -1008,6 +1409,7 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
             btn.classList.add('active');
             row.dataset.result = value;
             validateForm();
+            scheduleDraftAutosave();
         }
 
         function updateProgress() {
@@ -1065,26 +1467,10 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                 return;
             }
 
-            const rows = document.querySelectorAll('.item-row:not(.header)');
-            const items = [];
+            const items = collectFormItems();
             let incomplete = 0;
-
-            rows.forEach(row => {
-                const isChecked = row.querySelector('.chk-action').checked;
-                const result = row.dataset.result || null;
-                const note = row.querySelector('.note-input').value.trim();
-
-                if (isChecked && !result) incomplete++;
-
-                items.push({
-                    item_id: row.dataset.itemId,
-                    unit_name: row.dataset.unitName,
-                    no: row.dataset.no,
-                    part: row.dataset.part,
-                    action_status: isChecked ? 'checked' : 'unchecked',
-                    result: isChecked ? result : null,
-                    note: isChecked ? note : ''
-                });
+            items.forEach(it => {
+                if (it.action_status === 'checked' && !it.result) incomplete++;
             });
 
             if (incomplete > 0) {
@@ -1114,6 +1500,7 @@ $reminderUrgent   = !$currentSubmitted && $daysLeft <= 7;
                 .then(r => r.json())
                 .then(res => {
                     if (res.success) {
+                        clearTimeout(draftSaveTimer);
                         showToast(res.message, 'success');
                         setTimeout(() => window.location.href = 'history_checksheet_painting.php', 1200);
                     } else {

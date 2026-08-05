@@ -216,6 +216,126 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'conrod_finish_log') {
     exit;
 }
 
+// ─── AJAX: Admin Conrod — edit laporan awal (laporan e-report biasa) ──────────
+// Cuma boleh dilakukan admin_conrod, dan cuma untuk laporan AWAL (parent_id NULL)
+// yang berasal dari tim conrod (foreman terisi ATAU source_role = admin_conrod) —
+// sama seperti aturan cek kepemilikan di mark_conrod_finish. Admin_conrod MANAPUN
+// di tim boleh mengedit, bukan cuma pelapor asli (konsisten dengan fitur lain).
+// Tidak ada batasan status follow-up untuk fitur EDIT ini (beda dengan HAPUS).
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'update_conrod_report' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+    if (!$isConrodOnly) {
+        echo json_encode(['success' => false, 'message' => 'Fitur ini khusus Admin Conrod.']);
+        exit;
+    }
+
+    $reportId = (int)($_POST['report_id'] ?? 0);
+    if (!$reportId) {
+        echo json_encode(['success' => false, 'message' => 'ID laporan tidak valid.']);
+        exit;
+    }
+
+    $chk = $pdo->prepare("
+        SELECT id FROM e_reports
+        WHERE id = ? AND parent_id IS NULL
+          AND ((foreman IS NOT NULL AND foreman <> '') OR source_role = 'admin_conrod')
+    ");
+    $chk->execute([$reportId]);
+    if (!$chk->fetch()) {
+        echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan atau bukan laporan Conrod.']);
+        exit;
+    }
+
+    $line        = trim($_POST['line'] ?? '');
+    $op          = trim($_POST['op'] ?? '') ?: '-';
+    $machineName = trim($_POST['machine_name'] ?? '');
+    $machineType = trim($_POST['machine_type'] ?? '');
+    $startDate   = trim($_POST['start_date'] ?? '');
+    $startTime   = trim($_POST['start_time'] ?? '');
+    $shift       = trim($_POST['shift'] ?? '');
+    $foreman     = trim($_POST['foreman'] ?? '');
+    $problem     = trim($_POST['problem'] ?? '');
+
+    if (!$line || !$machineName || !$startDate || !$startTime || !$shift || !$foreman || !$problem) {
+        echo json_encode(['success' => false, 'message' => 'Lengkapi semua field wajib (Line, Nama Mesin, Waktu Kejadian, Shift, Foreman, Problem).']);
+        exit;
+    }
+    if (!in_array($shift, ['Shift 1', 'Shift 2', 'Shift 3'], true)) {
+        echo json_encode(['success' => false, 'message' => 'Shift tidak valid.']);
+        exit;
+    }
+
+    $startDatetime = $startDate . ' ' . $startTime . ':00';
+
+    try {
+        $upd = $pdo->prepare("
+            UPDATE e_reports
+            SET `line` = ?, op = ?, machine_name = ?, machine_type = ?, repair_start = ?, shift = ?, foreman = ?, problem = ?
+            WHERE id = ? AND parent_id IS NULL
+        ");
+        $upd->execute([$line, $op, $machineName, $machineType, $startDatetime, $shift, $foreman, $problem, $reportId]);
+        echo json_encode(['success' => true, 'message' => 'Laporan berhasil diperbarui.']);
+    } catch (\Exception $e) {
+        echo json_encode(['success' => false, 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// ─── AJAX: Admin Conrod — hapus laporan awal ──────────────────────────────────
+// Fitur khusus: HANYA boleh dihapus selama admin_maintenance/technician BELUM
+// menanggapi/melanjutkan laporan ini (belum ada baris follow-up dengan
+// parent_id = laporan ini). Begitu sudah ada follow-up apapun, laporan terkunci
+// dari penghapusan — supaya jejak riwayat pekerjaan yang sudah ditindaklanjuti
+// tidak pernah hilang.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'delete_conrod_report' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+    if (!$isConrodOnly) {
+        echo json_encode(['success' => false, 'message' => 'Fitur ini khusus Admin Conrod.']);
+        exit;
+    }
+
+    $reportId = (int)($_POST['report_id'] ?? 0);
+    if (!$reportId) {
+        echo json_encode(['success' => false, 'message' => 'ID laporan tidak valid.']);
+        exit;
+    }
+
+    $chk = $pdo->prepare("
+        SELECT id FROM e_reports
+        WHERE id = ? AND parent_id IS NULL
+          AND ((foreman IS NOT NULL AND foreman <> '') OR source_role = 'admin_conrod')
+    ");
+    $chk->execute([$reportId]);
+    if (!$chk->fetch()) {
+        echo json_encode(['success' => false, 'message' => 'Laporan tidak ditemukan atau bukan laporan Conrod.']);
+        exit;
+    }
+
+    // Cek apakah admin_maintenance/technician sudah menanggapi/melanjutkan (ada follow-up).
+    $fu = $pdo->prepare("SELECT COUNT(*) FROM e_reports WHERE parent_id = ?");
+    $fu->execute([$reportId]);
+    if ((int)$fu->fetchColumn() > 0) {
+        echo json_encode(['success' => false, 'message' => 'Laporan ini sudah ditanggapi/dilanjutkan oleh Maintenance/Technician — tidak bisa dihapus lagi.']);
+        exit;
+    }
+
+    try {
+        $pdo->beginTransaction();
+        // Bersihkan juga riwayat "Waktu Selesai (Versi Conrod)" milik laporan ini
+        // supaya tidak ada baris log yatim yang menunjuk ke report_id yang sudah hilang.
+        $delLog = $pdo->prepare("DELETE FROM conrod_finish_log WHERE report_id = ?");
+        $delLog->execute([$reportId]);
+        $del = $pdo->prepare("DELETE FROM e_reports WHERE id = ? AND parent_id IS NULL");
+        $del->execute([$reportId]);
+        $pdo->commit();
+        echo json_encode(['success' => true, 'message' => 'Laporan berhasil dihapus.']);
+    } catch (\Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => 'Gagal menghapus: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 // ─── AJAX: history list ────────────────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     error_reporting(0);
@@ -334,7 +454,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
                r.repair_start, r.repair_finish, r.conrod_finish_at,
                r.reported_by, r.pic,
                r.problem, r.action, r.status,
-               r.created_at
+               r.created_at,
+               r.foreman, r.source_role,
+               -- Dipakai di kolom Aksi tabel admin_conrod: tombol Hapus cuma boleh
+               -- tampil selama laporan awal ini belum ditanggapi/dilanjutkan sama
+               -- sekali oleh Maintenance/Technician (sama seperti aturan endpoint
+               -- delete_conrod_report di bawah).
+               (SELECT COUNT(*) FROM e_reports f WHERE f.parent_id = r.id) AS followup_count,
+               -- Dipakai untuk kolom \"Time Start\"/\"Time Finish\" khusus tabel
+               -- admin_conrod: HARUS selalu berasal dari input admin_conrod sendiri
+               -- (laporan AWAL/root), bukan dari repair_start/repair_finish milik
+               -- baris follow-up Maintenance/Technician. Diambil dari root laporan
+               -- (COALESCE(parent_id, id)) supaya baris follow-up pun tetap menampilkan
+               -- waktu yang sama seperti yang diinput admin_conrod di laporan awalnya.
+               (SELECT rt.repair_start FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS conrod_time_start,
+               (SELECT rt.conrod_finish_at FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS conrod_time_finish
         FROM e_reports r
         $where
         ORDER BY r.created_at DESC
@@ -1376,6 +1510,36 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             height: 40px;
         }
 
+        /* ── Modal: Edit Laporan (Admin Conrod) ──────────────────────────────────── */
+        #modal-conrod-edit-overlay .form-label {
+            font-size: .68rem;
+            font-weight: 800;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        #modal-conrod-edit-overlay .form-field {
+            width: 100%;
+            box-sizing: border-box;
+            height: 40px;
+        }
+
+        #modal-conrod-edit-overlay textarea.form-field {
+            height: auto;
+            min-height: 80px;
+            resize: vertical;
+            padding: 8px 12px;
+        }
+
+        #modal-conrod-edit-overlay .form-field[disabled] {
+            background: #f8fafc;
+            color: #94a3b8;
+            cursor: not-allowed;
+        }
+
         /* ── Edit form (inside modal) ────────────────────────────────────────────── */
         #modal-edit-wrap .form-label,
         #modal-convert-box .form-label {
@@ -1753,6 +1917,80 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         </div>
     </div>
 
+    <!-- ═══ MODAL: Edit Laporan (Admin Conrod) ═══ -->
+    <div id="modal-conrod-edit-overlay" onclick="closeConrodEditForm(event)" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);z-index:300;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:18px;width:92%;max-width:560px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.25);">
+            <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+                <h3 class="text-base font-bold text-slate-800"><i class="fas fa-edit" style="color:#4f46e5;"></i> Edit Laporan E-Report</h3>
+                <button onclick="closeConrodEditForm()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="px-6 py-5 overflow-y-auto" style="flex:1;">
+                <div class="grid grid-cols-2 gap-x-4 gap-y-4">
+                    <div>
+                        <label class="form-label">Department</label>
+                        <input type="text" id="ce-department" class="form-field" value="Connecting Rod" disabled>
+                    </div>
+                    <div>
+                        <label class="form-label">Line <span class="text-red-400">*</span></label>
+                        <select id="ce-line" class="form-field" onchange="ceLoadOps()"></select>
+                    </div>
+                    <div>
+                        <label class="form-label">OP</label>
+                        <select id="ce-op" class="form-field" onchange="ceLoadMachines()"></select>
+                    </div>
+                    <div>
+                        <label class="form-label">Machine Type <span class="text-slate-300 font-normal normal-case">(otomatis)</span></label>
+                        <input type="text" id="ce-machine-type" class="form-field" readonly>
+                    </div>
+                    <div class="col-span-2">
+                        <label class="form-label">Nama Mesin <span class="text-red-400">*</span></label>
+                        <select id="ce-machine-name" class="form-field" onchange="ceApplyMachineType()"></select>
+                    </div>
+
+                    <div>
+                        <label class="form-label">Tanggal Kejadian <span class="text-red-400">*</span></label>
+                        <input type="date" id="ce-start-date" class="form-field">
+                    </div>
+                    <div>
+                        <label class="form-label">Jam Kejadian <span class="text-red-400">*</span></label>
+                        <input type="time" id="ce-start-time" class="form-field">
+                    </div>
+
+                    <div class="col-span-2">
+                        <label class="form-label">Shift <span class="text-red-400">*</span></label>
+                        <div class="choice-btn-group" id="ce-shift-group">
+                            <button type="button" class="choice-btn" data-val="Shift 1" onclick="ceSetShift(this)">Shift 1</button>
+                            <button type="button" class="choice-btn" data-val="Shift 2" onclick="ceSetShift(this)">Shift 2</button>
+                            <button type="button" class="choice-btn" data-val="Shift 3" onclick="ceSetShift(this)">Shift 3</button>
+                        </div>
+                        <input type="hidden" id="ce-inp-shift">
+                    </div>
+
+                    <div class="col-span-2">
+                        <label class="form-label">Foreman <span class="text-red-400">*</span></label>
+                        <select id="ce-foreman" class="form-field"></select>
+                    </div>
+
+                    <div class="col-span-2">
+                        <label class="form-label">Problem / Alarm <span class="text-red-400">*</span></label>
+                        <textarea id="ce-problem" class="form-field"></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="px-6 py-3.5 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-end gap-2 flex-shrink-0">
+                <button onclick="closeConrodEditForm()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all">
+                    Batal
+                </button>
+                <button id="btn-save-conrod-edit" onclick="submitConrodEdit()"
+                    class="px-4 py-2 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5" style="background:#4f46e5;">
+                    <i class="fas fa-save"></i> Simpan Perubahan
+                </button>
+            </div>
+        </div>
+    </div>
+
     <aside id="sidebar" class="collapsed">
         <div class="brand">
             <div class="brand-icon-wrap">
@@ -1950,19 +2188,40 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 <div class="table-scroll-container flex-1 min-h-0">
                     <table class="hist-table w-full" id="hist-table" style="display:none;">
                         <thead>
-                            <tr>
-                                <th class="text-center w-10">No</th>
-                                <th>Tanggal</th>
-                                <th>Department</th>
-                                <th>Line</th>
-                                <th class="text-center">OP</th>
-                                <th>Mesin</th>
-                                <th class="text-center">Repair Start</th>
-                                <th class="text-center">Repair Finish</th>
-                                <th class="text-center">Submitted At</th>
-                                <th class="text-center">Status</th>
-                                <th class="text-center w-16">Detail</th>
-                            </tr>
+                            <?php if ($isConrodOnly): ?>
+                                <!-- Tabel khusus admin_conrod: kolom Repair Start/Finish diganti
+                                 Time Start/Finish (waktu yang diinput admin_conrod sendiri —
+                                 Waktu Kejadian & Waktu Selesai versi Conrod), ditambah kolom
+                                 Aksi (Edit/Hapus langsung di baris, tidak lagi di dalam modal). -->
+                                <tr>
+                                    <th class="text-center w-10">No</th>
+                                    <th>Tanggal</th>
+                                    <th>Department</th>
+                                    <th>Line</th>
+                                    <th class="text-center">OP</th>
+                                    <th>Mesin</th>
+                                    <th class="text-center">Time Start</th>
+                                    <th class="text-center">Time Finish</th>
+                                    <th class="text-center">Submitted At</th>
+                                    <th class="text-center">Status</th>
+                                    <th class="text-center w-20">Aksi</th>
+                                    <th class="text-center w-16">Detail</th>
+                                </tr>
+                            <?php else: ?>
+                                <tr>
+                                    <th class="text-center w-10">No</th>
+                                    <th>Tanggal</th>
+                                    <th>Department</th>
+                                    <th>Line</th>
+                                    <th class="text-center">OP</th>
+                                    <th>Mesin</th>
+                                    <th class="text-center">Repair Start</th>
+                                    <th class="text-center">Repair Finish</th>
+                                    <th class="text-center">Submitted At</th>
+                                    <th class="text-center">Status</th>
+                                    <th class="text-center w-16">Detail</th>
+                                </tr>
+                            <?php endif; ?>
                         </thead>
                         <tbody id="hist-tbody"></tbody>
                     </table>
@@ -2706,6 +2965,250 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 });
         }
 
+        // ── Admin Conrod: Edit Laporan (fitur edit e-report biasa) ─────────────────
+        let conrodEditReportId = null;
+        let conrodEditLoaded = false; // flag: dropdown line/foreman sudah pernah dimuat
+
+        function ceLoadLines() {
+            return fetch('dashboard_report.php?ajax=lines&department=' + encodeURIComponent('Connecting Rod'))
+                .then(r => r.json())
+                .then(lines => {
+                    const sel = document.getElementById('ce-line');
+                    sel.innerHTML = '<option value="">— Pilih Line —</option>' +
+                        (lines || []).map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+                })
+                .catch(() => {});
+        }
+
+        function ceLoadForemen() {
+            return fetch('dashboard_report.php?ajax=foremen')
+                .then(r => r.json())
+                .then(rows => {
+                    const sel = document.getElementById('ce-foreman');
+                    sel.innerHTML = '<option value="">— Pilih Foreman —</option>' +
+                        (rows || []).map(f => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('');
+                })
+                .catch(() => {});
+        }
+
+        function ceLoadOps(preselectOp, preselectMachine) {
+            const dept = 'Connecting Rod';
+            const line = document.getElementById('ce-line').value;
+            const opSel = document.getElementById('ce-op');
+            const machSel = document.getElementById('ce-machine-name');
+            opSel.innerHTML = '<option value="">— Pilih OP —</option>';
+            machSel.innerHTML = '<option value="">— Pilih Mesin —</option>';
+            document.getElementById('ce-machine-type').value = '';
+            if (!line) return Promise.resolve();
+            return fetch(`dashboard_report.php?ajax=ops&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}`)
+                .then(r => r.json())
+                .then(ops => {
+                    opSel.innerHTML = '<option value="">— Pilih OP —</option>' +
+                        (ops || []).map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
+                    if (preselectOp) {
+                        opSel.value = preselectOp;
+                        return ceLoadMachines(preselectMachine);
+                    }
+                })
+                .catch(() => {});
+        }
+
+        function ceLoadMachines(preselectMachine) {
+            const dept = 'Connecting Rod';
+            const line = document.getElementById('ce-line').value;
+            const op = document.getElementById('ce-op').value;
+            const machSel = document.getElementById('ce-machine-name');
+            machSel.innerHTML = '<option value="">— Pilih Mesin —</option>';
+            document.getElementById('ce-machine-type').value = '';
+            if (!line || !op) return Promise.resolve();
+            return fetch(`dashboard_report.php?ajax=machine_list&department=${encodeURIComponent(dept)}&line=${encodeURIComponent(line)}&op=${encodeURIComponent(op)}`)
+                .then(r => r.json())
+                .then(rows => {
+                    machSel.innerHTML = '<option value="">— Pilih Mesin —</option>' +
+                        (rows || []).map(m => `<option value="${esc(m.machine_name)}" data-type="${esc(m.machine_type || '')}">${esc(m.machine_name)}</option>`).join('');
+                    if (preselectMachine) {
+                        machSel.value = preselectMachine;
+                        ceApplyMachineType();
+                    }
+                })
+                .catch(() => {});
+        }
+
+        function ceApplyMachineType() {
+            const machSel = document.getElementById('ce-machine-name');
+            const opt = machSel.options[machSel.selectedIndex];
+            document.getElementById('ce-machine-type').value = opt ? (opt.getAttribute('data-type') || '') : '';
+        }
+
+        function ceSetShift(btn) {
+            document.querySelectorAll('#ce-shift-group .choice-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('ce-inp-shift').value = btn.getAttribute('data-val');
+        }
+
+        // ── Dipanggil dari tombol "Edit" di kolom Aksi tabel — ambil detail laporan
+        // dulu (tanpa membuka modal detail), lalu buka form edit langsung. ──────────
+        function openConrodEditFromRow(id) {
+            fetch(`history_report.php?ajax=detail&id=${id}`)
+                .then(r => r.json())
+                .then(r => {
+                    if (!r) {
+                        showToast('Data tidak ditemukan.', 'error');
+                        return;
+                    }
+                    currentDetailRow = r;
+                    openConrodEditForm();
+                })
+                .catch(() => showToast('Gagal memuat data laporan.', 'error'));
+        }
+
+        function openConrodEditForm() {
+            if (!currentDetailRow) return;
+            const r = currentDetailRow;
+            conrodEditReportId = r.id;
+
+            const loaders = conrodEditLoaded ? Promise.resolve() : Promise.all([ceLoadLines(), ceLoadForemen()]).then(() => {
+                conrodEditLoaded = true;
+            });
+
+            loaders.then(() => {
+                document.getElementById('ce-line').value = r.line || '';
+                document.getElementById('ce-foreman').value = r.foreman || '';
+
+                const startFmt = r.repair_start ? r.repair_start.replace('T', ' ') : '';
+                document.getElementById('ce-start-date').value = startFmt ? startFmt.slice(0, 10) : '';
+                document.getElementById('ce-start-time').value = startFmt ? startFmt.slice(11, 16) : '';
+
+                document.getElementById('ce-problem').value = r.problem || '';
+
+                document.querySelectorAll('#ce-shift-group .choice-btn').forEach(b => b.classList.remove('active'));
+                document.getElementById('ce-inp-shift').value = r.shift || '';
+                if (r.shift) {
+                    const activeBtn = document.querySelector(`#ce-shift-group .choice-btn[data-val="${r.shift}"]`);
+                    if (activeBtn) activeBtn.classList.add('active');
+                }
+
+                ceLoadOps(r.op || '', r.machine_name || '');
+
+                document.getElementById('modal-conrod-edit-overlay').style.display = 'flex';
+            });
+        }
+
+        function closeConrodEditForm(e) {
+            if (e && e.target !== e.currentTarget) return;
+            document.getElementById('modal-conrod-edit-overlay').style.display = 'none';
+        }
+
+        function submitConrodEdit() {
+            if (!conrodEditReportId) return;
+
+            const line = document.getElementById('ce-line').value;
+            const op = document.getElementById('ce-op').value;
+            const machineName = document.getElementById('ce-machine-name').value;
+            const machineType = document.getElementById('ce-machine-type').value;
+            const startDate = document.getElementById('ce-start-date').value;
+            const startTime = document.getElementById('ce-start-time').value;
+            const shift = document.getElementById('ce-inp-shift').value;
+            const foreman = document.getElementById('ce-foreman').value;
+            const problem = document.getElementById('ce-problem').value.trim();
+
+            if (!line || !machineName || !startDate || !startTime || !shift || !foreman || !problem) {
+                showToast('Lengkapi semua field wajib.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('btn-save-conrod-edit');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+            const fd = new FormData();
+            fd.append('report_id', conrodEditReportId);
+            fd.append('line', line);
+            fd.append('op', op);
+            fd.append('machine_name', machineName);
+            fd.append('machine_type', machineType);
+            fd.append('start_date', startDate);
+            fd.append('start_time', startTime);
+            fd.append('shift', shift);
+            fd.append('foreman', foreman);
+            fd.append('problem', problem);
+
+            fetch('history_report.php?ajax=update_conrod_report', {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        showToast(res.message || 'Berhasil diperbarui.', 'success');
+                        closeConrodEditForm();
+                        loadHistory(currentPage);
+                        loadPendingFollowups();
+                        // Refresh modal detail cuma kalau memang sedang terbuka (edit bisa
+                        // dipicu langsung dari tombol Aksi di tabel, tanpa modal terbuka).
+                        if (document.getElementById('modal-overlay').classList.contains('open')) {
+                            openDetail(conrodEditReportId);
+                        }
+                    } else {
+                        showToast(res.message || 'Gagal menyimpan.', 'error');
+                    }
+                })
+                .catch(() => showToast('Koneksi error.', 'error'))
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-save"></i> Simpan Perubahan';
+                });
+        }
+
+        // ── Admin Conrod: Hapus Laporan (khusus, hanya jika belum ditanggapi) ──────
+        // Dipanggil langsung dari tombol Hapus di kolom Aksi tabel utama (btnEl = tombol
+        // itu sendiri, dipakai untuk kasih indikator loading tanpa perlu modal terbuka).
+        function confirmDeleteConrodReportRow(id, btnEl) {
+            if (!confirm('Hapus laporan ini? Tindakan ini tidak bisa dibatalkan.\n\nCatatan: laporan hanya bisa dihapus selama Maintenance/Technician belum menanggapinya.')) {
+                return;
+            }
+
+            const originalHtml = btnEl ? btnEl.innerHTML : '';
+            if (btnEl) {
+                btnEl.disabled = true;
+                btnEl.innerHTML = '<i class="fas fa-spinner fa-spin text-xs"></i>';
+            }
+
+            const fd = new FormData();
+            fd.append('report_id', id);
+
+            fetch('history_report.php?ajax=delete_conrod_report', {
+                    method: 'POST',
+                    body: fd
+                })
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success) {
+                        showToast(res.message || 'Laporan berhasil dihapus.', 'success');
+                        // Kalau modal detail laporan ini kebetulan sedang terbuka, tutup dulu.
+                        if (currentDetailRow && currentDetailRow.id === id &&
+                            document.getElementById('modal-overlay').classList.contains('open')) {
+                            closeModal();
+                        }
+                        loadHistory(currentPage);
+                        loadPendingFollowups();
+                    } else {
+                        showToast(res.message || 'Gagal menghapus.', 'error');
+                        if (btnEl) {
+                            btnEl.disabled = false;
+                            btnEl.innerHTML = originalHtml;
+                        }
+                    }
+                })
+                .catch(() => {
+                    showToast('Koneksi error.', 'error');
+                    if (btnEl) {
+                        btnEl.disabled = false;
+                        btnEl.innerHTML = originalHtml;
+                    }
+                });
+        }
+
         makeDraggable(document.getElementById('pending-fab'), document.getElementById('pending-fab'), openPendingWindow);
         makeDraggable(document.getElementById('pending-window'), document.getElementById('pending-window-header'), null);
 
@@ -3000,6 +3503,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         '<span class="text-amber-400 text-xs whitespace-nowrap">Belum selesai</span>');
                 const submittedAtFmt = fmtDt(row.created_at);
 
+                // ── Kolom "Time Start"/"Time Finish" khusus tabel admin_conrod ─────
+                // Harus SELALU menampilkan input admin_conrod sendiri (Waktu Kejadian
+                // & Waktu Selesai versi Conrod dari laporan AWAL/root), bukan
+                // repair_start/repair_finish milik baris follow-up Maintenance/
+                // Technician — makanya diambil dari conrod_time_start/conrod_time_finish
+                // (sudah di-resolve ke root laporan di query PHP), bukan dari
+                // row.repair_start/row.repair_finish milik baris itu sendiri.
+                const conrodTimeStartFmt = fmtDt(row.conrod_time_start);
+                const conrodTimeFinishFmt = row.conrod_time_finish ?
+                    fmtDt(row.conrod_time_finish) :
+                    '<span class="text-amber-400 text-xs whitespace-nowrap">Belum selesai</span>';
+
                 const statusVal = row.status || 'belum selesai';
                 const statusBadge = statusVal === 'selesai' ?
                     '<span class="status-badge status-done"><i class="fas fa-check-circle"></i> Selesai</span>' :
@@ -3008,6 +3523,34 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                 const linkedBadge = row.parent_id ?
                     `<br><span class="linked-badge" title="Baris ini adalah sambungan/lanjutan pekerjaan dari laporan sebelumnya — buka Detail untuk lihat rangkaiannya"><i class="fas fa-link"></i> Lanjutan Pekerjaan</span>` : '';
 
+                // ── Kolom Aksi (khusus tabel admin_conrod) ──────────────────────────
+                // Edit & Hapus cuma tampil di baris laporan AWAL milik tim Conrod
+                // (root, bukan follow-up Maintenance/Technician). Hapus cuma tampil
+                // selama belum ada follow-up sama sekali (server tetap validasi ulang).
+                let aksiTd = '';
+                if (IS_CONROD_ONLY) {
+                    const isConrodRootRow = !row.parent_id && !!(row.foreman || row.source_role === 'admin_conrod');
+                    if (isConrodRootRow) {
+                        const canDelete = !row.followup_count || parseInt(row.followup_count) === 0;
+                        aksiTd = `
+        <td class="text-center">
+            <div class="flex items-center justify-center gap-1">
+                <button onclick="openConrodEditFromRow(${row.id})" title="Edit Laporan"
+                    class="w-7 h-7 rounded-lg bg-slate-100 hover:bg-indigo-500 hover:text-white transition-all inline-flex items-center justify-center">
+                    <i class="fas fa-pen text-xs"></i>
+                </button>
+                ${canDelete ? `
+                <button onclick="confirmDeleteConrodReportRow(${row.id}, this)" title="Hapus Laporan"
+                    class="w-7 h-7 rounded-lg bg-slate-100 hover:bg-red-500 hover:text-white transition-all inline-flex items-center justify-center">
+                    <i class="fas fa-trash-alt text-xs"></i>
+                </button>` : ''}
+            </div>
+        </td>`;
+                    } else {
+                        aksiTd = `<td class="text-center text-slate-300">—</td>`;
+                    }
+                }
+
                 tr.innerHTML = `
         <td class="text-center text-slate-400 font-bold text-xs">${no}</td>
         <td class="font-semibold text-slate-700 whitespace-nowrap">${row.report_date?.slice(0,10) ?? '—'}</td>
@@ -3015,10 +3558,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
         <td class="text-slate-600" style="max-width:80px;word-break:break-word;white-space:normal;">${esc(row.line)}</td>
         <td class="text-center text-slate-500" style="white-space:normal;word-break:break-word;max-width:60px;">${row.op || '—'}</td>
         <td class="font-medium text-slate-700" style="max-width:140px;word-break:break-word;white-space:normal;">${esc(row.machine_name)}</td>
-        <td class="text-center">${repairStartFmt}</td>
-        <td class="text-center">${repairFinishFmt}</td>
+        <td class="text-center">${IS_CONROD_ONLY ? conrodTimeStartFmt : repairStartFmt}</td>
+        <td class="text-center">${IS_CONROD_ONLY ? conrodTimeFinishFmt : repairFinishFmt}</td>
         <td class="text-center">${submittedAtFmt}</td>
         <td class="text-center">${statusBadge}${linkedBadge}</td>
+        ${aksiTd}
         <td class="text-center">
             <button onclick="openDetail(${row.id})"
                 class="w-8 h-8 rounded-lg bg-slate-100 transition-all inline-flex items-center justify-center"
@@ -3280,6 +3824,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     conrodFinishBtn.style.display =
                         (IS_CONROD_ONLY && isConrodRoot && !r.conrod_finish_at) ? 'inline-flex' : 'none';
 
+                    // Tombol Edit & Hapus untuk admin_conrod sekarang ada di kolom "Aksi"
+                    // pada tabel utama (bukan di dalam modal ini lagi) — lihat renderTable().
+
                     // Ambil rangkaian (laporan awal + semua follow-up yang terhubung)
                     fetch(`history_report.php?ajax=thread&id=${id}`)
                         .then(r => r.json())
@@ -3309,6 +3856,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             // independen tapi sering tertukar kalau tidak dibedakan jelas.
                             if (IS_CONROD_ONLY) {
                                 const hasFollowup = items.length > 1;
+
                                 let fLabel, fBg, fBorder, fColor, fIcon;
                                 if (alreadyDone) {
                                     fLabel = 'Sudah ditindaklanjuti & diselesaikan resmi oleh Maintenance.';
