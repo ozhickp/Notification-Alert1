@@ -11,7 +11,9 @@ if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role
     exit;
 }
 
-// admin_conrod cuma boleh export laporan yang dia buat sendiri.
+// admin_conrod bisa melihat & export laporan dari SELURUH tim admin_conrod
+// (bukan cuma laporan yang dia buat sendiri) — konsisten dengan tabel di
+// history_report.php.
 $isConrodOnly    = ($_SESSION['role'] === ROLE_ADMIN_CONROD);
 $currentUsername = $_SESSION['username'] ?? '';
 
@@ -28,6 +30,8 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 $mode    = $_GET['mode']    ?? 'daily';
 $tanggal = $_GET['tanggal'] ?? '';
 $bulan   = $_GET['bulan']   ?? '';
+$rangeStart = trim($_GET['start'] ?? '');
+$rangeEnd   = trim($_GET['end']   ?? '');
 $dept    = trim($_GET['dept']   ?? '');
 $source  = trim($_GET['source'] ?? '');
 
@@ -72,30 +76,66 @@ if ($mode === 'daily') {
     $periodeLabel = 'Bulan : ' . bulanIndo((int) $bulanNum) . ' ' . $tahunNum;
     // Nama file: mm_yyyy
     $filename     = 'History_EReport_monthly_' . $bulanNum . '_' . $tahunNum;
+} elseif ($mode === 'range') {
+    if ($rangeStart === '' || $rangeEnd === '') die('Pilih tanggal awal & akhir terlebih dahulu.');
+    $dtStart = DateTime::createFromFormat('Y-m-d', $rangeStart);
+    $dtEnd   = DateTime::createFromFormat('Y-m-d', $rangeEnd);
+    if (!$dtStart || !$dtEnd) die('Format tanggal rentang tidak valid.');
+    if ($dtStart > $dtEnd) die('Tanggal awal tidak boleh lebih besar dari tanggal akhir.');
+    $whereDate    = "DATE(r.created_at) BETWEEN " . $pdo->quote($rangeStart) . " AND " . $pdo->quote($rangeEnd);
+    // mis. "1 Agustus 2026 – 5 Agustus 2026"
+    $periodeLabel = 'Rentang : ' . $dtStart->format('d') . ' ' . bulanIndo((int) $dtStart->format('n')) . ' ' . $dtStart->format('Y')
+        . ' – ' . $dtEnd->format('d') . ' ' . bulanIndo((int) $dtEnd->format('n')) . ' ' . $dtEnd->format('Y');
+    // Nama file: dd_mm_yyyy_sd_dd_mm_yyyy
+    $filename     = 'History_EReport_range_' . $dtStart->format('d_m_Y') . '_sd_' . $dtEnd->format('d_m_Y');
 } else {
     die('Mode tidak valid.');
 }
 
 // ── Judul utama sheet — beda untuk admin_conrod (khusus laporan Connecting Rod
-// Engine Stop) vs role lain (format E-Report umum, tidak berubah).
+// Engine Stop) vs role lain (format E-Report umum, tidak berubah). Untuk mode
+// "range" pakai judul generik yang sama untuk semua rentang tanggal.
 if ($isConrodOnly) {
-    $reportTitle = $mode === 'daily'
-        ? 'DAILY REPORT CONNECTING ROD ENGINE STOP'
-        : 'MONTHLY REPORT CONNECTING ROD ENGINE STOP';
+    if ($mode === 'daily') {
+        $reportTitle = 'DAILY REPORT CONNECTING ROD ENGINE STOP';
+    } elseif ($mode === 'monthly') {
+        $reportTitle = 'MONTHLY REPORT CONNECTING ROD ENGINE STOP';
+    } else {
+        $reportTitle = 'REPORT CONNECTING ROD ENGINE STOP (RENTANG TANGGAL)';
+    }
 } else {
-    $reportTitle = $mode === 'daily'
-        ? 'HISTORY E-REPORT MAINTENANCE'
-        : 'MONTHLY E-REPORT MAINTENANCE';
+    if ($mode === 'daily') {
+        $reportTitle = 'HISTORY E-REPORT MAINTENANCE';
+    } elseif ($mode === 'monthly') {
+        $reportTitle = 'MONTHLY E-REPORT MAINTENANCE';
+    } else {
+        $reportTitle = 'HISTORY E-REPORT MAINTENANCE (RENTANG TANGGAL)';
+    }
 }
 
-// admin_conrod: sama seperti tabel di history_report.php — laporan yang dia buat
-// sendiri, DITAMBAH follow-up yang dibuat maintenance/technician atas laporan
-// awalnya (follow-up itu reported_by-nya bukan dia, jadi harus dicek lewat
-// parent_id supaya tidak hilang dari hasil export).
+// ── Ekspresi SQL: apakah laporan AWAL (root) dari rangkaian baris ini berasal
+// dari tim admin_conrod (foreman terisi / source_role admin_conrod, dengan
+// fallback ke role user pelapor untuk baris lawas). IDENTIK dengan ekspresi
+// yang dipakai di history_report.php, supaya hasil export selalu sinkron
+// dengan apa yang tampil di tabel web — dipakai untuk 2 hal: (1) membatasi
+// visibilitas admin_conrod ke SELURUH tim (bukan cuma dirinya sendiri), dan
+// (2) filter dropdown "sumber laporan" di UI.
+$rootConrodExpr = "EXISTS (
+    SELECT 1 FROM e_reports rt
+    LEFT JOIN users ru ON ru.username = rt.reported_by
+    WHERE rt.id = COALESCE(r.parent_id, r.id)
+      AND (
+            (rt.foreman IS NOT NULL AND rt.foreman <> '')
+         OR (rt.source_role IS NOT NULL AND rt.source_role = 'admin_conrod')
+         OR (rt.source_role IS NULL AND ru.role = 'admin_conrod')
+      )
+)";
+
+// admin_conrod: export laporan dari SEMUA admin_conrod (bukan cuma miliknya
+// sendiri) beserta seluruh follow-up-nya — tapi TETAP tidak boleh lihat
+// laporan/rangkaian yang berasal dari admin_maintenance/technician.
 if ($isConrodOnly) {
-    $whereDate .= " AND (r.reported_by = " . $pdo->quote($currentUsername) . " OR r.parent_id IN (
-        SELECT id FROM e_reports WHERE reported_by = " . $pdo->quote($currentUsername) . " AND parent_id IS NULL
-    ))";
+    $whereDate .= " AND {$rootConrodExpr}";
 }
 
 // ── Filter Department & Sumber Laporan — sinkron dengan filter yang aktif di
@@ -108,18 +148,8 @@ if ($dept !== '') {
 }
 
 if ($source === 'conrod' || $source === 'maintenance') {
-    // Logika identik dengan history_report.php: lihat root (laporan awal) dari
-    // rangkaian follow-up-nya untuk menentukan asal laporan, bukan baris itu sendiri.
-    $rootConrodExpr = "EXISTS (
-        SELECT 1 FROM e_reports rt
-        LEFT JOIN users ru ON ru.username = rt.reported_by
-        WHERE rt.id = COALESCE(r.parent_id, r.id)
-          AND (
-                (rt.foreman IS NOT NULL AND rt.foreman <> '')
-             OR (rt.source_role IS NOT NULL AND rt.source_role = 'admin_conrod')
-             OR (rt.source_role IS NULL AND ru.role = 'admin_conrod')
-          )
-    )";
+    // Reuse ekspresi $rootConrodExpr yang sama (didefinisikan sekali di atas)
+    // supaya logikanya selalu identik dengan filter visibilitas admin_conrod.
     $whereDate .= $source === 'conrod' ? " AND {$rootConrodExpr}" : " AND NOT {$rootConrodExpr}";
     $periodeLabel .= '  |  Sumber: ' . ($source === 'conrod' ? 'Admin Conrod' : 'Maintenance / Technician');
     $filename      .= '_' . $source;
@@ -442,7 +472,7 @@ if ($mode === 'daily') {
 } else {
 
     $sheet = $spreadsheet->getActiveSheet();
-    $sheet->setTitle("Monthly E-Report");
+    $sheet->setTitle($mode === 'monthly' ? "Monthly E-Report" : "Range E-Report");
 
     if (file_exists('assets/company_logo.jpg')) {
         $logo = new Drawing();

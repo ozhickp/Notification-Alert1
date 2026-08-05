@@ -367,9 +367,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
         $where  = "WHERE DATE(r.created_at) = ?";
         $params = [$value];
     } elseif ($mode === 'range') {
-        // Rentang tanggal bebas — HANYA untuk tampilan tabel/web. Export Excel
-        // (export_history_report.php) tetap terkunci ke mode daily/monthly saja,
-        // tidak menerima mode range ini.
+        // Rentang tanggal bebas — juga didukung oleh Export Excel
+        // (export_history_report.php?mode=range&start=...&end=...).
         $where  = "WHERE DATE(r.created_at) BETWEEN ? AND ?";
         $params = [$startDate, $endDate];
     } else { // monthly
@@ -2100,8 +2099,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             <input type="date" id="inp-date-end" class="form-field" style="min-width:150px;">
                         </div>
                     </div>
-                    <!-- Catatan: mode "Rentang" cuma untuk TAMPILAN tabel di web. Export Excel
-                         tetap terkunci ke Harian/Bulanan saja — lihat fungsi exportData(). -->
+                    <!-- Export Excel juga sudah mendukung mode "Rentang" — lihat fungsi exportData(). -->
 
                     <button onclick="loadHistory(1)"
                         class="px-5 py-2.5 rounded-xl text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm"
@@ -3589,27 +3587,36 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
         // ── Export Excel ──────────────────────────────────────────────────────────────
         function exportData() {
-            // Export Excel SENGAJA cuma didukung untuk mode Harian/Bulanan — mode
-            // "Rentang" cuma untuk tampilan tabel di web, jadi kalau lagi di mode itu,
-            // minta user pindah dulu ke Harian/Bulanan sebelum export.
-            if (currentMode === 'range') {
-                alert('Export Excel hanya mendukung mode Harian atau Bulanan. Silakan pilih salah satu mode tersebut dulu untuk export.');
-                return;
-            }
-
-            const value = document.getElementById('inp-date').value;
-            if (!value) {
-                alert('Pilih tanggal / bulan terlebih dahulu, lalu klik Cari.');
-                return;
-            }
             // Ikutkan filter Department & Sumber Laporan yang sedang aktif di tabel,
             // supaya file yang terdownload persis sama dengan yang sedang dilihat —
             // bukan selalu semua data periode itu.
             const dept = document.getElementById('inp-dept')?.value || '';
             const source = document.getElementById('inp-source')?.value || '';
-            let file = currentMode === 'daily' ?
-                `export_history_report.php?mode=daily&tanggal=${encodeURIComponent(value)}` :
-                `export_history_report.php?mode=monthly&bulan=${encodeURIComponent(value)}`;
+
+            let file;
+            if (currentMode === 'range') {
+                const startVal = document.getElementById('inp-date-start').value;
+                const endVal = document.getElementById('inp-date-end').value;
+                if (!startVal || !endVal) {
+                    alert('Pilih tanggal awal & akhir terlebih dahulu, lalu klik Cari.');
+                    return;
+                }
+                if (startVal > endVal) {
+                    alert('Tanggal awal tidak boleh lebih besar dari tanggal akhir.');
+                    return;
+                }
+                file = `export_history_report.php?mode=range&start=${encodeURIComponent(startVal)}&end=${encodeURIComponent(endVal)}`;
+            } else {
+                const value = document.getElementById('inp-date').value;
+                if (!value) {
+                    alert('Pilih tanggal / bulan terlebih dahulu, lalu klik Cari.');
+                    return;
+                }
+                file = currentMode === 'daily' ?
+                    `export_history_report.php?mode=daily&tanggal=${encodeURIComponent(value)}` :
+                    `export_history_report.php?mode=monthly&bulan=${encodeURIComponent(value)}`;
+            }
+
             if (dept) file += `&dept=${encodeURIComponent(dept)}`;
             if (source) file += `&source=${encodeURIComponent(source)}`;
             window.open(file, '_blank');
