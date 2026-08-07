@@ -187,7 +187,7 @@ if ($isConrodOnly) {
     $rootIds      = array_column($conrodRoots, 'id');
     $placeholders = implode(',', array_fill(0, count($rootIds), '?'));
     $followupStmt = $pdo->prepare("
-        SELECT parent_id, reported_by, pic, problem, action, status,
+        SELECT parent_id, reported_by, pic, problem, action, status, shift,
                repair_start, repair_finish, created_at
         FROM e_reports
         WHERE parent_id IN ({$placeholders})
@@ -350,13 +350,28 @@ function combineFollowupLines(array $followups, string $field, ?callable $format
     return implode("\n", $lines);
 }
 
-// Susun 1 baris data (20 kolom) untuk 1 chain (root + seluruh follow-up-nya
+// Sama seperti combineFollowupLines, tapi khusus kolom "Repair Duration (mnt)"
+// yang nilainya dihitung (bukan field mentah) dari repair_start & repair_finish
+// milik masing-masing follow-up.
+function combineFollowupDuration(array $followups): string
+{
+    if (empty($followups)) return '—';
+    $lines = [];
+    foreach ($followups as $i => $f) {
+        $d = durasiMenit($f['repair_start'] ?? null, $f['repair_finish'] ?? null);
+        $lines[] = (count($followups) > 1 ? ($i + 1) . ') ' : '') . $d;
+    }
+    return implode("\n", $lines);
+}
+
+// Susun 1 baris data (24 kolom) untuk 1 chain (root + seluruh follow-up-nya
 // digabung) — dipakai sama persis di mode daily, monthly, & range.
 function buildConrodRowData(array $chain, int $no): array
 {
     $root      = $chain['root'];
     $followups = $chain['followups'];
     $waktuSelesai = $chain['waktu_selesai_conrod'];
+    $dtFmt = fn($v) => $v ? date('d-M-Y H:i', strtotime($v)) : '—';
 
     return [
         $no,
@@ -375,10 +390,14 @@ function buildConrodRowData(array $chain, int $no): array
         statusLabel($chain['status']),
         $root['created_at']   ? date('d-M-Y H:i', strtotime($root['created_at']))    : '—',
         combineFollowupLines($followups, 'reported_by'),
+        combineFollowupLines($followups, 'shift'),
+        combineFollowupLines($followups, 'repair_start', $dtFmt),
+        combineFollowupLines($followups, 'repair_finish', $dtFmt),
+        combineFollowupDuration($followups),
         combineFollowupLines($followups, 'pic'),
         combineFollowupLines($followups, 'problem'),
         combineFollowupLines($followups, 'action'),
-        combineFollowupLines($followups, 'created_at', fn($v) => $v ? date('d-M-Y H:i', strtotime($v)) : '—'),
+        combineFollowupLines($followups, 'created_at', $dtFmt),
     ];
 }
 
@@ -440,6 +459,10 @@ if ($isConrodOnly) {
         'Status',
         'Submitted At (Conrod)',
         'Continued By',
+        'Shift (Maintenance)',
+        'Repair Start (Maintenance)',
+        'Repair Finish (Maintenance)',
+        'Repair Duration (mnt)',
         'PIC/Technician',
         'Problem / Alarm (Maintenance)',
         'Corrective Action',
@@ -496,10 +519,14 @@ if ($isConrodOnly) {
         'N' => 12,  // Status
         'O' => 18,  // Submitted At (Conrod)
         'P' => 18,  // Continued By
-        'Q' => 16,  // PIC/Technician
-        'R' => 34,  // Problem / Alarm (Maintenance)
-        'S' => 34,  // Corrective Action
-        'T' => 18,  // Submitted At (Maintenance)
+        'Q' => 12,  // Shift (Maintenance)
+        'R' => 18,  // Repair Start (Maintenance)
+        'S' => 18,  // Repair Finish (Maintenance)
+        'T' => 12,  // Repair Duration (mnt)
+        'U' => 16,  // PIC/Technician
+        'V' => 34,  // Problem / Alarm (Maintenance)
+        'W' => 34,  // Corrective Action
+        'X' => 18,  // Submitted At (Maintenance)
     ];
 } else {
     $colWidths = [
@@ -528,7 +555,13 @@ if ($isConrodOnly) {
 
 // Kolom yang di-tengah-kan (center) — beda per format karena posisi kolom
 // angka/kode berbeda antara format baru (admin_conrod) & format lama.
-$centerCols = $isConrodOnly ? ['A', 'E', 'I', 'L', 'N'] : ['A', 'E', 'I', 'L', 'Q', 'R', 'S'];
+$centerCols = $isConrodOnly ? ['A', 'E', 'I', 'L', 'N', 'Q', 'T'] : ['A', 'E', 'I', 'L', 'Q', 'R', 'S'];
+
+// [CONROD-COLLAPSE] Batas kolom kanan tabel — format admin_conrod sekarang
+// 24 kolom (A–X) karena ada tambahan Shift/Repair Start/Repair Finish/Repair
+// Duration versi maintenance. Format lama tetap 20 kolom (A–T), tidak berubah.
+// Dipakai di semua mergeCells/style/autofilter yang sebelumnya hardcode 'T'.
+$lastCol = $isConrodOnly ? 'X' : 'T';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MODE DAILY — 1 sheet, 1 blok per record
@@ -547,13 +580,13 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet);
     }
 
-    $sheet->mergeCells('A1:T1');
+    $sheet->mergeCells("A1:{$lastCol}1");
     $sheet->setCellValue('A1', $reportTitle);
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet->getRowDimension(1)->setRowHeight(45);
-    $sheet->mergeCells('A2:T2');
+    $sheet->mergeCells("A2:{$lastCol}2");
     $sheet->setCellValue('A2', $periodeLabel);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
@@ -588,7 +621,7 @@ if ($mode === 'daily') {
                 $root['foreman'] ?: '—',
                 $root['created_at']
             );
-            $sheet->mergeCells("A{$infoRow}:T{$infoRow}");
+            $sheet->mergeCells("A{$infoRow}:{$lastCol}{$infoRow}");
             $sheet->setCellValue("A{$infoRow}", $infoText);
             $sheet->getStyle("A{$infoRow}")->applyFromArray($styleInfo);
             $sheet->getRowDimension($infoRow)->setRowHeight(18);
@@ -596,12 +629,12 @@ if ($mode === 'daily') {
 
             $hdrRow = $startRow;
             $sheet->fromArray($colHeaders, NULL, "A{$hdrRow}");
-            $sheet->getStyle("A{$hdrRow}:T{$hdrRow}")->applyFromArray($styleHdr);
+            $sheet->getStyle("A{$hdrRow}:{$lastCol}{$hdrRow}")->applyFromArray($styleHdr);
             $sheet->getRowDimension($hdrRow)->setRowHeight(-1);
             $startRow++;
 
             $sheet->fromArray(buildConrodRowData($chain, $idx + 1), NULL, "A{$startRow}");
-            $sheet->getStyle("A{$startRow}:T{$startRow}")->getAlignment()
+            $sheet->getStyle("A{$startRow}:{$lastCol}{$startRow}")->getAlignment()
                 ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
             $sheet->getRowDimension($startRow)->setRowHeight(-1);
 
@@ -610,7 +643,7 @@ if ($mode === 'daily') {
                     ->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
             }
 
-            $sheet->getStyle("A{$infoRow}:T{$startRow}")->applyFromArray($styleBorder);
+            $sheet->getStyle("A{$infoRow}:{$lastCol}{$startRow}")->applyFromArray($styleBorder);
             $startRow += 2;
         }
     } else {
@@ -627,7 +660,7 @@ if ($mode === 'daily') {
                 $r['reported_by'],
                 $r['created_at']
             );
-            $sheet->mergeCells("A{$infoRow}:T{$infoRow}");
+            $sheet->mergeCells("A{$infoRow}:{$lastCol}{$infoRow}");
             $sheet->setCellValue("A{$infoRow}", $infoText);
             $sheet->getStyle("A{$infoRow}")->applyFromArray($styleInfo);
             $sheet->getRowDimension($infoRow)->setRowHeight(18);
@@ -635,7 +668,7 @@ if ($mode === 'daily') {
 
             $hdrRow = $startRow;
             $sheet->fromArray($colHeaders, NULL, "A{$hdrRow}");
-            $sheet->getStyle("A{$hdrRow}:T{$hdrRow}")->applyFromArray($styleHdr);
+            $sheet->getStyle("A{$hdrRow}:{$lastCol}{$hdrRow}")->applyFromArray($styleHdr);
             // [FIX-WRAP-HDR] -1 = auto-height, supaya header yang wrap (2+ baris) full terlihat
             $sheet->getRowDimension($hdrRow)->setRowHeight(-1);
             $startRow++;
@@ -664,7 +697,7 @@ if ($mode === 'daily') {
                 statusLabel($r['status']),
                 $r['created_at']    ? date('d-M-Y H:i', strtotime($r['created_at']))     : '—',
             ], NULL, "A{$startRow}");
-            $sheet->getStyle("A{$startRow}:T{$startRow}")->getAlignment()
+            $sheet->getStyle("A{$startRow}:{$lastCol}{$startRow}")->getAlignment()
                 ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
             // [FIX-WRAP] -1 = auto-height, tinggi baris menyesuaikan konten wrap text
             $sheet->getRowDimension($startRow)->setRowHeight(-1);
@@ -689,7 +722,7 @@ if ($mode === 'daily') {
             }
             $idToActualRow[$r['id']] = $startRow;
 
-            $sheet->getStyle("A{$infoRow}:T{$startRow}")->applyFromArray($styleBorder);
+            $sheet->getStyle("A{$infoRow}:{$lastCol}{$startRow}")->applyFromArray($styleBorder);
             $startRow += 2;
         }
     }
@@ -717,20 +750,20 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet);
     }
 
-    $sheet->mergeCells('A1:T1');
+    $sheet->mergeCells("A1:{$lastCol}1");
     $sheet->setCellValue('A1', $reportTitle);
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet->getRowDimension(1)->setRowHeight(45);
-    $sheet->mergeCells('A2:T2');
+    $sheet->mergeCells("A2:{$lastCol}2");
     $sheet->setCellValue('A2', $periodeLabel);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
 
     // Header kolom — warna hijau (198754), sama seperti sheet Summary sebelumnya
     $sheet->fromArray($colHeaders, NULL, 'A4');
-    $sheet->getStyle('A4:T4')->applyFromArray([
+    $sheet->getStyle("A4:{$lastCol}4")->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
@@ -751,9 +784,9 @@ if ($mode === 'daily') {
             $curDate = substr($root['report_date'], 0, 10);
 
             if ($curDate !== $prevDate) {
-                $sheet->mergeCells("A{$row}:T{$row}");
+                $sheet->mergeCells("A{$row}:{$lastCol}{$row}");
                 $sheet->setCellValue("A{$row}", "— " . date('d F Y', strtotime($curDate)) . " —");
-                $sheet->getStyle("A{$row}:T{$row}")->applyFromArray($styleDivider);
+                $sheet->getStyle("A{$row}:{$lastCol}{$row}")->applyFromArray($styleDivider);
                 $sheet->getRowDimension($row)->setRowHeight(14);
                 $row++;
                 $prevDate = $curDate;
@@ -773,9 +806,9 @@ if ($mode === 'daily') {
             $curDate = substr($r['report_date'], 0, 10);
 
             if ($curDate !== $prevDate) {
-                $sheet->mergeCells("A{$row}:T{$row}");
+                $sheet->mergeCells("A{$row}:{$lastCol}{$row}");
                 $sheet->setCellValue("A{$row}", "— " . date('d F Y', strtotime($curDate)) . " —");
-                $sheet->getStyle("A{$row}:T{$row}")->applyFromArray($styleDivider);
+                $sheet->getStyle("A{$row}:{$lastCol}{$row}")->applyFromArray($styleDivider);
                 $sheet->getRowDimension($row)->setRowHeight(14);
                 $row++;
                 $prevDate = $curDate;
@@ -832,7 +865,7 @@ if ($mode === 'daily') {
     if (!empty($dataRows)) {
         $first = $dataRows[0];
         $last  = $dataRows[count($dataRows) - 1];
-        $sheet->getStyle("A{$first}:T{$last}")->getAlignment()
+        $sheet->getStyle("A{$first}:{$lastCol}{$last}")->getAlignment()
             ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
         foreach ($centerCols as $col) {
             $sheet->getStyle("{$col}{$first}:{$col}{$last}")->getAlignment()
@@ -841,24 +874,24 @@ if ($mode === 'daily') {
     }
 
     if ($row > 5) {
-        $sheet->getStyle("A4:T" . ($row - 1))->applyFromArray($styleBorder);
+        $sheet->getStyle("A4:{$lastCol}" . ($row - 1))->applyFromArray($styleBorder);
     }
 
     // AutoFilter di header — supaya user bisa filter/sort langsung dari kolom manapun.
     if (!empty($dataRows)) {
-        $sheet->setAutoFilter("A4:T" . $dataRows[count($dataRows) - 1]);
+        $sheet->setAutoFilter("A4:{$lastCol}" . $dataRows[count($dataRows) - 1]);
     }
 
     // ── Baris Total : total record + total durasi — style sama seperti baris
     // Total di sheet Summary sebelumnya (dark fill, bold, putih)
     $totalMenit  = $isConrodOnly ? totalDurasiMenitConrod($chains) : totalDurasiMenit($rows);
     $totalRecord = $isConrodOnly ? count($chains) : count($rows);
-    $sheet->mergeCells("A{$row}:T{$row}");
+    $sheet->mergeCells("A{$row}:{$lastCol}{$row}");
     $sheet->setCellValue(
         "A{$row}",
         "TOTAL : " . $totalRecord . " record   |   Total Durasi : " . formatDurasi($totalMenit)
     );
-    $sheet->getStyle("A{$row}:T{$row}")->applyFromArray([
+    $sheet->getStyle("A{$row}:{$lastCol}{$row}")->applyFromArray([
         'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 10],
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '1E293B']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
@@ -871,12 +904,6 @@ if ($mode === 'daily') {
     $sheet->freezePane('A5');
 }
 
-// ── Export ─────────────────────────────────────────────────────────────────────
-// [FIX-3] Save ke file temp dulu, baru stream ke browser
-// Langsung ke php://output berisiko: koneksi browser bisa timeout sebelum
-// PhpSpreadsheet selesai generate (terutama monthly mode dengan 2 sheet).
-// Content-Length memberi tahu browser ukuran file yang akan datang,
-// sehingga download bar muncul dan koneksi tidak dianggap "menggantung".
 $writer = new Xlsx($spreadsheet);
 $writer->setPreCalculateFormulas(false);
 
