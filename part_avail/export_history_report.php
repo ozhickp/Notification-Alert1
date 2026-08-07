@@ -94,14 +94,15 @@ if ($mode === 'daily') {
 
 // ── Judul utama sheet — beda untuk admin_conrod (khusus laporan Connecting Rod
 // Engine Stop) vs role lain (format E-Report umum, tidak berubah). Untuk mode
-// "range" pakai judul generik yang sama untuk semua rentang tanggal.
+// "range" judul TIDAK menyertakan rentang tanggal (rentangnya sudah tampil
+// terpisah lewat $periodeLabel di baris "Rentang : ...").
 if ($isConrodOnly) {
     if ($mode === 'daily') {
         $reportTitle = 'DAILY REPORT CONNECTING ROD ENGINE STOP';
     } elseif ($mode === 'monthly') {
         $reportTitle = 'MONTHLY REPORT CONNECTING ROD ENGINE STOP';
     } else {
-        $reportTitle = 'REPORT CONNECTING ROD ENGINE STOP (RENTANG TANGGAL)';
+        $reportTitle = 'REPORT CONNECTING ROD ENGINE STOP';
     }
 } else {
     if ($mode === 'daily') {
@@ -109,7 +110,7 @@ if ($isConrodOnly) {
     } elseif ($mode === 'monthly') {
         $reportTitle = 'MONTHLY E-REPORT MAINTENANCE';
     } else {
-        $reportTitle = 'HISTORY E-REPORT MAINTENANCE (RENTANG TANGGAL)';
+        $reportTitle = 'HISTORY E-REPORT MAINTENANCE';
     }
 }
 
