@@ -488,7 +488,20 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
         echo json_encode(null);
         exit;
     }
-    $stmt = $pdo->prepare("SELECT * FROM e_reports WHERE id = ?");
+    $stmt = $pdo->prepare("
+        SELECT r.*,
+               -- [TAMBAH-INFO-REORDER] Sama seperti pola di endpoint list (ajax=list):
+               -- Waktu Kejadian & Waktu Selesai versi Conrod HARUS selalu dari laporan
+               -- root, bukan dari baris follow-up ini sendiri (follow-up tidak punya
+               -- foreman/conrod_finish_at). Dipakai untuk menampilkan referensi di
+               -- form 'Tambah Info' kalau chain-nya berasal dari admin_conrod.
+               (SELECT rt.repair_start FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS conrod_time_start,
+               (SELECT rt.conrod_finish_at FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS conrod_time_finish,
+               (SELECT (rt.foreman IS NOT NULL AND rt.foreman <> '') OR rt.source_role = 'admin_conrod'
+                  FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS root_is_conrod
+        FROM e_reports r
+        WHERE r.id = ?
+    ");
     $stmt->execute([$id]);
     $row = $stmt->fetch();
 
@@ -2285,13 +2298,23 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         <div class="text-xs font-semibold text-slate-700" id="edit-machine-info"></div>
                     </div>
 
-                    <div class="grid grid-cols-2 gap-x-4 gap-y-4">
-                        <div>
-                            <label class="form-label">PIC / Technician <span class="text-red-400">*</span></label>
-                            <select id="edit-pic" class="edit-field"></select>
+                    <!-- [TAMBAH-INFO-REORDER] Waktu Kejadian & Waktu Selesai versi Conrod — cuma
+                         tampil kalau chain laporan ini berasal dari admin_conrod (root_is_conrod).
+                         Waktu Selesai tampil '-' selama admin_conrod belum menandainya. -->
+                    <div class="mb-4 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-2.5" id="edit-conrod-time-wrap" style="display:none;">
+                        <div class="grid grid-cols-2 gap-x-4">
+                            <div>
+                                <div class="text-[10px] font-bold text-teal-500 uppercase tracking-wider mb-1">Waktu Kejadian <span class="normal-case font-normal">(Admin Conrod)</span></div>
+                                <div class="text-xs font-semibold text-slate-700" id="edit-conrod-incident-time">—</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] font-bold text-teal-500 uppercase tracking-wider mb-1">Waktu Selesai <span class="normal-case font-normal">(Admin Conrod)</span></div>
+                                <div class="text-xs font-semibold text-slate-700" id="edit-conrod-finish-time">—</div>
+                            </div>
                         </div>
-                        <div></div>
+                    </div>
 
+                    <div class="grid grid-cols-2 gap-x-4 gap-y-4">
                         <div>
                             <label class="form-label">Repair Start <span class="text-red-400">*</span></label>
                             <div class="flex gap-2">
@@ -2314,14 +2337,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         </div>
                         <div></div>
 
-                        <div class="col-span-2">
+                        <div>
                             <label class="form-label">Shift <span class="text-red-400">*</span></label>
-                            <div class="choice-btn-group" id="edit-shift-group" style="max-width:420px;">
+                            <div class="choice-btn-group" id="edit-shift-group">
                                 <button type="button" class="choice-btn" data-val="Shift 1" onclick="setEditShift(this)">Shift 1</button>
                                 <button type="button" class="choice-btn" data-val="Shift 2" onclick="setEditShift(this)">Shift 2</button>
                                 <button type="button" class="choice-btn" data-val="Shift 3" onclick="setEditShift(this)">Shift 3</button>
                             </div>
                             <input type="hidden" id="edit-inp-shift">
+                        </div>
+                        <div>
+                            <label class="form-label">PIC / Technician <span class="text-red-400">*</span></label>
+                            <select id="edit-pic" class="edit-field"></select>
                         </div>
 
                         <div class="col-span-2">
@@ -4075,6 +4102,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
             document.getElementById('edit-machine-info').innerHTML =
                 `<i class="fas fa-industry mr-1.5 text-slate-400"></i> ${esc(r.department)} — ${esc(r.line)} | OP: ${esc(r.op || '—')} | ${esc(r.machine_name)} (${esc(r.machine_type || '—')})`;
+
+            // [TAMBAH-INFO-REORDER] Waktu Kejadian & Waktu Selesai versi Conrod — cuma
+            // tampil kalau chain laporan ini berasal dari admin_conrod. Waktu Selesai
+            // pakai '-' selama admin_conrod belum menandainya (conrod_time_finish null).
+            const isFromConrod = !!(Number(r.root_is_conrod) || r.root_is_conrod === true);
+            document.getElementById('edit-conrod-time-wrap').style.display = isFromConrod ? 'block' : 'none';
+            if (isFromConrod) {
+                document.getElementById('edit-conrod-incident-time').textContent =
+                    r.conrod_time_start ? r.conrod_time_start.replace('T', ' ').slice(0, 16) : '—';
+                document.getElementById('edit-conrod-finish-time').textContent =
+                    r.conrod_time_finish ? r.conrod_time_finish.replace('T', ' ').slice(0, 16) : '-';
+            }
 
             // Reset semua field — shift 2 mulai dari awal bukan dari data shift 1
             document.getElementById('edit-start-date').value = '';

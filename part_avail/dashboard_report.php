@@ -1761,13 +1761,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                         <textarea id="fu-original-problem" class="form-field" readonly style="min-height:60px;background:#f8fafc;color:#64748b;"></textarea>
                                     </div>
 
-                                    <!-- Waktu Kejadian dari Admin Conrod (read-only, referensi) -->
+                                    <!-- Waktu Kejadian & Waktu Selesai dari Admin Conrod (read-only, referensi) -->
                                     <div class="col-span-3" id="fu-incident-time-wrap" style="display:none;">
-                                        <label class="form-label block mb-1.5">
-                                            <i class="fas fa-history text-slate-300 mr-1"></i> Waktu Kejadian
-                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(dari Admin Conrod, laporan sumber)</span>
-                                        </label>
-                                        <input type="text" id="fu-incident-time" class="form-field" readonly style="background:#f8fafc;color:#64748b;cursor:default;">
+                                        <div class="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label class="form-label block mb-1.5">
+                                                    <i class="fas fa-history text-slate-300 mr-1"></i> Waktu Kejadian
+                                                    <span class="text-slate-300 font-normal normal-case text-[10px]">(dari Admin Conrod)</span>
+                                                </label>
+                                                <input type="text" id="fu-incident-time" class="form-field" readonly style="background:#f8fafc;color:#64748b;cursor:default;">
+                                            </div>
+                                            <div>
+                                                <label class="form-label block mb-1.5">
+                                                    <i class="fas fa-flag-checkered text-slate-300 mr-1"></i> Waktu Selesai
+                                                    <span class="text-slate-300 font-normal normal-case text-[10px]">(dari Admin Conrod)</span>
+                                                </label>
+                                                <input type="text" id="fu-incident-finish-time" class="form-field" readonly style="background:#f8fafc;color:#64748b;cursor:default;">
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <!-- Repair Start -->
@@ -1794,7 +1805,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                         <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
                                     </div>
 
-                                    <!-- Durasi + Reported By + PIC -->
+                                    <!-- Durasi + Reported By -->
                                     <div>
                                         <label class="form-label block mb-1.5">
                                             <i class="fas fa-clock text-slate-300 mr-1"></i> Durasi
@@ -1814,6 +1825,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                         <input type="text" class="form-field" value="<?= htmlspecialchars($reportedBy) ?>" readonly>
                                     </div>
 
+                                    <div></div>
+
+                                    <!-- Shift + PIC/Technician -->
+                                    <div class="col-span-2">
+                                        <label class="form-label block mb-1.5">
+                                            <i class="fas fa-user-clock text-slate-300 mr-1"></i> Shift <span class="text-red-400">*</span>
+                                        </label>
+                                        <div class="choice-btn-group" id="fu-shift-btn-group">
+                                            <button type="button" class="choice-btn" data-val="Shift 1" onclick="setShiftFu(this)">Shift 1</button>
+                                            <button type="button" class="choice-btn" data-val="Shift 2" onclick="setShiftFu(this)">Shift 2</button>
+                                            <button type="button" class="choice-btn" data-val="Shift 3" onclick="setShiftFu(this)">Shift 3</button>
+                                        </div>
+                                        <input type="hidden" id="fu-shift" value="">
+                                    </div>
+
                                     <div>
                                         <label class="form-label block mb-1.5">
                                             <i class="fas fa-user-cog text-slate-300 mr-1"></i> PIC / Technician <span class="text-red-400">*</span>
@@ -1821,19 +1847,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                         <select id="fu-pic" class="form-field" onchange="checkFollowupFieldsFilled()">
                                             <option value="">— Pilih Teknisi —</option>
                                         </select>
-                                    </div>
-
-                                    <!-- Shift -->
-                                    <div class="col-span-3">
-                                        <label class="form-label block mb-1.5">
-                                            <i class="fas fa-user-clock text-slate-300 mr-1"></i> Shift <span class="text-red-400">*</span>
-                                        </label>
-                                        <div class="choice-btn-group" id="fu-shift-btn-group" style="max-width:420px;">
-                                            <button type="button" class="choice-btn" data-val="Shift 1" onclick="setShiftFu(this)">Shift 1</button>
-                                            <button type="button" class="choice-btn" data-val="Shift 2" onclick="setShiftFu(this)">Shift 2</button>
-                                            <button type="button" class="choice-btn" data-val="Shift 3" onclick="setShiftFu(this)">Shift 3</button>
-                                        </div>
-                                        <input type="hidden" id="fu-shift" value="">
                                     </div>
 
                                     <!-- Problem (kondisi terkini) -->
@@ -2772,12 +2785,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const scheduleBtn = document.getElementById('btn-jadikan-schedule');
             const incidentWrap = document.getElementById('fu-incident-time-wrap');
             const incidentBox = document.getElementById('fu-incident-time');
+            const incidentFinishBox = document.getElementById('fu-incident-finish-time');
             if (!id || !followupSources[id]) {
                 box.value = '';
                 badge.style.display = 'none';
                 if (scheduleBtn) scheduleBtn.style.display = 'none';
                 incidentWrap.style.display = 'none';
                 incidentBox.value = '';
+                incidentFinishBox.value = '';
                 resetLeftPanelLockedEmpty();
                 checkFollowupFieldsFilled();
                 return;
@@ -2789,14 +2804,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             badge.className = 'src-badge';
             badge.style.cssText = `display:inline-flex;background:${meta.bg};color:${meta.text};margin-left:6px;`;
             badge.innerHTML = `<span class="sb-dot" style="background:${meta.dot};"></span>${meta.label}`;
-            // Waktu Kejadian (repair_start) — cuma relevan & tersedia buat laporan yang
-            // sumbernya dari Admin Conrod, supaya maintenance tahu kapan kejadiannya
-            // dilaporkan pertama kali sebelum mereka melanjutkan pekerjaannya.
+            // Waktu Kejadian (repair_start) & Waktu Selesai (conrod_finish_at) — cuma
+            // relevan & tersedia buat laporan yang sumbernya dari Admin Conrod, supaya
+            // maintenance tahu kapan kejadiannya dilaporkan & (kalau sudah) kapan admin
+            // conrod menandai selesai versi dia sendiri, sebelum mereka melanjutkan.
             if (src.repair_start) {
                 incidentBox.value = src.repair_start.replace('T', ' ').slice(0, 16);
+                incidentFinishBox.value = src.conrod_finish_at ?
+                    src.conrod_finish_at.replace('T', ' ').slice(0, 16) :
+                    '-';
                 incidentWrap.style.display = 'block';
             } else {
                 incidentBox.value = '';
+                incidentFinishBox.value = '';
                 incidentWrap.style.display = 'none';
             }
             if (scheduleBtn) {
@@ -2947,6 +2967,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             document.getElementById('fu-source-badge').style.display = 'none';
             document.getElementById('fu-incident-time-wrap').style.display = 'none';
             document.getElementById('fu-incident-time').value = '';
+            document.getElementById('fu-incident-finish-time').value = '';
             resetLeftPanelLockedEmpty();
             document.getElementById('fu-start-date').value = '';
             document.getElementById('fu-start-time').value = '';

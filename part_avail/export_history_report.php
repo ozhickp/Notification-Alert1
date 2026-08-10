@@ -92,11 +92,37 @@ if ($mode === 'daily') {
     die('Mode tidak valid.');
 }
 
-// ── Judul utama sheet — beda untuk admin_conrod (khusus laporan Connecting Rod
-// Engine Stop) vs role lain (format E-Report umum, tidak berubah). Untuk mode
-// "range" judul TIDAK menyertakan rentang tanggal (rentangnya sudah tampil
-// terpisah lewat $periodeLabel di baris "Rentang : ...").
-if ($isConrodOnly) {
+// ── [CONROD-COLLAPSE, gabungan] Flag penentu format & judul export ────────────
+// $isPureConrodExport : data yang tampil 100% cuma laporan conrod (baik karena
+//   role-nya admin_conrod, ATAU admin_maintenance/technician yang sengaja
+//   filter "Sumber: Admin Conrod"). Dipakai untuk judul sheet.
+// $useCollapsedFormat  : kapan format BARU (1 baris = 1 rangkaian, 24 kolom)
+//   dipakai. Ini SUPERSET dari $isPureConrodExport — juga aktif untuk
+//   tampilan "gabungan" (source kosong = laporan maintenance + conrod
+//   sekaligus), karena disamakan templatenya. HANYA nonaktif kalau user
+//   secara eksplisit filter "Sumber: Maintenance / Technician" — itu tetap
+//   pakai format lama (Chain ID, 1 baris per record).
+$isPureConrodExport = $isConrodOnly || $source === 'conrod';
+// [MAINTENANCE-COLLAPSE] Sekarang SEMUA kondisi (admin_conrod, filter Sumber:
+// Conrod, Gabungan, MAUPUN filter Sumber: Maintenance/Technician) pakai
+// format "1 baris = 1 rangkaian" (Chain ID dihapus total) — tinggal beda
+// flavor label kolom lewat $isPureMaintenanceExport di bawah. Kode format
+// lama ($rows, Chain ID, dst) jadi tidak lagi tercapai lewat jalur manapun,
+// tapi sengaja TIDAK dihapus (dibiarkan sebagai fallback aman, harmless).
+$useCollapsedFormat = true;
+// [MAINTENANCE-COLLAPSE] Laporan murni maintenance/technician (filter Sumber:
+// Maintenance / Technician, tanpa conrod sama sekali) — TETAP pakai format
+// "1 baris = 1 rangkaian" (Chain ID dihapus), tapi label kolomnya beda total
+// dari versi conrod (tidak ada "(Conrod)"/"Source: Foreman", diganti label
+// netral "Laporan Awal" vs "(Lanjutan)").
+$isPureMaintenanceExport = $source === 'maintenance';
+
+// ── Judul utama sheet — beda untuk laporan yang 100% dari conrod (khusus
+// laporan Connecting Rod Engine Stop) vs role lain / tampilan gabungan
+// (format E-Report umum, tidak berubah). Untuk mode "range" judul TIDAK
+// menyertakan rentang tanggal (rentangnya sudah tampil terpisah lewat
+// $periodeLabel di baris "Rentang : ...").
+if ($isPureConrodExport) {
     if ($mode === 'daily') {
         $reportTitle = 'DAILY REPORT CONNECTING ROD ENGINE STOP';
     } elseif ($mode === 'monthly') {
@@ -161,20 +187,25 @@ $filename .= '.xlsx';
 // ── Query ─────────────────────────────────────────────────────────────────────
 // [CONROD-COLLAPSE] Untuk admin_conrod, format export beda total dari
 // admin_maintenance/technician: 1 baris = 1 rangkaian penuh (root + SEMUA
-// follow-up-nya digabung ke kolom 16-20), bukan 1 baris per record seperti
+// follow-up-nya digabung ke kolom 16-24), bukan 1 baris per record seperti
 // sebelumnya. Makanya query-nya juga dipisah total — ambil root & follow-up
 // secara terpisah, lalu digabung di PHP jadi struktur "$chains".
-// Untuk admin_maintenance/technician/superadmin, TIDAK ADA PERUBAHAN sama
-// sekali — tetap pakai query & struktur $rows lama seperti sebelumnya.
-if ($isConrodOnly) {
-    // $whereDate di titik ini sudah mengandung syarat {$rootConrodExpr} (baris di
-    // atas), jadi tinggal tambahkan syarat "root saja" (parent_id IS NULL).
+// [GABUNGAN] Format ini sekarang juga dipakai untuk tampilan "gabungan" milik
+// admin_maintenance/technician (source kosong = SEMUA laporan, baik dari
+// conrod maupun dari maintenance sendiri) — root-nya jadi general (bukan
+// cuma root conrod), karena $whereDate di titik ini sudah otomatis
+// menyesuaikan (dibatasi ke conrod-only / maintenance-only / tanpa batasan
+// sama sekali, tergantung $isConrodOnly & $source yang sudah diproses di
+// atas). HANYA saat filter "Sumber: Maintenance / Technician" dipilih
+// eksplisit, jalur ini dilewati & tetap pakai format lama ($rows, di bawah).
+if ($useCollapsedFormat) {
     $rootWhere = $whereDate . " AND r.parent_id IS NULL";
 
     $conrodRoots = $pdo->query("
         SELECT r.id, r.report_date, r.department, r.line, r.op, r.shift,
-               r.machine_name, r.machine_type, r.repair_start, r.conrod_finish_at,
-               r.problem, r.foreman, r.created_at
+               r.machine_name, r.machine_type, r.repair_start, r.repair_finish,
+               r.conrod_finish_at, r.problem, r.foreman, r.reported_by,
+               r.source_role, r.pic, r.action, r.created_at
         FROM e_reports r
         WHERE {$rootWhere}
         ORDER BY r.report_date ASC, r.created_at ASC
@@ -201,17 +232,21 @@ if ($isConrodOnly) {
     }
 
     // ── Gabungkan root + follow-up jadi 1 unit "chain" per baris export.
-    // "Waktu Selesai (versi conrod)" prioritas: conrod_finish_at (ditandai
-    // manual oleh admin_conrod lewat fitur "Waktu Selesai Versi Conrod").
-    // Kalau itu masih kosong TAPI maintenance SUDAH lebih dulu mengisi
-    // repair_finish di follow-up terakhirnya, pakai itu sebagai fallback.
-    // Status kolom (2 kondisi) mengikuti ada/tidaknya nilai "Waktu Selesai"
-    // ini — jadi "Selesai" begitu salah satu dari 2 sumber di atas terisi.
+    // "Waktu Selesai" prioritas 3 tingkat:
+    //   1. conrod_finish_at  — kalau root berasal dari conrod & sudah ditandai
+    //      selesai manual lewat fitur "Waktu Selesai Versi Conrod".
+    //   2. repair_finish milik root itu sendiri — relevan untuk root yang
+    //      dibuat langsung oleh admin_maintenance/technician (mereka isi
+    //      repair_finish langsung, tidak punya konsep conrod_finish_at).
+    //   3. Fallback ke repair_finish follow-up TERAKHIR — dipakai kalau root
+    //      (dari sumber manapun) belum ditandai selesai tapi follow-up-nya
+    //      sudah closing duluan.
+    // Status kolom (2 kondisi) mengikuti ada/tidaknya nilai "Waktu Selesai" ini.
     $chains = [];
     foreach ($conrodRoots as $root) {
         $followups = $followupsByRoot[$root['id']] ?? [];
 
-        $waktuSelesaiConrod = $root['conrod_finish_at'] ?: null;
+        $waktuSelesaiConrod = $root['conrod_finish_at'] ?: ($root['repair_finish'] ?: null);
         if (!$waktuSelesaiConrod && !empty($followups)) {
             $lastFollowup = end($followups);
             if (!empty($lastFollowup['repair_finish'])) {
@@ -373,21 +408,32 @@ function buildConrodRowData(array $chain, int $no): array
     $waktuSelesai = $chain['waktu_selesai_conrod'];
     $dtFmt = fn($v) => $v ? date('d-M-Y H:i', strtotime($v)) : '—';
 
+    // [GABUNGAN] Kolom "Source" beda label tergantung asal root: kalau root
+    // dari admin_conrod (foreman terisi / source_role admin_conrod) → tampilkan
+    // nama foreman. Kalau root dibuat langsung oleh admin_maintenance/technician
+    // sendiri (tanpa foreman) → tampilkan siapa yang lapor, biar tetap mudah
+    // dibedakan sekilas di sheet "gabungan".
+    $isConrodOrigin = !empty($root['foreman']) || (($root['source_role'] ?? null) === 'admin_conrod');
+    $sourceLabel = $isConrodOrigin
+        ? ('Foreman: ' . ($root['foreman'] ?: '—'))
+        : ('Maintenance: ' . ($root['reported_by'] ?? '—'));
+
     return [
         $no,
         $root['report_date']  ? date('d-M-Y', strtotime($root['report_date']))    : '—',
         $root['department']   ?? '—',
         $root['line']         ?? '—',
         $root['op']           ?? '—',
-        !empty($root['foreman']) ? 'Foreman: ' . $root['foreman'] : '—',
         $root['machine_name'] ?? '—',
         $root['machine_type'] ?? '—',
         $root['shift']        ?? '—',
+        $sourceLabel,
         $root['repair_start'] ? date('d-M-Y H:i', strtotime($root['repair_start'])) : '—',
         $waktuSelesai          ? date('d-M-Y H:i', strtotime($waktuSelesai))         : '—',
         durasiMenit($root['repair_start'], $waktuSelesai),
         $root['problem']      ?? '—',
         statusLabel($chain['status']),
+        $root['reported_by']  ?? '—',
         $root['created_at']   ? date('d-M-Y H:i', strtotime($root['created_at']))    : '—',
         combineFollowupLines($followups, 'reported_by'),
         combineFollowupLines($followups, 'shift'),
@@ -411,6 +457,51 @@ function totalDurasiMenitConrod(array $chains)
         if (is_int($d)) $total += $d;
     }
     return $total;
+}
+
+// [MAINTENANCE-COLLAPSE] Susun 1 baris data (26 kolom) untuk laporan MURNI
+// maintenance/technician (tanpa conrod sama sekali) — konsep sama dengan
+// buildConrodRowData() (root + follow-up digabung 1 baris, follow-up lebih
+// dari 1 digabung dalam 1 sel), tapi label & susunan kolomnya netral: root =
+// "Laporan Awal" (langsung berisi Repair Start/Finish/PIC/Problem/Action
+// lengkap, karena admin_maintenance/technician isi form penuh sejak awal,
+// tidak seperti conrod yang cuma isi Waktu Kejadian saja), follow-up =
+// "(Lanjutan)".
+function buildMaintenanceChainRowData(array $chain, int $no): array
+{
+    $root      = $chain['root'];
+    $followups = $chain['followups'];
+    $waktuSelesai = $chain['waktu_selesai_conrod'];
+    $dtFmt = fn($v) => $v ? date('d-M-Y H:i', strtotime($v)) : '—';
+
+    return [
+        $no,
+        $root['report_date']  ? date('d-M-Y', strtotime($root['report_date']))    : '—',
+        $root['department']   ?? '—',
+        $root['line']         ?? '—',
+        $root['op']           ?? '—',
+        $root['machine_name'] ?? '—',
+        $root['machine_type'] ?? '—',
+        $root['shift']        ?? '—',
+        $root['repair_start'] ? date('d-M-Y H:i', strtotime($root['repair_start'])) : '—',
+        $waktuSelesai          ? date('d-M-Y H:i', strtotime($waktuSelesai))         : '—',
+        durasiMenit($root['repair_start'], $waktuSelesai),
+        $root['reported_by']  ?? '—',
+        $root['pic']          ?? '—',
+        $root['problem']      ?? '—',
+        $root['action']       ?? '—',
+        statusLabel($chain['status']),
+        $root['created_at']   ? date('d-M-Y H:i', strtotime($root['created_at']))    : '—',
+        combineFollowupLines($followups, 'reported_by'),
+        combineFollowupLines($followups, 'shift'),
+        combineFollowupLines($followups, 'repair_start', $dtFmt),
+        combineFollowupLines($followups, 'repair_finish', $dtFmt),
+        combineFollowupDuration($followups),
+        combineFollowupLines($followups, 'pic'),
+        combineFollowupLines($followups, 'problem'),
+        combineFollowupLines($followups, 'action'),
+        combineFollowupLines($followups, 'created_at', $dtFmt),
+    ];
 }
 
 // ── Helper: pasang hyperlink internal (dalam sheet yang sama) ke sel target,
@@ -437,26 +528,59 @@ $styleBorder = [
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
 ];
 
-// Kolom header — [CONROD-COLLAPSE] admin_conrod pakai format baru (1 baris =
-// 1 rangkaian penuh, kolom 16-20 berisi info dari sisi admin_maintenance/
-// technician). Role lain TETAP pakai format lama (1 baris = 1 record, dengan
-// Chain ID & continuation of work from) — tidak berubah sama sekali.
-if ($isConrodOnly) {
+// Kolom header — 3 flavor:
+// 1) $isPureMaintenanceExport : laporan MURNI maintenance/technician (26
+//    kolom, label netral "Laporan Awal" vs "(Lanjutan)", tanpa konsep Conrod).
+// 2) $useCollapsedFormat (selain di atas) : admin_conrod / Sumber Conrod /
+//    Gabungan (25 kolom, label "(Conrod)" vs "(Maintenance)").
+// 3) else : format lama (tidak lagi tercapai lewat jalur manapun, dibiarkan
+//    sebagai fallback aman).
+if ($isPureMaintenanceExport) {
     $colHeaders = [
         'No',
         'Report Date',
         'Department',
         'Line',
         'OP',
-        'Source',
         'Machine Name',
         'Machine Type',
         'Shift',
+        'Repair Start',
+        'Repair Finish',
+        'Duration (mnt)',
+        'Reported By',
+        'PIC/Technician',
+        'Problem / Alarm',
+        'Corrective Action',
+        'Status',
+        'Submitted At',
+        'Continued By',
+        'Shift (Lanjutan)',
+        'Repair Start (Lanjutan)',
+        'Repair Finish (Lanjutan)',
+        'Repair Duration (mnt)',
+        'PIC/Technician (Lanjutan)',
+        'Problem / Alarm (Lanjutan)',
+        'Corrective Action (Lanjutan)',
+        'Submitted At (Lanjutan)',
+    ];
+} elseif ($useCollapsedFormat) {
+    $colHeaders = [
+        'No',
+        'Report Date',
+        'Department',
+        'Line',
+        'OP',
+        'Machine Name',
+        'Machine Type',
+        'Shift',
+        'Source',
         'Waktu Kejadian (Conrod)',
         'Waktu Selesai (Conrod)',
         'Duration (mnt)',
         'Problem / Alarm (Conrod)',
         'Status',
+        'Submitted By (Conrod)',
         'Submitted At (Conrod)',
         'Continued By',
         'Shift (Maintenance)',
@@ -494,6 +618,11 @@ if ($isConrodOnly) {
     ];
 }
 
+// [MAINTENANCE-COLLAPSE] Fungsi builder baris data dipilih sesuai flavor —
+// dipakai sama persis di MODE DAILY & MODE MONTHLY/RANGE di bawah supaya
+// tidak ada duplikasi if/else di 2 tempat.
+$chainRowBuilder = $isPureMaintenanceExport ? 'buildMaintenanceChainRowData' : 'buildConrodRowData';
+
 // ── Excel ─────────────────────────────────────────────────────────────────────
 $spreadsheet = new Spreadsheet();
 $spreadsheet->getCalculationEngine()->disableCalculationCache();
@@ -501,32 +630,62 @@ $spreadsheet->getCalculationEngine()->disableCalculationCache();
 // Lebar kolom tetap (dipakai semua sheet) — N & O dilebarkan untuk Problem/Action
 // dengan wrap text supaya isian berpoin-poin tetap terbaca rapi ke bawah, bukan
 // melebar ke samping seperti hasil autosize.
-if ($isConrodOnly) {
+if ($isPureMaintenanceExport) {
+    $colWidths = [
+        'A' => 5,   // No
+        'B' => 13,  // Report Date
+        'C' => 18,  // Department
+        'D' => 14,  // Line
+        'E' => 8,   // OP
+        'F' => 24,  // Machine Name
+        'G' => 16,  // Machine Type
+        'H' => 10,  // Shift
+        'I' => 18,  // Repair Start
+        'J' => 18,  // Repair Finish
+        'K' => 10,  // Duration (mnt)
+        'L' => 16,  // Reported By
+        'M' => 16,  // PIC/Technician
+        'N' => 34,  // Problem / Alarm
+        'O' => 34,  // Corrective Action
+        'P' => 12,  // Status
+        'Q' => 18,  // Submitted At
+        'R' => 18,  // Continued By
+        'S' => 12,  // Shift (Lanjutan)
+        'T' => 18,  // Repair Start (Lanjutan)
+        'U' => 18,  // Repair Finish (Lanjutan)
+        'V' => 12,  // Repair Duration (mnt)
+        'W' => 16,  // PIC/Technician (Lanjutan)
+        'X' => 34,  // Problem / Alarm (Lanjutan)
+        'Y' => 34,  // Corrective Action (Lanjutan)
+        'Z' => 18,  // Submitted At (Lanjutan)
+    ];
+} elseif ($useCollapsedFormat) {
     $colWidths = [
         'A' => 5,   // No
         'B' => 13,  // Report Date
         'C' => 16,  // Department
         'D' => 14,  // Line
         'E' => 8,   // OP
-        'F' => 20,  // Source (Foreman)
-        'G' => 24,  // Machine Name
-        'H' => 16,  // Machine Type
-        'I' => 10,  // Shift
+        'F' => 24,  // Machine Name
+        'G' => 16,  // Machine Type
+        'H' => 10,  // Shift
+        'I' => 20,  // Source (Foreman)
         'J' => 18,  // Waktu Kejadian (Conrod)
         'K' => 18,  // Waktu Selesai (Conrod)
         'L' => 10,  // Duration (mnt)
         'M' => 34,  // Problem / Alarm (Conrod)
         'N' => 12,  // Status
-        'O' => 18,  // Submitted At (Conrod)
-        'P' => 18,  // Continued By
-        'Q' => 12,  // Shift (Maintenance)
-        'R' => 18,  // Repair Start (Maintenance)
-        'S' => 18,  // Repair Finish (Maintenance)
-        'T' => 12,  // Repair Duration (mnt)
-        'U' => 16,  // PIC/Technician
-        'V' => 34,  // Problem / Alarm (Maintenance)
-        'W' => 34,  // Corrective Action
-        'X' => 18,  // Submitted At (Maintenance)
+        'O' => 16,  // Submitted By (Conrod)
+        'P' => 18,  // Submitted At (Conrod)
+        'Q' => 18,  // Continued By
+        'R' => 12,  // Shift (Maintenance)
+        'S' => 18,  // Repair Start (Maintenance)
+        'T' => 18,  // Repair Finish (Maintenance)
+        'U' => 12,  // Repair Duration (mnt)
+        'V' => 16,  // PIC/Technician
+        'W' => 34,  // Problem / Alarm (Maintenance)
+        'X' => 34,  // Corrective Action
+        'Y' => 18,  // Submitted At (Maintenance)
     ];
 } else {
     $colWidths = [
@@ -555,13 +714,15 @@ if ($isConrodOnly) {
 
 // Kolom yang di-tengah-kan (center) — beda per format karena posisi kolom
 // angka/kode berbeda antara format baru (admin_conrod) & format lama.
-$centerCols = $isConrodOnly ? ['A', 'E', 'I', 'L', 'N', 'Q', 'T'] : ['A', 'E', 'I', 'L', 'Q', 'R', 'S'];
+$centerCols = $isPureMaintenanceExport
+    ? ['A', 'E', 'H', 'K', 'P', 'S', 'V']
+    : ($useCollapsedFormat ? ['A', 'E', 'H', 'L', 'N', 'R', 'U'] : ['A', 'E', 'I', 'L', 'Q', 'R', 'S']);
 
 // [CONROD-COLLAPSE] Batas kolom kanan tabel — format admin_conrod sekarang
 // 24 kolom (A–X) karena ada tambahan Shift/Repair Start/Repair Finish/Repair
 // Duration versi maintenance. Format lama tetap 20 kolom (A–T), tidak berubah.
 // Dipakai di semua mergeCells/style/autofilter yang sebelumnya hardcode 'T'.
-$lastCol = $isConrodOnly ? 'X' : 'T';
+$lastCol = $isPureMaintenanceExport ? 'Z' : ($useCollapsedFormat ? 'Y' : 'T');
 
 // ═════════════════════════════════════════════════════════════════════════════
 // MODE DAILY — 1 sheet, 1 blok per record
@@ -604,7 +765,7 @@ if ($mode === 'daily') {
 
     $startRow = 4;
 
-    if ($isConrodOnly) {
+    if ($useCollapsedFormat) {
         // [CONROD-COLLAPSE] 1 blok = 1 chain (root + seluruh follow-up digabung
         // di kolom 16-20 lewat combineFollowupLines()) — tidak ada lagi Chain ID
         // / continuation of work from / hyperlink, karena sudah tidak relevan.
@@ -633,7 +794,7 @@ if ($mode === 'daily') {
             $sheet->getRowDimension($hdrRow)->setRowHeight(-1);
             $startRow++;
 
-            $sheet->fromArray(buildConrodRowData($chain, $idx + 1), NULL, "A{$startRow}");
+            $sheet->fromArray($chainRowBuilder($chain, $idx + 1), NULL, "A{$startRow}");
             $sheet->getStyle("A{$startRow}:{$lastCol}{$startRow}")->getAlignment()
                 ->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
             $sheet->getRowDimension($startRow)->setRowHeight(-1);
@@ -775,7 +936,7 @@ if ($mode === 'daily') {
     $prevDate      = '';
     $dataRows      = [];
 
-    if ($isConrodOnly) {
+    if ($useCollapsedFormat) {
         // [CONROD-COLLAPSE] 1 baris = 1 chain (root + follow-up digabung).
         // Tidak ada lagi Chain ID / continuation of work from / hyperlink.
         $no = 1;
@@ -792,7 +953,7 @@ if ($mode === 'daily') {
                 $prevDate = $curDate;
             }
 
-            $sheet->fromArray(buildConrodRowData($chain, $no++), NULL, "A{$row}");
+            $sheet->fromArray($chainRowBuilder($chain, $no++), NULL, "A{$row}");
 
             $dataRows[] = $row;
             $sheet->getRowDimension($row)->setRowHeight(-1);
@@ -884,8 +1045,8 @@ if ($mode === 'daily') {
 
     // ── Baris Total : total record + total durasi — style sama seperti baris
     // Total di sheet Summary sebelumnya (dark fill, bold, putih)
-    $totalMenit  = $isConrodOnly ? totalDurasiMenitConrod($chains) : totalDurasiMenit($rows);
-    $totalRecord = $isConrodOnly ? count($chains) : count($rows);
+    $totalMenit  = $useCollapsedFormat ? totalDurasiMenitConrod($chains) : totalDurasiMenit($rows);
+    $totalRecord = $useCollapsedFormat ? count($chains) : count($rows);
     $sheet->mergeCells("A{$row}:{$lastCol}{$row}");
     $sheet->setCellValue(
         "A{$row}",
@@ -904,6 +1065,12 @@ if ($mode === 'daily') {
     $sheet->freezePane('A5');
 }
 
+// ── Export ─────────────────────────────────────────────────────────────────────
+// [FIX-3] Save ke file temp dulu, baru stream ke browser
+// Langsung ke php://output berisiko: koneksi browser bisa timeout sebelum
+// PhpSpreadsheet selesai generate (terutama monthly mode dengan 2 sheet).
+// Content-Length memberi tahu browser ukuran file yang akan datang,
+// sehingga download bar muncul dan koneksi tidak dianggap "menggantung".
 $writer = new Xlsx($spreadsheet);
 $writer->setPreCalculateFormulas(false);
 
@@ -918,3 +1085,4 @@ header('Content-Length: ' . filesize($tmpFile));
 readfile($tmpFile);
 unlink($tmpFile);
 exit;
+    
