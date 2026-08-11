@@ -1599,7 +1599,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                             <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm <span class="text-red-400">*</span>
                                         </label>
                                         <textarea id="inp-problem" class="form-field"
-                                            placeholder="Deskripsi masalah atau kode alarm yang muncul..."
+                                            placeholder="Deskripsi masalah dan analisa penyebabnya"
                                             style="min-height:110px;"></textarea>
                                     </div>
 
@@ -1693,7 +1693,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                             <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm <span class="text-red-400">*</span>
                                         </label>
                                         <textarea id="inp-problem" class="form-field"
-                                            placeholder="Deskripsi masalah atau kode alarm yang muncul..."
+                                            placeholder="Deskripsikan masalah dan berikan analisanya"
                                             style="min-height:80px;"></textarea>
                                     </div>
 
@@ -1761,7 +1761,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                         <textarea id="fu-original-problem" class="form-field" readonly style="min-height:60px;background:#f8fafc;color:#64748b;"></textarea>
                                     </div>
 
-                                    <!-- Waktu Kejadian & Waktu Selesai dari Admin Conrod (read-only, referensi) -->
+                                    <!-- Waktu Kejadian, Waktu Selesai, & Problem/Alarm dari Admin Conrod
+                                         (read-only, referensi) -->
                                     <div class="col-span-3" id="fu-incident-time-wrap" style="display:none;">
                                         <div class="grid grid-cols-2 gap-4">
                                             <div>
@@ -1777,6 +1778,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                                     <span class="text-slate-300 font-normal normal-case text-[10px]">(dari Admin Conrod)</span>
                                                 </label>
                                                 <input type="text" id="fu-incident-finish-time" class="form-field" readonly style="background:#f8fafc;color:#64748b;cursor:default;">
+                                            </div>
+                                            <div class="col-span-2">
+                                                <label class="form-label block mb-1.5">
+                                                    <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm
+                                                    <span class="text-slate-300 font-normal normal-case text-[10px]">(dari Admin Conrod)</span>
+                                                </label>
+                                                <textarea id="fu-incident-problem" class="form-field" readonly style="min-height:60px;background:#f8fafc;color:#64748b;"></textarea>
                                             </div>
                                         </div>
                                     </div>
@@ -1855,7 +1863,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                             <i class="fas fa-exclamation-triangle text-slate-300 mr-1"></i> Problem / Alarm <span class="text-red-400">*</span>
                                         </label>
                                         <textarea id="fu-problem" class="form-field"
-                                            placeholder="Deskripsi masalah saat ini (boleh sama dengan laporan awal)..."
+                                            placeholder="Deskripsi masalah dan analisa penyebabnya."
                                             style="min-height:80px;"></textarea>
                                     </div>
 
@@ -2786,6 +2794,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             const incidentWrap = document.getElementById('fu-incident-time-wrap');
             const incidentBox = document.getElementById('fu-incident-time');
             const incidentFinishBox = document.getElementById('fu-incident-finish-time');
+            const incidentProblemBox = document.getElementById('fu-incident-problem');
             if (!id || !followupSources[id]) {
                 box.value = '';
                 badge.style.display = 'none';
@@ -2793,6 +2802,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                 incidentWrap.style.display = 'none';
                 incidentBox.value = '';
                 incidentFinishBox.value = '';
+                incidentProblemBox.value = '';
                 resetLeftPanelLockedEmpty();
                 checkFollowupFieldsFilled();
                 return;
@@ -2804,19 +2814,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             badge.className = 'src-badge';
             badge.style.cssText = `display:inline-flex;background:${meta.bg};color:${meta.text};margin-left:6px;`;
             badge.innerHTML = `<span class="sb-dot" style="background:${meta.dot};"></span>${meta.label}`;
-            // Waktu Kejadian (repair_start) & Waktu Selesai (conrod_finish_at) — cuma
-            // relevan & tersedia buat laporan yang sumbernya dari Admin Conrod, supaya
-            // maintenance tahu kapan kejadiannya dilaporkan & (kalau sudah) kapan admin
+            // Waktu Kejadian (repair_start), Waktu Selesai (conrod_finish_at), & Problem/
+            // Alarm — cuma relevan & tersedia buat laporan yang sumbernya dari Admin
+            // Conrod, supaya maintenance tahu kapan kejadiannya dilaporkan, apa
+            // problem/alarm yang ditulis admin_conrod, & (kalau sudah) kapan admin
             // conrod menandai selesai versi dia sendiri, sebelum mereka melanjutkan.
             if (src.repair_start) {
                 incidentBox.value = src.repair_start.replace('T', ' ').slice(0, 16);
                 incidentFinishBox.value = src.conrod_finish_at ?
                     src.conrod_finish_at.replace('T', ' ').slice(0, 16) :
                     '-';
+                incidentProblemBox.value = src.problem || '—';
                 incidentWrap.style.display = 'block';
             } else {
                 incidentBox.value = '';
                 incidentFinishBox.value = '';
+                incidentProblemBox.value = '';
                 incidentWrap.style.display = 'none';
             }
             if (scheduleBtn) {
@@ -2968,6 +2981,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             document.getElementById('fu-incident-time-wrap').style.display = 'none';
             document.getElementById('fu-incident-time').value = '';
             document.getElementById('fu-incident-finish-time').value = '';
+            document.getElementById('fu-incident-problem').value = '';
             resetLeftPanelLockedEmpty();
             document.getElementById('fu-start-date').value = '';
             document.getElementById('fu-start-time').value = '';

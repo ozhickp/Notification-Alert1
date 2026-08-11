@@ -491,12 +491,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     $stmt = $pdo->prepare("
         SELECT r.*,
                -- [TAMBAH-INFO-REORDER] Sama seperti pola di endpoint list (ajax=list):
-               -- Waktu Kejadian & Waktu Selesai versi Conrod HARUS selalu dari laporan
-               -- root, bukan dari baris follow-up ini sendiri (follow-up tidak punya
-               -- foreman/conrod_finish_at). Dipakai untuk menampilkan referensi di
-               -- form 'Tambah Info' kalau chain-nya berasal dari admin_conrod.
+               -- Waktu Kejadian, Waktu Selesai, & Problem/Alarm versi Conrod HARUS selalu
+               -- dari laporan root, bukan dari baris follow-up ini sendiri (follow-up
+               -- tidak punya foreman/conrod_finish_at, dan problem-nya sendiri adalah
+               -- kondisi TERKINI, bukan tulisan admin_conrod). Dipakai untuk menampilkan
+               -- referensi di form 'Tambah Info' kalau chain-nya berasal dari admin_conrod.
                (SELECT rt.repair_start FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS conrod_time_start,
                (SELECT rt.conrod_finish_at FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS conrod_time_finish,
+               (SELECT rt.problem FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS conrod_problem,
                (SELECT (rt.foreman IS NOT NULL AND rt.foreman <> '') OR rt.source_role = 'admin_conrod'
                   FROM e_reports rt WHERE rt.id = COALESCE(r.parent_id, r.id)) AS root_is_conrod
         FROM e_reports r
@@ -2298,9 +2300,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         <div class="text-xs font-semibold text-slate-700" id="edit-machine-info"></div>
                     </div>
 
-                    <!-- [TAMBAH-INFO-REORDER] Waktu Kejadian & Waktu Selesai versi Conrod — cuma
-                         tampil kalau chain laporan ini berasal dari admin_conrod (root_is_conrod).
-                         Waktu Selesai tampil '-' selama admin_conrod belum menandainya. -->
+                    <!-- [TAMBAH-INFO-REORDER] Waktu Kejadian, Waktu Selesai, & Problem/Alarm versi
+                         Conrod — cuma tampil kalau chain laporan ini berasal dari admin_conrod
+                         (root_is_conrod). Waktu Selesai tampil '-' selama admin_conrod belum
+                         menandainya. Problem/Alarm ini murni referensi (apa yang ditulis admin_conrod
+                         di laporan awal), bukan field yang bisa diedit di sini. -->
                     <div class="mb-4 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-2.5" id="edit-conrod-time-wrap" style="display:none;">
                         <div class="grid grid-cols-2 gap-x-4">
                             <div>
@@ -2310,6 +2314,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                             <div>
                                 <div class="text-[10px] font-bold text-teal-500 uppercase tracking-wider mb-1">Waktu Selesai <span class="normal-case font-normal">(Admin Conrod)</span></div>
                                 <div class="text-xs font-semibold text-slate-700" id="edit-conrod-finish-time">—</div>
+                            </div>
+                            <div class="col-span-2 pt-2.5 mt-2.5 border-t border-teal-200">
+                                <div class="text-[10px] font-bold text-teal-500 uppercase tracking-wider mb-1">Problem / Alarm <span class="normal-case font-normal">(Admin Conrod)</span></div>
+                                <div class="text-xs font-semibold text-slate-700" id="edit-conrod-problem" style="white-space:pre-wrap;">—</div>
                             </div>
                         </div>
                     </div>
@@ -4103,9 +4111,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             document.getElementById('edit-machine-info').innerHTML =
                 `<i class="fas fa-industry mr-1.5 text-slate-400"></i> ${esc(r.department)} — ${esc(r.line)} | OP: ${esc(r.op || '—')} | ${esc(r.machine_name)} (${esc(r.machine_type || '—')})`;
 
-            // [TAMBAH-INFO-REORDER] Waktu Kejadian & Waktu Selesai versi Conrod — cuma
-            // tampil kalau chain laporan ini berasal dari admin_conrod. Waktu Selesai
-            // pakai '-' selama admin_conrod belum menandainya (conrod_time_finish null).
+            // [TAMBAH-INFO-REORDER] Waktu Kejadian, Waktu Selesai, & Problem/Alarm versi
+            // Conrod — cuma tampil kalau chain laporan ini berasal dari admin_conrod.
+            // Waktu Selesai pakai '-' selama admin_conrod belum menandainya
+            // (conrod_time_finish null). Problem/Alarm murni referensi (read-only).
             const isFromConrod = !!(Number(r.root_is_conrod) || r.root_is_conrod === true);
             document.getElementById('edit-conrod-time-wrap').style.display = isFromConrod ? 'block' : 'none';
             if (isFromConrod) {
@@ -4113,6 +4122,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     r.conrod_time_start ? r.conrod_time_start.replace('T', ' ').slice(0, 16) : '—';
                 document.getElementById('edit-conrod-finish-time').textContent =
                     r.conrod_time_finish ? r.conrod_time_finish.replace('T', ' ').slice(0, 16) : '-';
+                document.getElementById('edit-conrod-problem').textContent = r.conrod_problem || '—';
             }
 
             // Reset semua field — shift 2 mulai dari awal bukan dari data shift 1
