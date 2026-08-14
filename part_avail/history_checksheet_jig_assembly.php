@@ -1,89 +1,81 @@
 <?php
-// history_checksheet_painting.php
+// history_checksheet_jig_assembly.php
+// Pola & struktur JS SENGAJA dibuat semirip mungkin dengan
+// history_checksheet_painting.php: list card per submission, modal detail
+// dengan inline-edit per item, dan riwayat edit (collapsed by default).
 require_once __DIR__ . '/config.php';
 
-// ─── Gate akses: sama seperti dashboard_checksheet_painting.php ───────────
+// ─── Gate akses ─────────────────────────────────────────────────────────────
 if (session_status() === PHP_SESSION_NONE) session_start();
-if (empty($_SESSION['checksheet_unlocked']) || ($_SESSION['checksheet_area'] ?? '') !== 'painting') {
+if (empty($_SESSION['checksheet_unlocked']) || ($_SESSION['checksheet_area'] ?? '') !== 'jig_assembly') {
     if (isset($_GET['ajax'])) {
         header('Content-Type: application/json');
         http_response_code(403);
         echo json_encode(['error' => 'unauthorized']);
         exit;
     }
-    header('Location: checksheet_gate.php?redirect=history_checksheet_painting.php');
+    header('Location: checksheet_gate.php?redirect=history_checksheet_jig_assembly.php');
     exit;
 }
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-// ─── Helper: label bulan Indonesia dari 'YYYY-MM' ──────────────────────────
-function indoMonthLabel(string $periodYm): string
+function jigAssemblyQuarterLabel(int $quarter): string
 {
-    static $bulan = [
-        1 => 'Januari',
-        2 => 'Februari',
-        3 => 'Maret',
-        4 => 'April',
-        5 => 'Mei',
-        6 => 'Juni',
-        7 => 'Juli',
-        8 => 'Agustus',
-        9 => 'September',
-        10 => 'Oktober',
-        11 => 'November',
-        12 => 'Desember',
-    ];
-    [$y, $m] = array_pad(explode('-', $periodYm), 2, null);
-    $m = (int)$m;
-    return ($bulan[$m] ?? $periodYm) . ' ' . $y;
+    $labels = [1 => 'Kuartal 1 (Jan–Mar)', 2 => 'Kuartal 2 (Apr–Jun)', 3 => 'Kuartal 3 (Jul–Sep)', 4 => 'Kuartal 4 (Okt–Des)'];
+    return $labels[$quarter] ?? '-';
 }
 
-// ─── AJAX: daftar checker painting (dipakai juga untuk pilih "pengedit") ───
+// ─── AJAX: daftar checker (dipakai juga untuk pilih "pengedit") ────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'checkers') {
     header('Content-Type: application/json');
-    $rows = $pdo->query("SELECT nama FROM checker_painting WHERE is_active = 1 ORDER BY nama")->fetchAll();
+    $rows = $pdo->query("SELECT nama FROM checker_jig_assembly WHERE is_active = 1 ORDER BY nama")->fetchAll();
     echo json_encode(['checkers' => array_column($rows, 'nama')]);
     exit;
 }
 
-// ─── AJAX: daftar submission (list bulan yang sudah diisi) + search ────────
+// ─── AJAX: daftar submission (list periode yang sudah diisi) + search ──────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'list') {
     header('Content-Type: application/json');
 
     $q = trim($_GET['q'] ?? '');
 
     $rows = $pdo->query("
-        SELECT s.id, s.period_month, s.check_date, s.checker, s.submitted_at,
+        SELECT s.id, s.check_date, s.checker, s.submitted_at,
                COUNT(d.id) AS total_items,
-               SUM(d.action_status = 'checked') AS checked_count,
-               SUM(d.result = 'OK') AS ok_count,
-               SUM(d.result = 'NG') AS ng_count
-        FROM painting_checksheet_submissions s
-        LEFT JOIN painting_checksheet_submission_details d ON d.submission_id = s.id
+               SUM(d.visual_result = 'OK') AS ok_count,
+               SUM(d.visual_result = 'NG') AS ng_count
+        FROM jig_assembly_submissions s
+        LEFT JOIN jig_assembly_submission_details d ON d.submission_id = s.id
         GROUP BY s.id
-        ORDER BY s.period_month DESC
+        ORDER BY s.check_date DESC
     ")->fetchAll();
 
-    if ($q !== '') {
-        $qLower = mb_strtolower($q);
-        $like   = '%' . $q . '%';
+    foreach ($rows as &$r) {
+        $ts      = strtotime($r['check_date']);
+        $quarter = intdiv(((int)date('n', $ts)) - 1, 3) + 1;
+        $r['period_label'] = jigAssemblyQuarterLabel($quarter) . ' ' . date('Y', $ts);
+    }
+    unset($r);
 
-        // Cocokkan juga isi item (unit/part/note) supaya pencarian nama part
-        // atau catatan bisa langsung menemukan bulan yang relevan.
+    if ($q !== '') {
+        $like = '%' . $q . '%';
+
+        // Cocokkan juga isi item (nama mesin/jig, check point, catatan)
         $stmtItem = $pdo->prepare("
-            SELECT DISTINCT submission_id
-            FROM painting_checksheet_submission_details
-            WHERE unit_name LIKE ? OR part LIKE ? OR note LIKE ?
+            SELECT DISTINCT d.submission_id
+            FROM jig_assembly_submission_details d
+            JOIN jig_assembly_machines m ON m.id = d.machine_id
+            JOIN jig_assembly_checkpoints c ON c.id = d.checkpoint_id
+            WHERE m.machine_name LIKE ? OR m.jig_name LIKE ? OR c.check_point LIKE ? OR d.note LIKE ?
         ");
-        $stmtItem->execute([$like, $like, $like]);
+        $stmtItem->execute([$like, $like, $like, $like]);
         $matchIds = array_column($stmtItem->fetchAll(), 'submission_id');
 
+        $qLower = mb_strtolower($q);
         $rows = array_values(array_filter($rows, function ($r) use ($qLower, $matchIds) {
-            $monthLabel = mb_strtolower(indoMonthLabel($r['period_month']));
             return str_contains(mb_strtolower($r['checker'] ?? ''), $qLower)
-                || str_contains($r['period_month'], $qLower)
-                || str_contains($monthLabel, $qLower)
+                || str_contains(mb_strtolower($r['period_label']), $qLower)
                 || str_contains($r['check_date'], $qLower)
                 || in_array($r['id'], $matchIds, true);
         }));
@@ -93,11 +85,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'list') {
     exit;
 }
 
-// ─── AJAX: detail 1 submission ─────────────────────────────────────────────
+// ─── AJAX: detail 1 submission, dikelompokkan per mesin/jig ────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail' && isset($_GET['id'])) {
     header('Content-Type: application/json');
 
-    $stmtSub = $pdo->prepare("SELECT * FROM painting_checksheet_submissions WHERE id = ?");
+    $stmtSub = $pdo->prepare("SELECT * FROM jig_assembly_submissions WHERE id = ?");
     $stmtSub->execute([(int)$_GET['id']]);
     $sub = $stmtSub->fetch();
     if (!$sub) {
@@ -106,36 +98,25 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail' && isset($_GET['id'])) {
     }
 
     $stmtDet = $pdo->prepare("
-        SELECT id, unit_name, no, part, action_status, result, note
-        FROM painting_checksheet_submission_details
-        WHERE submission_id = ?
-        ORDER BY unit_name, no
+        SELECT d.id, d.checkpoint_id, d.machine_id, d.visual_result, d.actual_diameter, d.note,
+               m.no AS machine_no, m.machine_name, m.jig_name,
+               c.no AS cp_no, c.check_point, c.is_diameter, c.standard_value
+        FROM jig_assembly_submission_details d
+        JOIN jig_assembly_machines m ON m.id = d.machine_id
+        JOIN jig_assembly_checkpoints c ON c.id = d.checkpoint_id
+        WHERE d.submission_id = ?
+        ORDER BY m.sort_order, m.id, c.sort_order, c.no
     ");
     $stmtDet->execute([(int)$_GET['id']]);
     $details = $stmtDet->fetchAll();
 
-    // Kelompokkan per unit sesuai urutan kemunculan
     $grouped = [];
     foreach ($details as $d) {
-        $grouped[$d['unit_name']][] = $d;
+        $label = $d['machine_no'] . '. ' . $d['machine_name'] . ' — ' . $d['jig_name'];
+        $grouped[$label][] = $d;
     }
 
     echo json_encode(['submission' => $sub, 'grouped' => $grouped]);
-    exit;
-}
-
-// ─── AJAX: riwayat edit untuk 1 submission (ringkas) ───────────────────────
-if (isset($_GET['ajax']) && $_GET['ajax'] === 'edit_log' && isset($_GET['submission_id'])) {
-    header('Content-Type: application/json');
-
-    $stmt = $pdo->prepare("
-        SELECT unit_name, part, field_changed, old_value, new_value, edited_by, edited_at
-        FROM painting_checksheet_edit_log
-        WHERE submission_id = ?
-        ORDER BY edited_at DESC, id DESC
-    ");
-    $stmt->execute([(int)$_GET['submission_id']]);
-    echo json_encode(['logs' => $stmt->fetchAll()]);
     exit;
 }
 
@@ -145,26 +126,31 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'update_detail' && $_SERVER['REQUE
 
     $detailId  = (int)($_POST['detail_id'] ?? 0);
     $editedBy  = trim($_POST['edited_by'] ?? '');
-    $newResult = $_POST['result'] ?? '';
-    $newAction = $_POST['action_status'] ?? '';
+    $newResult = $_POST['visual_result'] ?? '';
+    $newActual = trim($_POST['actual_diameter'] ?? '');
     $newNote   = trim($_POST['note'] ?? '');
 
     $newResult = in_array($newResult, ['OK', 'NG'], true) ? $newResult : null;
-    $newAction = in_array($newAction, ['checked', 'unchecked'], true) ? $newAction : 'unchecked';
 
     if (!$detailId || $editedBy === '') {
         echo json_encode(['success' => false, 'message' => 'Data tidak lengkap.']);
         exit;
     }
 
-    $stmtChecker = $pdo->prepare("SELECT COUNT(*) FROM checker_painting WHERE nama = ? AND is_active = 1");
+    $stmtChecker = $pdo->prepare("SELECT COUNT(*) FROM checker_jig_assembly WHERE nama = ? AND is_active = 1");
     $stmtChecker->execute([$editedBy]);
     if (!$stmtChecker->fetchColumn()) {
         echo json_encode(['success' => false, 'message' => 'Pilih nama pengedit yang valid.']);
         exit;
     }
 
-    $stmtOld = $pdo->prepare("SELECT * FROM painting_checksheet_submission_details WHERE id = ?");
+    $stmtOld = $pdo->prepare("
+        SELECT d.*, m.no AS machine_no, m.machine_name, m.jig_name, c.check_point
+        FROM jig_assembly_submission_details d
+        JOIN jig_assembly_machines m ON m.id = d.machine_id
+        JOIN jig_assembly_checkpoints c ON c.id = d.checkpoint_id
+        WHERE d.id = ?
+    ");
     $stmtOld->execute([$detailId]);
     $old = $stmtOld->fetch();
     if (!$old) {
@@ -172,9 +158,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'update_detail' && $_SERVER['REQUE
         exit;
     }
 
+    $machineLabel = $old['machine_no'] . '. ' . $old['machine_name'] . ' — ' . $old['jig_name'];
+
     $changes = [];
-    if ($newResult !== $old['result']) $changes[] = ['result', $old['result'] ?: '-', $newResult ?: '-'];
-    if ($newAction !== $old['action_status']) $changes[] = ['action_status', $old['action_status'], $newAction];
+    if ($newResult !== $old['visual_result']) $changes[] = ['visual_result', $old['visual_result'] ?: '-', $newResult ?: '-'];
+    if ($newActual !== ($old['actual_diameter'] ?? '')) $changes[] = ['actual_diameter', $old['actual_diameter'] ?: '-', $newActual ?: '-'];
     if ($newNote !== ($old['note'] ?? '')) $changes[] = ['note', $old['note'] ?: '-', $newNote ?: '-'];
 
     if (empty($changes)) {
@@ -186,19 +174,19 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'update_detail' && $_SERVER['REQUE
         $pdo->beginTransaction();
 
         $upd = $pdo->prepare("
-            UPDATE painting_checksheet_submission_details
-            SET result = ?, action_status = ?, note = ?
+            UPDATE jig_assembly_submission_details
+            SET visual_result = ?, actual_diameter = ?, note = ?
             WHERE id = ?
         ");
-        $upd->execute([$newResult, $newAction, $newNote, $detailId]);
+        $upd->execute([$newResult, $newActual !== '' ? $newActual : null, $newNote !== '' ? $newNote : null, $detailId]);
 
         $log = $pdo->prepare("
-            INSERT INTO painting_checksheet_edit_log
-                (submission_id, detail_id, unit_name, part, field_changed, old_value, new_value, edited_by, edited_at)
+            INSERT INTO jig_assembly_edit_log
+                (submission_id, detail_id, machine_label, check_point, field_changed, old_value, new_value, edited_by, edited_at)
             VALUES (?,?,?,?,?,?,?,?, NOW())
         ");
         foreach ($changes as [$field, $oldVal, $newVal]) {
-            $log->execute([$old['submission_id'], $detailId, $old['unit_name'], $old['part'], $field, $oldVal, $newVal, $editedBy]);
+            $log->execute([$old['submission_id'], $detailId, $machineLabel, $old['check_point'], $field, $oldVal, $newVal, $editedBy]);
         }
 
         $pdo->commit();
@@ -210,29 +198,84 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'update_detail' && $_SERVER['REQUE
     exit;
 }
 
-// ─── Data ringkasan untuk header halaman ───────────────────────────────────
-$totalSubmissions = (int)$pdo->query("SELECT COUNT(*) FROM painting_checksheet_submissions")->fetchColumn();
-$currentPeriod     = date('Y-m');
-$stmtCur           = $pdo->prepare("SELECT id FROM painting_checksheet_submissions WHERE period_month = ?");
-$stmtCur->execute([$currentPeriod]);
-$currentSubmitted  = (bool)$stmtCur->fetchColumn();
+// ─── AJAX: riwayat edit untuk 1 submission ──────────────────────────────────
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'edit_log' && isset($_GET['submission_id'])) {
+    header('Content-Type: application/json');
 
-// Tahun-tahun yang punya data, untuk dropdown export tahunan
+    $stmt = $pdo->prepare("
+        SELECT machine_label, check_point, field_changed, old_value, new_value, edited_by, edited_at
+        FROM jig_assembly_edit_log
+        WHERE submission_id = ?
+        ORDER BY edited_at DESC, id DESC
+    ");
+    $stmt->execute([(int)$_GET['submission_id']]);
+    echo json_encode(['logs' => $stmt->fetchAll()]);
+    exit;
+}
+
+// ─── Helper periode 3 bulanan (anchor April 2026) — sama persis dengan
+// dashboard_checksheet_jig_assembly.php, supaya status "periode berjalan"
+// di History konsisten dengan dashboard.
+function jigAssemblyCurrentPeriod(PDO $pdo, string $today): array
+{
+    $anchor  = new DateTime('2026-04-01');
+    $todayDt = new DateTime($today);
+
+    if ($todayDt < $anchor) {
+        $periodStart = clone $anchor;
+    } else {
+        $diffMonths  = (((int)$todayDt->format('Y')) - (int)$anchor->format('Y')) * 12
+            + ((int)$todayDt->format('n') - (int)$anchor->format('n'));
+        $periodIndex = intdiv($diffMonths, 3);
+        $periodStart = (clone $anchor)->modify('+' . ($periodIndex * 3) . ' months');
+    }
+    $periodEnd       = (clone $periodStart)->modify('+3 months')->modify('-1 day');
+    $nextPeriodStart = (clone $periodStart)->modify('+3 months');
+
+    $stmt = $pdo->prepare(
+        "SELECT check_date, checker FROM jig_assembly_submissions
+         WHERE check_date BETWEEN ? AND ?
+         ORDER BY check_date DESC, id DESC LIMIT 1"
+    );
+    $stmt->execute([$periodStart->format('Y-m-d'), $periodEnd->format('Y-m-d')]);
+    $submission = $stmt->fetch() ?: null;
+
+    return [
+        'period_start'      => $periodStart->format('Y-m-d'),
+        'period_end'        => $periodEnd->format('Y-m-d'),
+        'next_period_start' => $nextPeriodStart->format('Y-m-d'),
+        'submission'        => $submission,
+        'filled'            => $submission !== null,
+    ];
+}
+
+// ─── Data ringkasan untuk header halaman ───────────────────────────────────
+$totalSubmissions = (int)$pdo->query("SELECT COUNT(*) FROM jig_assembly_submissions")->fetchColumn();
+$currentDate      = date('Y-m-d');
+$periodInfo       = jigAssemblyCurrentPeriod($pdo, $currentDate);
+$periodFilled     = $periodInfo['filled'];
+
+// Daftar submission (periode) untuk dropdown "Export Periode"
+$exportableSubmissions = $pdo->query("
+    SELECT id, check_date
+    FROM jig_assembly_submissions
+    ORDER BY check_date DESC, id DESC
+")->fetchAll();
+foreach ($exportableSubmissions as &$es) {
+    $tsEs = strtotime($es['check_date']);
+    $qEs  = intdiv(((int)date('n', $tsEs)) - 1, 3) + 1;
+    $es['label'] = 'Q' . $qEs . ' ' . date('Y', $tsEs) . ' · ' . date('d M Y', $tsEs);
+}
+unset($es);
+$defaultExportId = $exportableSubmissions[0]['id'] ?? null;
+
+// Tahun-tahun yang punya data, untuk dropdown "Export Tahunan"
 $availableYears = $pdo->query("
-    SELECT DISTINCT SUBSTRING(period_month, 1, 4) AS y
-    FROM painting_checksheet_submissions
+    SELECT DISTINCT SUBSTRING(check_date, 1, 4) AS y
+    FROM jig_assembly_submissions
     ORDER BY y DESC
 ")->fetchAll(PDO::FETCH_COLUMN);
 if (empty($availableYears)) $availableYears = [date('Y')];
-
-// Bulan-bulan yang sudah pernah diisi, untuk dropdown export bulanan (label "Bulan Tahun")
-$availableMonths = $pdo->query("
-    SELECT DISTINCT period_month
-    FROM painting_checksheet_submissions
-    ORDER BY period_month DESC
-")->fetchAll(PDO::FETCH_COLUMN);
-if (empty($availableMonths)) $availableMonths = [$currentPeriod];
-$defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $currentPeriod : $availableMonths[0];
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -240,7 +283,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Painting Check Sheet — History</title>
+    <title>Jig Assembly Check Sheet — History</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -351,9 +394,9 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
         }
 
         #sidebar .nav-item.active {
-            background: linear-gradient(135deg, #0f766e, #0d5c56);
+            background: linear-gradient(135deg, #e36414, #c4550f);
             color: #fff;
-            box-shadow: 0 4px 12px rgba(15, 118, 110, .35);
+            box-shadow: 0 4px 12px rgba(227, 100, 20, .35);
         }
 
         #sidebar .nav-item i {
@@ -475,6 +518,59 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             font-size: .74rem;
             font-weight: 700;
             color: #475569;
+            height: 30px;
+            box-sizing: border-box;
+            white-space: nowrap;
+        }
+
+        /* Grup "dropdown + tombol export" dibuat jadi 1 pill utuh supaya
+           tingginya sama persis dengan bulatan .info-chip lain dan tidak
+           bikin topbar pecah ke baris kedua. */
+        .export-chip-group {
+            display: inline-flex;
+            align-items: stretch;
+            height: 30px;
+            box-sizing: border-box;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 999px;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        .export-chip-group select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            border: none;
+            background: transparent;
+            font-size: .74rem;
+            font-weight: 700;
+            color: #475569;
+            padding: 0 8px 0 14px;
+            max-width: 150px;
+            height: 100%;
+            box-sizing: border-box;
+            cursor: pointer;
+            outline: none;
+            font-family: inherit;
+        }
+
+        .export-chip-group a {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0 12px;
+            font-size: .74rem;
+            font-weight: 700;
+            color: #475569;
+            border-left: 1px solid #e2e8f0;
+            white-space: nowrap;
+            text-decoration: none;
+        }
+
+        .export-chip-group a:hover {
+            background: #f1f5f9;
         }
 
         .summary-card {
@@ -484,7 +580,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             padding: 14px 18px;
         }
 
-        .month-card {
+        .day-card {
             background: #fff;
             border: 1px solid #e2e8f0;
             border-radius: 16px;
@@ -496,9 +592,9 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             transition: box-shadow .15s, border-color .15s;
         }
 
-        .month-card:hover {
+        .day-card:hover {
             box-shadow: 0 4px 14px rgba(0, 0, 0, .06);
-            border-color: #99d8d1;
+            border-color: #fbceA3;
         }
 
         .badge {
@@ -546,7 +642,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             background: #fff;
             border-radius: 20px;
             width: 100%;
-            max-width: 780px;
+            max-width: 820px;
             max-height: 85vh;
             display: flex;
             flex-direction: column;
@@ -569,7 +665,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
         .detail-unit-title {
             font-size: .76rem;
             font-weight: 800;
-            color: #0f766e;
+            color: #c4550f;
             text-transform: uppercase;
             letter-spacing: .04em;
             margin: 14px 0 6px;
@@ -577,7 +673,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
 
         .detail-item-row {
             display: grid;
-            grid-template-columns: 28px 1fr 90px 90px 1fr;
+            grid-template-columns: 22px 1fr 90px 70px 64px 1fr 24px;
             gap: 10px;
             padding: 6px 0;
             font-size: .78rem;
@@ -608,10 +704,6 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             color: #94a3b8;
         }
 
-        .detail-item-row {
-            grid-template-columns: 24px 1fr 88px 78px 1fr 26px;
-        }
-
         .edit-btn {
             width: 22px;
             height: 22px;
@@ -628,8 +720,8 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
         }
 
         .edit-btn:hover {
-            background: #e6f5f3;
-            color: #0f766e;
+            background: #fdf4ee;
+            color: #e36414;
         }
 
         .edit-row {
@@ -670,12 +762,12 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
         }
 
         .btn-save-edit {
-            background: #0f766e;
+            background: #e36414;
             color: #fff;
         }
 
         .btn-save-edit:hover {
-            background: #0d5c56;
+            background: #c4550f;
         }
 
         .btn-cancel-edit {
@@ -687,7 +779,6 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             background: #cbd5e1;
         }
 
-        /* ── Riwayat edit (kecil) ── */
         .edit-log-toggle {
             margin-top: 16px;
             padding-top: 10px;
@@ -703,7 +794,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
         }
 
         .edit-log-toggle:hover {
-            color: #0f766e;
+            color: #c4550f;
         }
 
         .edit-log-list {
@@ -725,15 +816,14 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             line-height: 1.5;
         }
 
-        .edit-log-item b {
-            color: #334155;
+        .edit-log-empty {
+            font-size: .72rem;
+            color: #94a3b8;
+            padding: 6px 0;
         }
 
-        .edit-log-empty {
-            font-size: .7rem;
-            color: #94a3b8;
-            font-style: italic;
-            padding: 4px 8px;
+        .hidden {
+            display: none;
         }
     </style>
 </head>
@@ -743,12 +833,12 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
     <aside id="sidebar" class="collapsed">
         <div class="brand">
             <div class="brand-icon-wrap">
-                <div class="w-8 h-8 rounded-lg bg-[#0f766e] flex items-center justify-center flex-shrink-0">
-                    <i class="fas fa-spray-can text-white text-xs"></i>
+                <div class="w-8 h-8 rounded-lg bg-[#e36414] flex items-center justify-center flex-shrink-0">
+                    <i class="fas fa-ruler-combined text-white text-xs"></i>
                 </div>
                 <div class="brand-text">
                     <div class="text-white text-xs font-bold leading-tight">Maintenance Hub</div>
-                    <div class="text-slate-500 text-[10px] font-medium">Painting Check Sheet</div>
+                    <div class="text-slate-500 text-[10px] font-medium">Jig Assembly Check Sheet</div>
                 </div>
             </div>
         </div>
@@ -762,15 +852,15 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             <div class="px-3 mb-2 menu-label">
                 <span class="text-[10px] font-bold text-slate-600 uppercase tracking-widest">Menu</span>
             </div>
-            <a href="dashboard_checksheet_painting.php" onclick="navigateTo(event,'dashboard_checksheet_painting.php')" class="nav-item" title="Check Sheet">
+            <a href="dashboard_checksheet_jig_assembly.php" onclick="navigateTo(event,'dashboard_checksheet_jig_assembly.php')" class="nav-item" title="Check Sheet">
                 <i class="fas fa-clipboard-check"></i>
                 <span class="nav-label">Check Sheet</span>
             </a>
-            <a href="history_checksheet_painting.php" onclick="navigateTo(event,'history_checksheet_painting.php')" class="nav-item active" title="History">
+            <a href="history_checksheet_jig_assembly.php" onclick="navigateTo(event,'history_checksheet_jig_assembly.php')" class="nav-item active" title="History">
                 <i class="fas fa-history"></i>
                 <span class="nav-label">History</span>
             </a>
-            <a href="checksheet_painting_draft.php" onclick="navigateTo(event,'checksheet_painting_draft.php')" class="nav-item" title="Draft">
+            <a href="checksheet_jig_assembly_draft.php" onclick="navigateTo(event,'checksheet_jig_assembly_draft.php')" class="nav-item" title="Draft">
                 <i class="fas fa-pen-to-square"></i>
                 <span class="nav-label">Draft</span>
             </a>
@@ -787,39 +877,40 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
 
         <div class="topbar">
             <div class="flex items-center gap-2">
-                <div class="w-7 h-7 rounded-lg bg-[#e6f5f3] flex items-center justify-center">
-                    <i class="fas fa-history text-[#0f766e] text-xs"></i>
+                <div class="w-7 h-7 rounded-lg bg-[#fdf4ee] flex items-center justify-center">
+                    <i class="fas fa-history text-[#e36414] text-xs"></i>
                 </div>
                 <div>
-                    <div class="text-sm font-bold text-slate-800">History Checksheet Painting</div>
-                    <div class="text-[10px] text-slate-400 font-medium">Rekap pengecekan bulanan Divisi Painting</div>
+                    <div class="text-sm font-bold text-slate-800">History Checksheet Jig Assembly</div>
+                    <div class="text-[10px] text-slate-400 font-medium">Rekap pengecekan 3 bulanan — Machine Press 1/2/3</div>
                 </div>
             </div>
-            <div class="flex items-center gap-3">
-                <div class="flex items-center gap-1">
-                    <select id="sel-export-month" class="info-chip" style="padding-right:6px;cursor:pointer;">
-                        <?php foreach ($availableMonths as $pm): ?>
-                            <option value="<?= htmlspecialchars($pm) ?>" <?= $pm === $defaultExportMonth ? 'selected' : '' ?>>
-                                <?= htmlspecialchars(indoMonthLabel($pm)) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <a id="btn-export-monthly" href="export_checksheet_painting.php?bulan=<?= htmlspecialchars($defaultExportMonth) ?>"
-                        class="info-chip hover:bg-slate-100 transition" title="Export bulan terpilih ke Excel">
-                        <i class="fas fa-file-excel text-emerald-500"></i> Export Bulanan
-                    </a>
-                </div>
-                <div class="flex items-center gap-1">
-                    <select id="sel-export-year" class="info-chip" style="padding-right:6px;cursor:pointer;">
-                        <?php foreach ($availableYears as $y): ?>
-                            <option value="<?= htmlspecialchars($y) ?>"><?= htmlspecialchars($y) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <a id="btn-export-yearly" href="export_checksheet_painting_yearly.php?tahun=<?= htmlspecialchars($availableYears[0]) ?>"
-                        class="info-chip hover:bg-slate-100 transition" title="Export rekap 1 tahun ke Excel">
-                        <i class="fas fa-file-excel text-teal-600"></i> Export Tahunan
-                    </a>
-                </div>
+            <div class="flex items-center gap-2" style="flex-wrap:nowrap;">
+                <?php if ($defaultExportId): ?>
+                    <div class="export-chip-group">
+                        <select id="sel-export-period" title="Pilih periode">
+                            <?php foreach ($exportableSubmissions as $es): ?>
+                                <option value="<?= (int)$es['id'] ?>" <?= (int)$es['id'] === (int)$defaultExportId ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($es['label']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <a id="btn-export-period" href="export_checksheet_jig_assembly.php?id=<?= (int)$defaultExportId ?>" title="Export periode terpilih ke Excel">
+                            <i class="fas fa-file-excel text-emerald-500"></i> Export Periode
+                        </a>
+                    </div>
+                    <div class="export-chip-group">
+                        <select id="sel-export-year" title="Pilih tahun">
+                            <?php foreach ($availableYears as $y): ?>
+                                <option value="<?= htmlspecialchars($y) ?>"><?= htmlspecialchars($y) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <a id="btn-export-yearly" href="export_checksheet_jig_assembly_yearly.php?tahun=<?= htmlspecialchars($availableYears[0]) ?>" title="Export rekap 1 tahun ke Excel">
+                            <i class="fas fa-file-excel text-orange-500"></i> Export Tahunan
+                        </a>
+                    </div>
+                <?php endif; ?>
+                <span class="info-chip"><i class="far fa-calendar text-orange-400"></i> <span id="today-label"></span></span>
                 <button onclick="document.getElementById('back-confirm-overlay').style.display='flex'"
                     class="info-chip" style="cursor:pointer;border-color:#fecaca;color:#dc2626;background:#fef2f2;" title="Kembali & kunci halaman">
                     <i class="fas fa-arrow-left"></i> Kembali
@@ -830,17 +921,17 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
         <div id="back-confirm-overlay" style="position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9998;display:none;align-items:center;justify-content:center;">
             <div style="background:#fff;border-radius:16px;padding:22px 24px;max-width:360px;width:90%;box-shadow:0 20px 50px rgba(0,0,0,.25);">
                 <div class="flex items-center gap-2 mb-2">
-                    <i class="fas fa-lock text-[#0f766e]"></i>
+                    <i class="fas fa-lock text-[#e36414]"></i>
                     <span class="text-sm font-extrabold text-slate-800">Kembali ke Menu Utama?</span>
                 </div>
                 <p class="text-xs text-slate-500 mb-4 leading-relaxed">
-                    Halaman Checksheet Painting akan terkunci. Untuk masuk lagi, Anda perlu memasukkan key akses dari halaman Checksheet Gate.
+                    Halaman Checksheet Jig Assembly akan terkunci. Untuk masuk lagi, Anda perlu memasukkan key akses dari halaman Checksheet Gate.
                 </p>
                 <div class="flex justify-end gap-2">
                     <button onclick="document.getElementById('back-confirm-overlay').style.display='none'"
                         class="px-3 py-2 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-100">Batal</button>
                     <button onclick="window.location.href='checksheet_gate.php?logout=1'"
-                        class="px-3 py-2 rounded-xl text-xs font-bold text-white" style="background:#0f766e;">Ya, Kembali &amp; Kunci</button>
+                        class="px-3 py-2 rounded-xl text-xs font-bold text-white" style="background:#e36414;">Ya, Kembali &amp; Kunci</button>
                 </div>
             </div>
         </div>
@@ -853,33 +944,35 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                     <div class="text-2xl font-extrabold text-slate-800"><?= $totalSubmissions ?></div>
                 </div>
                 <div class="summary-card">
-                    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Bulan Ini (<?= htmlspecialchars(date('M Y', strtotime($currentPeriod . '-01'))) ?>)</div>
-                    <div class="text-2xl font-extrabold <?= $currentSubmitted ? 'text-emerald-600' : 'text-rose-600' ?>">
-                        <?= $currentSubmitted ? 'Sudah Diisi' : 'Belum Diisi' ?>
+                    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                        Periode Berjalan (<?= htmlspecialchars(date('d M', strtotime($periodInfo['period_start']))) ?> – <?= htmlspecialchars(date('d M Y', strtotime($periodInfo['period_end']))) ?>)
+                    </div>
+                    <div class="text-2xl font-extrabold <?= $periodFilled ? 'text-emerald-600' : 'text-rose-600' ?>">
+                        <?= $periodFilled ? 'Sudah Diisi' : 'Belum Diisi' ?>
                     </div>
                 </div>
                 <div class="summary-card flex items-center">
-                    <?php if (!$currentSubmitted): ?>
-                        <a href="dashboard_checksheet_painting.php" class="text-xs font-bold text-white bg-[#0f766e] hover:bg-[#0d5c56] transition rounded-xl px-4 py-2.5 inline-flex items-center gap-2">
-                            <i class="fas fa-plus"></i> Isi Checksheet Bulan Ini
+                    <?php if (!$periodFilled): ?>
+                        <a href="dashboard_checksheet_jig_assembly.php" class="text-xs font-bold text-white bg-[#e36414] hover:bg-[#c4550f] transition rounded-xl px-4 py-2.5 inline-flex items-center gap-2">
+                            <i class="fas fa-plus"></i> Isi Checksheet Periode Ini
                         </a>
                     <?php else: ?>
-                        <span class="text-xs font-semibold text-slate-400"><i class="fas fa-check-circle text-emerald-500 mr-1"></i> Semua terkini.</span>
+                        <span class="text-xs font-semibold text-slate-400"><i class="fas fa-check-circle text-emerald-500 mr-1"></i> Semua terkini. Periode berikutnya mulai <?= htmlspecialchars(date('d M Y', strtotime($periodInfo['next_period_start']))) ?>.</span>
                     <?php endif; ?>
                 </div>
             </div>
 
             <div class="relative mb-4">
                 <i class="fas fa-search absolute text-slate-300 text-xs" style="left:14px;top:50%;transform:translateY(-50%);"></i>
-                <input id="search-input" type="text" placeholder="Cari bulan, checker, part, atau catatan..."
-                    class="w-full text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl pl-9 pr-9 py-2.5 focus:outline-none focus:ring-2 focus:ring-teal-100 focus:border-teal-400">
+                <input id="search-input" type="text" placeholder="Cari tanggal, checker, mesin/jig, atau catatan..."
+                    class="w-full text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl pl-9 pr-9 py-2.5 focus:outline-none focus:ring-2 focus:ring-orange-100 focus:border-orange-400">
                 <button id="search-clear" onclick="clearSearch()"
                     class="hidden absolute text-slate-300 hover:text-slate-500 text-xs" style="right:14px;top:50%;transform:translateY(-50%);">
                     <i class="fas fa-times-circle"></i>
                 </button>
             </div>
 
-            <div class="space-y-3" id="month-list">
+            <div class="space-y-3" id="day-list">
                 <div class="text-xs text-slate-400 font-semibold px-2">Memuat data...</div>
             </div>
         </div>
@@ -894,7 +987,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                     <div class="text-[11px] text-slate-400 font-medium" id="modal-subtitle"></div>
                 </div>
                 <div class="flex items-center gap-2">
-                    <a id="modal-export-link" href="#" class="text-xs font-bold text-emerald-600 hover:text-emerald-700">
+                    <a id="modal-export-link" href="#" class="text-xs font-bold text-emerald-600 hover:text-emerald-700" title="Export periode ini ke Excel">
                         <i class="fas fa-file-excel"></i>
                     </a>
                     <button onclick="closeDetailModal()" class="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400">
@@ -947,6 +1040,12 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                 icon.className = 'fas fa-chevron-left';
             }
             loadList();
+            document.getElementById('today-label').textContent = new Date().toLocaleDateString('id-ID', {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric'
+            });
 
             const searchInput = document.getElementById('search-input');
             let debounceTimer;
@@ -959,15 +1058,20 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                 }, 300);
             });
 
-            document.getElementById('sel-export-month').addEventListener('change', function() {
-                document.getElementById('btn-export-monthly').href =
-                    'export_checksheet_painting.php?bulan=' + encodeURIComponent(this.value);
-            });
-
-            document.getElementById('sel-export-year').addEventListener('change', function() {
-                document.getElementById('btn-export-yearly').href =
-                    'export_checksheet_painting_yearly.php?tahun=' + encodeURIComponent(this.value);
-            });
+            const selPeriod = document.getElementById('sel-export-period');
+            if (selPeriod) {
+                selPeriod.addEventListener('change', function() {
+                    document.getElementById('btn-export-period').href =
+                        'export_checksheet_jig_assembly.php?id=' + encodeURIComponent(this.value);
+                });
+            }
+            const selYear = document.getElementById('sel-export-year');
+            if (selYear) {
+                selYear.addEventListener('change', function() {
+                    document.getElementById('btn-export-yearly').href =
+                        'export_checksheet_jig_assembly_yearly.php?tahun=' + encodeURIComponent(this.value);
+                });
+            }
         });
 
         function clearSearch() {
@@ -979,16 +1083,17 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
         }
 
         function loadList(q) {
-            const url = 'history_checksheet_painting.php?ajax=list' + (q ? '&q=' + encodeURIComponent(q) : '');
+            const url = 'history_checksheet_jig_assembly.php?ajax=list' + (q ? '&q=' + encodeURIComponent(q) : '');
             fetch(url)
                 .then(r => r.json())
                 .then(res => renderList(res.rows || [], q));
         }
 
-        function monthLabel(period) {
-            const [y, m] = period.split('-');
-            const d = new Date(parseInt(y), parseInt(m) - 1, 1);
+        function dateLabel(dateStr) {
+            const d = new Date(dateStr + 'T00:00:00');
             return d.toLocaleDateString('id-ID', {
+                weekday: 'long',
+                day: 'numeric',
                 month: 'long',
                 year: 'numeric'
             });
@@ -1009,32 +1114,20 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                 });
         }
 
-        function dateLabel(dateStr) {
-            if (!dateStr) return '-';
-            const d = new Date(dateStr + 'T00:00:00');
-            if (isNaN(d)) return dateStr;
-            return d.toLocaleDateString('id-ID', {
-                weekday: 'long',
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric'
-            });
-        }
-
         function renderList(rows, q) {
-            const container = document.getElementById('month-list');
+            const container = document.getElementById('day-list');
             container.innerHTML = '';
 
             if (rows.length === 0) {
                 container.innerHTML = q ?
                     '<div class="text-xs text-slate-400 font-semibold px-2">Tidak ada hasil untuk pencarian "' + esc(q) + '".</div>' :
-                    '<div class="text-xs text-slate-400 font-semibold px-2">Belum ada data checksheet painting.</div>';
+                    '<div class="text-xs text-slate-400 font-semibold px-2">Belum ada data checksheet jig assembly.</div>';
                 return;
             }
 
             rows.forEach(row => {
                 const card = document.createElement('div');
-                card.className = 'month-card';
+                card.className = 'day-card';
                 card.onclick = () => openDetailModal(row.id);
 
                 const ngBadge = row.ng_count > 0 ?
@@ -1043,17 +1136,14 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
 
                 card.innerHTML = `
                     <div>
-                        <div class="text-sm font-extrabold text-slate-800">${esc(monthLabel(row.period_month))}</div>
-                        <div class="text-[11px] text-slate-500 font-semibold mt-0.5">
-                            <i class="far fa-calendar mr-1"></i>${esc(dateLabel(row.check_date))}
-                        </div>
+                        <div class="text-sm font-extrabold text-slate-800">${esc(dateLabel(row.check_date))}</div>
                         <div class="text-[11px] text-slate-400 font-medium mt-0.5">
                             <i class="fas fa-user mr-1"></i>${esc(row.checker)} ·
-                            <i class="fas fa-clock ml-1 mr-1"></i>Submitted ${fmtDateTime(row.submitted_at)}
+                            <i class="fas fa-clock ml-1 mr-1"></i>${fmtDateTime(row.submitted_at)}
                         </div>
                     </div>
                     <div class="flex items-center gap-2">
-                        <span class="badge neutral">${row.checked_count}/${row.total_items} item</span>
+                        <span class="badge neutral">${row.total_items} item dicek</span>
                         ${ngBadge}
                         <i class="fas fa-chevron-right text-slate-300 ml-2"></i>
                     </div>
@@ -1064,7 +1154,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
 
         function loadCheckers() {
             if (checkersCache) return Promise.resolve(checkersCache);
-            return fetch('history_checksheet_painting.php?ajax=checkers')
+            return fetch('history_checksheet_jig_assembly.php?ajax=checkers')
                 .then(r => r.json())
                 .then(res => {
                     checkersCache = res.checkers || [];
@@ -1075,23 +1165,23 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
         function openDetailModal(id) {
             currentSubmissionId = id;
             Promise.all([
-                fetch('history_checksheet_painting.php?ajax=detail&id=' + id).then(r => r.json()),
+                fetch('history_checksheet_jig_assembly.php?ajax=detail&id=' + id).then(r => r.json()),
                 loadCheckers()
             ]).then(([res, checkers]) => {
                 if (res.error) return;
                 const sub = res.submission;
-                document.getElementById('modal-title').textContent = 'Checksheet Painting — ' + monthLabel(sub.period_month);
+                document.getElementById('modal-title').textContent = 'Checksheet Jig Assembly — ' + dateLabel(sub.check_date);
                 document.getElementById('modal-subtitle').textContent =
-                    `Checker: ${sub.checker} · Tanggal cek: ${sub.check_date} · Submitted: ${sub.submitted_at}`;
-                document.getElementById('modal-export-link').href = 'export_checksheet_painting.php?bulan=' + sub.period_month;
+                    `Checker: ${sub.checker} · Submitted: ${fmtDateTime(sub.submitted_at)}`;
+                document.getElementById('modal-export-link').href = 'export_checksheet_jig_assembly.php?id=' + id;
 
                 const body = document.getElementById('modal-body');
                 body.innerHTML = '';
 
-                Object.keys(res.grouped).forEach(unitName => {
+                Object.keys(res.grouped).forEach(machineLabel => {
                     const title = document.createElement('div');
                     title.className = 'detail-unit-title';
-                    title.textContent = unitName;
+                    title.textContent = machineLabel;
                     body.appendChild(title);
 
                     const hdr = document.createElement('div');
@@ -1099,15 +1189,14 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                     hdr.style.fontWeight = '800';
                     hdr.style.color = '#94a3b8';
                     hdr.style.fontSize = '.68rem';
-                    hdr.innerHTML = '<div>No</div><div>Part</div><div>Action</div><div>Result</div><div>Note</div><div></div>';
+                    hdr.innerHTML = '<div>No</div><div>Check Point</div><div>Standard</div><div>Actual</div><div>Result</div><div>Note</div><div></div>';
                     body.appendChild(hdr);
 
-                    res.grouped[unitName].forEach(item => {
+                    res.grouped[machineLabel].forEach(item => {
                         body.appendChild(buildItemRow(item, checkers));
                     });
                 });
 
-                // Riwayat edit (kecil, collapsed by default)
                 const logToggle = document.createElement('div');
                 logToggle.className = 'edit-log-toggle';
                 logToggle.id = 'edit-log-toggle';
@@ -1127,12 +1216,16 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             const row = document.createElement('div');
             row.className = 'detail-item-row';
             row.id = 'row-' + item.id;
-            const resultCls = item.result || 'none';
+            const resultCls = item.visual_result || 'none';
+            const actualText = item.is_diameter == 1 ? (item.actual_diameter || '—') : '—';
+            const isVisual = item.is_diameter != 1;
+            const standardText = item.standard_value ? esc(item.standard_value) : (isVisual ? 'Visual' : '—');
             row.innerHTML = `
-                <div class="text-slate-400 font-bold">${item.no}</div>
-                <div class="font-semibold text-slate-700">${esc(item.part)}</div>
-                <div>${item.action_status === 'checked' ? '<i class="fas fa-check-circle text-emerald-500"></i> Checked' : '<i class="fas fa-circle text-slate-300"></i> Unchecked'}</div>
-                <div><span class="result-chip ${resultCls}">${item.result || '—'}</span></div>
+                <div class="text-slate-400 font-bold">${item.cp_no}</div>
+                <div class="font-semibold text-slate-700">${esc(item.check_point)}</div>
+                <div class="${isVisual ? 'text-slate-400 italic' : 'text-slate-600 font-semibold'}" style="font-size:.74rem;">${standardText}</div>
+                <div class="text-slate-500">${esc(actualText)}</div>
+                <div><span class="result-chip ${resultCls}">${item.visual_result || '—'}</span></div>
                 <div class="text-slate-400">${esc(item.note || '—')}</div>
                 <div><button class="edit-btn" title="Edit hasil" onclick="toggleEditRow(${item.id})"><i class="fas fa-pen"></i></button></div>
             `;
@@ -1161,15 +1254,12 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             form.innerHTML = `
                 <div></div>
                 <div>
-                    <select id="edit-action-${detailId}">
-                        <option value="unchecked" ${item.action_status !== 'checked' ? 'selected' : ''}>Unchecked</option>
-                        <option value="checked" ${item.action_status === 'checked' ? 'selected' : ''}>Checked</option>
+                    <select id="edit-result-${detailId}">
+                        <option value="" ${!item.visual_result ? 'selected' : ''}>— Tidak ada hasil —</option>
+                        <option value="OK" ${item.visual_result === 'OK' ? 'selected' : ''}>OK</option>
+                        <option value="NG" ${item.visual_result === 'NG' ? 'selected' : ''}>NG</option>
                     </select>
-                    <select id="edit-result-${detailId}" style="margin-top:4px;">
-                        <option value="" ${!item.result ? 'selected' : ''}>— Tidak ada hasil —</option>
-                        <option value="OK" ${item.result === 'OK' ? 'selected' : ''}>OK</option>
-                        <option value="NG" ${item.result === 'NG' ? 'selected' : ''}>NG</option>
-                    </select>
+                    ${item.is_diameter == 1 ? `<input type="text" id="edit-actual-${detailId}" placeholder="Actual (mm)" value="${esc(item.actual_diameter || '')}" style="margin-top:4px;">` : ''}
                 </div>
                 <div>
                     <input type="text" id="edit-note-${detailId}" placeholder="Catatan" value="${esc(item.note || '')}">
@@ -1192,14 +1282,17 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                 alert('Pilih nama pengedit terlebih dahulu.');
                 return;
             }
+
+            const actualInput = document.getElementById('edit-actual-' + detailId);
+
             const fd = new FormData();
             fd.append('detail_id', detailId);
             fd.append('edited_by', editedBy);
-            fd.append('action_status', document.getElementById('edit-action-' + detailId).value);
-            fd.append('result', document.getElementById('edit-result-' + detailId).value);
+            fd.append('visual_result', document.getElementById('edit-result-' + detailId).value);
+            fd.append('actual_diameter', actualInput ? actualInput.value : '');
             fd.append('note', document.getElementById('edit-note-' + detailId).value);
 
-            fetch('history_checksheet_painting.php?ajax=update_detail', {
+            fetch('history_checksheet_jig_assembly.php?ajax=update_detail', {
                     method: 'POST',
                     body: fd
                 })
@@ -1218,7 +1311,6 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
 
         function toggleEditLog(submissionId, forceOpen) {
             const list = document.getElementById('edit-log-list');
-            const toggle = document.getElementById('edit-log-toggle');
             if (!list) return;
 
             const willOpen = forceOpen || !list.classList.contains('open');
@@ -1230,7 +1322,7 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
             list.classList.add('open');
             list.innerHTML = '<div class="edit-log-empty">Memuat riwayat...</div>';
 
-            fetch('history_checksheet_painting.php?ajax=edit_log&submission_id=' + submissionId)
+            fetch('history_checksheet_jig_assembly.php?ajax=edit_log&submission_id=' + submissionId)
                 .then(r => r.json())
                 .then(res => {
                     const logs = res.logs || [];
@@ -1239,14 +1331,14 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                         return;
                     }
                     const fieldLabel = {
-                        result: 'Result',
-                        action_status: 'Action',
+                        visual_result: 'Result',
+                        actual_diameter: 'Actual',
                         note: 'Catatan'
                     };
                     list.innerHTML = logs.map(l => `
                         <div class="edit-log-item">
                             <b>${esc(l.edited_by)}</b> mengubah ${fieldLabel[l.field_changed] || esc(l.field_changed)}
-                            pada <b>${esc(l.part)}</b> (${esc(l.unit_name)}):
+                            pada <b>${esc(l.check_point)}</b> (${esc(l.machine_label)}):
                             "${esc(l.old_value)}" → "${esc(l.new_value)}"
                             <div style="color:#94a3b8;">${fmtDateTime(l.edited_at)}</div>
                         </div>

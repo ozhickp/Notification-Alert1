@@ -2,11 +2,12 @@
 
 define('CHECKSHEET_ACCESS_KEY_MAINTENANCE', '482703');
 define('CHECKSHEET_ACCESS_KEY_PAINTING', '190420');
+define('CHECKSHEET_ACCESS_KEY_JIG_ASSEMBLY', '356189');
 
-// Daftar halaman yang boleh diakses per area + halaman default-nya (index 0)
 $areaRedirects = [
-    'maintenance' => ['dashboard_checksheet.php', 'history_checksheet.php'],
-    'painting'    => ['dashboard_checksheet_painting.php', 'history_checksheet_painting.php'],
+    'maintenance'  => ['dashboard_checksheet.php', 'history_checksheet.php'],
+    'painting'     => ['dashboard_checksheet_painting.php', 'history_checksheet_painting.php'],
+    'jig_assembly' => ['dashboard_checksheet_jig_assembly.php', 'history_checksheet_jig_assembly.php'],
 ];
 
 if (session_status() === PHP_SESSION_NONE) session_start();
@@ -43,12 +44,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$isLocked) {
     if ($inputKey === '' || !ctype_digit($inputKey) || strlen($inputKey) > 6) {
         $error = 'Key harus berupa angka, maksimal 6 digit.';
     } else {
-        // Cocokkan ke salah satu dari 2 key; area ditentukan dari key mana yang cocok
+        // Cocokkan ke salah satu dari 3 key; area ditentukan dari key mana yang cocok
         $matchedArea = null;
         if (hash_equals(CHECKSHEET_ACCESS_KEY_MAINTENANCE, $inputKey)) {
             $matchedArea = 'maintenance';
         } elseif (hash_equals(CHECKSHEET_ACCESS_KEY_PAINTING, $inputKey)) {
             $matchedArea = 'painting';
+        } elseif (hash_equals(CHECKSHEET_ACCESS_KEY_JIG_ASSEMBLY, $inputKey)) {
+            $matchedArea = 'jig_assembly';
         }
 
         if ($matchedArea !== null) {
