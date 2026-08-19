@@ -1,11 +1,4 @@
 <?php
-// dashboard_checksheet_jig_assembly.php
-// Checksheet Jig Assembly — pengecekan dilakukan setiap 3 bulan sekali,
-// periode tetap dimulai April 2026 (Apr–Jun, Jul–Sep, Okt–Des, Jan–Mar, dst).
-// Layout & pola JS SENGAJA dibuat semirip
-// mungkin dengan dashboard_checksheet_painting.php (satu kolom, item-row datar,
-// action toggle sebelum OK/NG, sticky bottom bar) supaya konsisten dengan
-// checksheet lain di Maintenance Hub.
 require_once __DIR__ . '/config.php';
 
 // ─── Gate akses ─────────────────────────────────────────────────────────────
@@ -149,6 +142,10 @@ if (isset($_GET['ajax'])) {
             echo json_encode(['success' => false, 'message' => 'Tanggal tidak valid.']);
             exit;
         }
+        if ($date < date('Y-m-d')) {
+            echo json_encode(['success' => false, 'message' => 'Tanggal pengecekan tidak boleh mundur (backdate). Gunakan tanggal hari ini atau setelahnya.']);
+            exit;
+        }
         if (jigAssemblyDateSubmitted($pdo, $date) !== null) {
             echo json_encode(['success' => false, 'already_submitted' => true, 'message' => 'Tanggal ini sudah disubmit.']);
             exit;
@@ -187,6 +184,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet_jig
     }
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $checkDate) || strtotime($checkDate) === false) {
         echo json_encode(['success' => false, 'message' => 'Tanggal tidak valid.']);
+        exit;
+    }
+    if ($checkDate < date('Y-m-d')) {
+        echo json_encode(['success' => false, 'message' => 'Tanggal pengecekan tidak boleh mundur (backdate). Checksheet hanya bisa disubmit untuk tanggal hari ini atau setelahnya.']);
         exit;
     }
 
@@ -984,7 +985,7 @@ $autoResumeDraft = $initialDate !== null && isset($_GET['resume']) && $_GET['res
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div>
                         <label class="form-label block mb-1.5"><i class="fas fa-calendar-day text-slate-300 mr-1"></i> Tanggal Pengecekan <span class="text-red-400">*</span></label>
-                        <input type="date" id="inp-check-date" class="form-field" onchange="onDateChange()">
+                        <input type="date" id="inp-check-date" class="form-field" min="<?= htmlspecialchars(date('Y-m-d')) ?>" onchange="onDateChange()">
                     </div>
                     <div>
                         <label class="form-label block mb-1.5"><i class="fas fa-user-check text-slate-300 mr-1"></i> Checker <span class="text-red-400">*</span></label>

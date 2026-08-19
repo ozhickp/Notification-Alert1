@@ -1,10 +1,4 @@
 <?php
-// dashboard_checksheet_painting.php
-// Checksheet bulanan untuk Department Produksi - Divisi Painting.
-// TERPISAH TOTAL dari dashboard_checksheet.php: tabel sendiri
-// (painting_checksheet_units / items / submissions / submission_details),
-// gate key sendiri (area = 'painting'), dan siklus submit BULANAN
-// (1 submission = 1 bulan, bukan 1 submission per mesin/hari).
 require_once __DIR__ . '/config.php';
 
 // ─── Gate akses: wajib unlock via checksheet_gate.php dengan key Painting ──
@@ -123,6 +117,10 @@ if (isset($_GET['ajax'])) {
             echo json_encode(['success' => false, 'message' => 'Periode tidak valid.']);
             exit;
         }
+        if ($checkDate !== '' && $checkDate < date('Y-m-d')) {
+            echo json_encode(['success' => false, 'message' => 'Tanggal pengecekan tidak boleh mundur (backdate). Gunakan tanggal hari ini atau setelahnya.']);
+            exit;
+        }
         // Periode yang sudah final disubmit tidak boleh lagi punya draft
         if (paintingPeriodSubmitted($pdo, $period) !== null) {
             echo json_encode(['success' => false, 'already_submitted' => true, 'message' => 'Periode ini sudah disubmit.']);
@@ -165,6 +163,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_checksheet_pai
     $ts = strtotime($checkDate);
     if ($ts === false) {
         echo json_encode(['success' => false, 'message' => 'Tanggal tidak valid.']);
+        exit;
+    }
+    if ($checkDate < date('Y-m-d')) {
+        echo json_encode(['success' => false, 'message' => 'Tanggal pengecekan tidak boleh mundur (backdate). Checksheet hanya bisa disubmit untuk tanggal hari ini atau setelahnya.']);
         exit;
     }
     $periodMonth = date('Y-m', $ts);
@@ -937,7 +939,7 @@ $autoResumeDraft = $initialDate !== null && isset($_GET['resume']) && $_GET['res
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div>
                         <label class="form-label block mb-1.5"><i class="fas fa-calendar-day text-slate-300 mr-1"></i> Tanggal Pengecekan <span class="text-red-400">*</span></label>
-                        <input type="date" id="inp-check-date" class="form-field" onchange="onDateChange()">
+                        <input type="date" id="inp-check-date" class="form-field" min="<?= htmlspecialchars(date('Y-m-d')) ?>" onchange="onDateChange()">
                     </div>
                     <div>
                         <label class="form-label block mb-1.5"><i class="fas fa-user-check text-slate-300 mr-1"></i> Checker <span class="text-red-400">*</span></label>
