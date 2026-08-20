@@ -1,10 +1,6 @@
 <?php
-// dashboard_checksheet.php
 require_once __DIR__ . '/config.php';
 
-// ─── Gate akses: wajib unlock via checksheet_gate.php (key 6 digit) ────────
-// Dipisah dari login_user.php karena Checksheet dipakai divisi lain yang
-// tidak punya akun E-Report — jadi jangan pakai requireRole() biasa di sini.
 if (session_status() === PHP_SESSION_NONE) session_start();
 if (empty($_SESSION['checksheet_unlocked']) || ($_SESSION['checksheet_area'] ?? '') !== 'maintenance') {
     if (isset($_GET['ajax'])) {
@@ -20,11 +16,20 @@ if (empty($_SESSION['checksheet_unlocked']) || ($_SESSION['checksheet_area'] ?? 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 // ─── Helper: resolve category_key dari machine_type + department/line ────────
-function resolveCategoryKey(string $machineType, string $dept, string $line): ?string
+// $machineName dipakai untuk pengecualian mesin tertentu yang punya
+// checklist berbeda meskipun machine_type-nya sama (mis. Leak Air Test).
+function resolveCategoryKey(string $machineType, string $dept, string $line, string $machineName = ''): ?string
 {
     $type = strtoupper(trim($machineType));
     $dept = strtoupper(trim($dept));
     $line = strtoupper(trim($line));
+    $name = strtoupper(trim($machineName));
+
+    // Pengecualian: mesin Leak Air Test di Gear Case, Machine Shop 1
+    // pakai checklist sendiri (category_key: SPM_LEAK_AIR_TEST)
+    if (str_contains($name, 'LEAK AIR TEST')) {
+        return 'SPM_LEAK_AIR_TEST';
+    }
 
     if ($type === 'MC')  return 'MC';
     if ($type === 'SPM') return 'SPM';
@@ -96,7 +101,7 @@ if (isset($_GET['ajax'])) {
         $line        = $_GET['line']         ?? '';
         $op          = $_GET['op']           ?? '';
         $machineName = $_GET['machine_name'] ?? '';
-        $key  = resolveCategoryKey($_GET['machine_type'], $dept, $line);
+        $key  = resolveCategoryKey($_GET['machine_type'], $dept, $line, $machineName);
 
         if (!$key) {
             echo json_encode([]);
