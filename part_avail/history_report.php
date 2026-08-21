@@ -87,6 +87,59 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'departments') {
     exit;
 }
 
+// ─── AJAX: distinct lines & op — sama pola dengan endpoint departments di atas,
+// termasuk pembatasan visibilitas admin_conrod (cuma line/op dari laporan tim
+// conrod). Bisa di-scope ke department tertentu lewat ?dept= supaya dropdown
+// Line/OP hanya menampilkan opsi yang relevan setelah department dipilih.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'lines_ops') {
+    header('Content-Type: application/json');
+    $dept = isset($_GET['dept']) ? trim($_GET['dept']) : '';
+
+    $conrodVisibility = "
+              AND (
+                    (r.foreman IS NOT NULL AND r.foreman <> '')
+                 OR r.source_role = 'admin_conrod'
+                 OR (r.source_role IS NULL AND u.role = 'admin_conrod')
+              )";
+
+    $deptFilter = '';
+    $params = [];
+    if ($dept !== '') {
+        $deptFilter = " AND r.department = ?";
+        $params[] = $dept;
+    }
+
+    $lineSql = "
+        SELECT DISTINCT r.line
+        FROM e_reports r
+        LEFT JOIN users u ON u.username = r.reported_by
+        WHERE r.line IS NOT NULL AND r.line <> ''
+        {$deptFilter}
+        " . ($isConrodOnly ? $conrodVisibility : "") . "
+        ORDER BY r.line ASC
+    ";
+    $opSql = "
+        SELECT DISTINCT r.op
+        FROM e_reports r
+        LEFT JOIN users u ON u.username = r.reported_by
+        WHERE r.op IS NOT NULL AND r.op <> ''
+        {$deptFilter}
+        " . ($isConrodOnly ? $conrodVisibility : "") . "
+        ORDER BY r.op ASC
+    ";
+
+    $stmtLine = $pdo->prepare($lineSql);
+    $stmtLine->execute($params);
+    $stmtOp = $pdo->prepare($opSql);
+    $stmtOp->execute($params);
+
+    echo json_encode([
+        'lines' => $stmtLine->fetchAll(PDO::FETCH_COLUMN),
+        'ops'   => $stmtOp->fetchAll(PDO::FETCH_COLUMN),
+    ]);
+    exit;
+}
+
 // ─── AJAX: laporan yang masih menggantung (belum selesai) ──────────────────────
 // Sama persis dengan endpoint di dashboard_report.php — sebuah laporan AWAL
 // (parent_id IS NULL) dianggap masih menggantung hanya jika statusnya
@@ -352,6 +405,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
     $dept   = isset($_GET['dept']) ? trim($_GET['dept']) : '';
     $source = isset($_GET['source']) ? trim($_GET['source']) : '';
+    $line   = isset($_GET['line']) ? trim($_GET['line']) : '';
+    $op     = isset($_GET['op']) ? trim($_GET['op']) : '';
 
     if ($mode === 'range') {
         if ($startDate === '' || $endDate === '') {
@@ -402,6 +457,16 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     if ($dept !== '') {
         $where .= " AND r.department = ?";
         $params[] = $dept;
+    }
+
+    // Filter line & op — sama pola dengan filter department di atas.
+    if ($line !== '') {
+        $where .= " AND r.line = ?";
+        $params[] = $line;
+    }
+    if ($op !== '') {
+        $where .= " AND r.op = ?";
+        $params[] = $op;
     }
 
     // Filter sumber laporan manual dari UI (dropdown "Sumber": Conrod / Maintenance).
@@ -2122,29 +2187,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         <i class="fas fa-search text-xs"></i> Cari
                     </button>
 
-                    <div id="dept-filter-wrap" style="display:none;">
-                        <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Department</label>
-                        <select id="inp-dept" onchange="loadHistory(1)"
-                            class="form-field text-xs" style="min-width:160px;">
-                            <option value="">Semua Department</option>
-                        </select>
-                    </div>
-
-                    <?php if (!$isConrodOnly): ?>
-                        <!-- Filter sumber laporan: pisahkan laporan yang berasal dari kegiatan
-                         Maintenance/Technician sendiri vs laporan awal dari Admin Conrod —
-                         supaya admin_maintenance bisa lihat salah satu saja kalau perlu. -->
-                        <div id="source-filter-wrap">
-                            <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Sumber Laporan</label>
-                            <select id="inp-source" onchange="loadHistory(1)"
-                                class="form-field text-xs" style="min-width:190px;">
-                                <option value="">Semua Sumber</option>
-                                <option value="maintenance">Maintenance / Technician</option>
-                                <option value="conrod">Admin Conrod</option>
-                            </select>
-                        </div>
-                    <?php endif; ?>
-
                     <div id="total-worktime-wrap" style="display:none;position:relative;">
                         <div class="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-orange-200 bg-orange-50">
                             <i class="fas fa-clock text-xs" style="color:#fb8b24;"></i>
@@ -2166,7 +2208,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             <!-- ── Table card ── -->
             <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-0">
 
-                <div class="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0">
+                <div class="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-shrink-0 flex-wrap">
                     <!-- Search -->
                     <div class="relative" style="max-width:280px;min-width:200px;">
                         <i class="fas fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" style="font-size:10px;"></i>
@@ -2192,10 +2234,54 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         </select>
                     </div>
 
+                    <div id="dept-filter-wrap" style="display:none;" class="flex items-center gap-1.5">
+                        <span class="text-[11px] text-slate-400 font-medium">Dept:</span>
+                        <select id="inp-dept" onchange="onDeptFilterChange()"
+                            class="form-field text-xs cursor-pointer bg-slate-50" style="height:32px; padding-top:0; padding-bottom:0; min-width:130px;">
+                            <option value="">Semua Department</option>
+                        </select>
+                    </div>
+
+                    <div id="line-filter-wrap" style="display:none;" class="flex items-center gap-1.5">
+                        <span class="text-[11px] text-slate-400 font-medium">Line:</span>
+                        <select id="inp-line" onchange="onLineFilterChange()"
+                            class="form-field text-xs cursor-pointer bg-slate-50" style="height:32px; padding-top:0; padding-bottom:0; min-width:110px;">
+                            <option value="">Semua Line</option>
+                        </select>
+                    </div>
+
+                    <div id="op-filter-wrap" style="display:none;" class="flex items-center gap-1.5">
+                        <span class="text-[11px] text-slate-400 font-medium">OP:</span>
+                        <select id="inp-op" onchange="loadHistory(1)"
+                            class="form-field text-xs cursor-pointer bg-slate-50" style="height:32px; padding-top:0; padding-bottom:0; min-width:110px;">
+                            <option value="">Semua OP</option>
+                        </select>
+                    </div>
+
+                    <?php if (!$isConrodOnly): ?>
+                        <!-- Filter sumber laporan: pisahkan laporan yang berasal dari kegiatan
+                         Maintenance/Technician sendiri vs laporan awal dari Admin Conrod —
+                         supaya admin_maintenance bisa lihat salah satu saja kalau perlu. -->
+                        <div id="source-filter-wrap" style="display:none;" class="flex items-center gap-1.5">
+                            <span class="text-[11px] text-slate-400 font-medium">Source:</span>
+                            <select id="inp-source" onchange="loadHistory(1)"
+                                class="form-field text-xs cursor-pointer bg-slate-50" style="height:32px; padding-top:0; padding-bottom:0; min-width:160px;">
+                                <option value="">Semua Sumber</option>
+                                <option value="maintenance">Maintenance / Technician</option>
+                                <option value="conrod">Admin Conrod</option>
+                            </select>
+                        </div>
+                    <?php endif; ?>
+
                     <div class="flex-1"></div>
                     <span id="result-label" class="text-[11px] text-slate-400 font-medium"></span>
                     <span id="search-label" style="display:none;" class="text-[11px] font-bold px-2 py-0.5 rounded-full" style="background:#fff7ed;color:#fb8b24;"></span>
                     <span id="showing-label" class="text-[11px] text-slate-400 font-medium"></span>
+
+                    <div id="pagination" class="hidden flex items-center gap-3 flex-shrink-0">
+                        <span id="page-info" class="text-[11px] text-slate-400 font-medium"></span>
+                        <div id="page-btns" class="flex gap-1.5"></div>
+                    </div>
                 </div>
 
                 <div class="table-scroll-container flex-1 min-h-0">
@@ -2260,10 +2346,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                     </div>
                 </div>
 
-                <div id="pagination" class="hidden border-t border-slate-100 px-5 py-3 flex items-center justify-between flex-shrink-0 bg-white">
-                    <span id="page-info" class="text-xs text-slate-400 font-medium"></span>
-                    <div id="page-btns" class="flex gap-1.5"></div>
-                </div>
             </div>
 
         </div>
@@ -3404,8 +3486,75 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
                         opt.textContent = d;
                         sel.appendChild(opt);
                     });
-                    document.getElementById('dept-filter-wrap').style.display = 'block';
+                    document.getElementById('dept-filter-wrap').style.display = 'flex';
+                    // Tampilkan filter Source (kalau ada, admin_maintenance/technician saja)
+                    // bersamaan dengan Department, supaya urutan kemunculan filter di UI
+                    // selalu konsisten (bukan Source muncul duluan sebelum Department).
+                    const srcWrap = document.getElementById('source-filter-wrap');
+                    if (srcWrap) srcWrap.style.display = 'flex';
                     deptLoaded = true;
+                });
+            loadLinesOps();
+        }
+
+        // Dipanggil saat dropdown Department berubah — reload opsi Line/OP supaya
+        // ter-scope ke department yang dipilih. Line & OP yang sedang dipilih
+        // ikut di-reset kembali ke "Semua Line"/"Semua OP" (tidak dipertahankan),
+        // karena opsi Line/OP lama belum tentu relevan lagi dengan department baru.
+        function onDeptFilterChange() {
+            loadLinesOps(true);
+            loadHistory(1);
+        }
+
+        // Dipanggil saat dropdown Line berubah — OP yang sedang dipilih ikut
+        // di-reset kembali ke "Semua OP" (tidak dipertahankan), supaya user selalu
+        // memilih OP yang relevan dengan Line yang baru dipilih.
+        function onLineFilterChange() {
+            document.getElementById('inp-op').value = '';
+            loadHistory(1);
+        }
+
+        // Muat opsi dropdown Line & OP (di-scope ke department aktif kalau ada).
+        // Dipanggil saat load pertama dan setiap kali department berubah.
+        // resetSelection=true (dept berubah) → Line & OP dikembalikan ke "Semua…",
+        // resetSelection=false (load pertama) → tidak ada pilihan sebelumnya untuk
+        // dipertahankan, jadi hasilnya sama saja.
+        function loadLinesOps(resetSelection = false) {
+            const dept = document.getElementById('inp-dept')?.value || '';
+            fetch(`history_report.php?ajax=lines_ops&dept=${encodeURIComponent(dept)}`)
+                .then(r => r.json())
+                .then(data => {
+                    const lineSel = document.getElementById('inp-line');
+                    const opSel = document.getElementById('inp-op');
+                    const prevLine = resetSelection ? '' : lineSel.value;
+                    const prevOp = resetSelection ? '' : opSel.value;
+
+                    lineSel.innerHTML = '<option value="">Semua Line</option>';
+                    (data.lines || []).forEach(l => {
+                        const opt = document.createElement('option');
+                        opt.value = l;
+                        opt.textContent = l;
+                        lineSel.appendChild(opt);
+                    });
+                    // pertahankan pilihan sebelumnya kalau masih ada di daftar baru
+                    // (hanya berlaku saat load pertama, bukan saat dept baru diganti)
+                    if (prevLine && [...lineSel.options].some(o => o.value === prevLine)) {
+                        lineSel.value = prevLine;
+                    }
+
+                    opSel.innerHTML = '<option value="">Semua OP</option>';
+                    (data.ops || []).forEach(o => {
+                        const opt = document.createElement('option');
+                        opt.value = o;
+                        opt.textContent = o;
+                        opSel.appendChild(opt);
+                    });
+                    if (prevOp && [...opSel.options].some(o => o.value === prevOp)) {
+                        opSel.value = prevOp;
+                    }
+
+                    document.getElementById('line-filter-wrap').style.display = 'flex';
+                    document.getElementById('op-filter-wrap').style.display = 'flex';
                 });
         }
 
@@ -3414,6 +3563,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             const limitSelect = document.getElementById('inp-limit').value;
             const dept = document.getElementById('inp-dept')?.value || '';
             const source = document.getElementById('inp-source')?.value || '';
+            const line = document.getElementById('inp-line')?.value || '';
+            const op = document.getElementById('inp-op')?.value || '';
 
             let periodParams = '';
             if (currentMode === 'range') {
@@ -3454,7 +3605,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             // Load departments sekali saja saat pertama kali cari
             if (!deptLoaded) loadDepartments();
 
-            fetch(`history_report.php?ajax=history&mode=${currentMode}${periodParams}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&dept=${encodeURIComponent(dept)}&source=${encodeURIComponent(source)}`)
+            fetch(`history_report.php?ajax=history&mode=${currentMode}${periodParams}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&dept=${encodeURIComponent(dept)}&source=${encodeURIComponent(source)}&line=${encodeURIComponent(line)}&op=${encodeURIComponent(op)}`)
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('hist-loading').style.display = 'none';
@@ -3622,11 +3773,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
         // ── Export Excel ──────────────────────────────────────────────────────────────
         function exportData() {
-            // Ikutkan filter Department & Sumber Laporan yang sedang aktif di tabel,
-            // supaya file yang terdownload persis sama dengan yang sedang dilihat —
-            // bukan selalu semua data periode itu.
+            // Ikutkan filter Department, Line, OP & Sumber Laporan yang sedang aktif
+            // di tabel, supaya file yang terdownload persis sama dengan yang sedang
+            // dilihat — bukan selalu semua data periode itu.
             const dept = document.getElementById('inp-dept')?.value || '';
             const source = document.getElementById('inp-source')?.value || '';
+            const line = document.getElementById('inp-line')?.value || '';
+            const op = document.getElementById('inp-op')?.value || '';
 
             let file;
             if (currentMode === 'range') {
@@ -3654,6 +3807,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
 
             if (dept) file += `&dept=${encodeURIComponent(dept)}`;
             if (source) file += `&source=${encodeURIComponent(source)}`;
+            if (line) file += `&line=${encodeURIComponent(line)}`;
+            if (op) file += `&op=${encodeURIComponent(op)}`;
             window.open(file, '_blank');
         }
 

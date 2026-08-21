@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ambil Data E-Report — API Viewer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+    body { font-family: 'Inter', sans-serif; }
+    .form-field {
+        width: 100%; padding: 0.5rem 0.75rem; border-radius: 8px;
+        border: 1px solid #cbd5e1; font-size: 13px; background: #fff; color: #1e293b;
+    }
+    .form-field:focus { outline: none; border-color: #7a1355; box-shadow: 0 0 0 3px rgba(122,19,85,0.12); }
+    .form-label { font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px; display: block; }
+    .btn-primary {
+        background: #7a1355; color: #fff; font-weight: 600; font-size: 13px;
+        padding: 0.6rem 1.4rem; border-radius: 8px; transition: background .15s;
+    }
+    .btn-primary:hover { background: #5f0f40; }
+    .btn-primary:disabled { background: #cbd5e1; cursor: not-allowed; }
+    .btn-secondary {
+        background: #fff; color: #475569; font-weight: 600; font-size: 12px;
+        padding: 0.45rem 0.9rem; border-radius: 8px; border: 1px solid #cbd5e1;
+    }
+    .btn-secondary:hover { background: #f8fafc; }
+    table.result-table th {
+        background: #f1f5f9; color: #475569; font-size: 11px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.03em; padding: 8px 10px; text-align: left;
+        white-space: nowrap; position: sticky; top: 0;
+    }
+    table.result-table td { padding: 8px 10px; font-size: 12.5px; color: #1e293b; border-top: 1px solid #e2e8f0; white-space: nowrap; }
+    table.result-table tr:hover td { background: #fafbfc; }
+    .status-pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .status-selesai { background: #dcfce7; color: #166534; }
+    .status-belum { background: #fef3c7; color: #92400e; }
+</style>
+</head>
+<body class="bg-slate-100 min-h-screen">
+
+<div class="max-w-7xl mx-auto px-4 py-8">
+
+    <div class="mb-6">
+        <h1 class="text-xl font-bold text-slate-800">Ambil Data E-Report</h1>
+        <p class="text-sm text-slate-500 mt-1">Cari &amp; unduh data laporan kerusakan/downtime mesin — tidak perlu menulis URL, cukup isi form di bawah.</p>
+    </div>
+
+    <!-- Filter Panel -->
+    <div class="bg-white rounded-xl border border-slate-200 p-5 mb-6">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+            <div class="md:col-span-2">
+                <label class="form-label">API Key <span class="text-red-500">*</span></label>
+                <input type="text" id="f-apikey" class="form-field" placeholder="Tempel API key Anda di sini">
+            </div>
+            <div>
+                <label class="form-label">Tanggal Mulai</label>
+                <input type="date" id="f-start" class="form-field">
+            </div>
+            <div>
+                <label class="form-label">Tanggal Akhir</label>
+                <input type="date" id="f-end" class="form-field">
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+            <div>
+                <label class="form-label">Department</label>
+                <input type="text" id="f-department" class="form-field" placeholder="Contoh: Gear Case">
+            </div>
+            <div>
+                <label class="form-label">Line</label>
+                <input type="text" id="f-line" class="form-field" placeholder="Contoh: Leak Air Test">
+            </div>
+            <div>
+                <label class="form-label">OP</label>
+                <input type="text" id="f-op" class="form-field" placeholder="Contoh: OP25">
+            </div>
+            <div>
+                <label class="form-label">Nama Mesin</label>
+                <input type="text" id="f-machine" class="form-field" placeholder="Contoh: Cosmo">
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+            <div>
+                <label class="form-label">Status</label>
+                <select id="f-status" class="form-field">
+                    <option value="">Semua</option>
+                    <option value="selesai">Selesai</option>
+                    <option value="belum selesai">Belum Selesai</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label">Sumber Laporan</label>
+                <select id="f-source" class="form-field">
+                    <option value="">Semua</option>
+                    <option value="conrod">Conrod</option>
+                    <option value="maintenance">Maintenance</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label">Jumlah Baris</label>
+                <select id="f-limit" class="form-field">
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                    <option value="500">500 (maksimal)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3 flex-wrap">
+            <button id="btn-fetch" class="btn-primary">
+                <i class="fas fa-search mr-1"></i> Ambil Data
+            </button>
+            <button id="btn-csv" class="btn-secondary" disabled>Unduh sebagai CSV</button>
+            <button id="btn-clear" class="btn-secondary">Bersihkan Filter</button>
+            <span id="fetch-status" class="text-xs text-slate-500"></span>
+        </div>
+    </div>
+
+    <!-- Result -->
+    <div id="result-panel" class="bg-white rounded-xl border border-slate-200 overflow-hidden hidden" style="display:none;">
+        <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+            <span id="result-count" class="text-sm font-semibold text-slate-700"></span>
+        </div>
+        <div class="overflow-x-auto" style="max-height: 65vh;">
+            <table class="result-table w-full" id="result-table">
+                <thead><tr id="result-thead"></tr></thead>
+                <tbody id="result-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="empty-panel" class="bg-white rounded-xl border border-slate-200 p-10 text-center text-slate-400 text-sm hidden" style="display:none;">
+        Tidak ada data yang cocok dengan filter ini.
+    </div>
+
+</div>
+
+<script>
+// API key terakhir yang dipakai disimpan di browser ini saja (localStorage),
+// murni buat kenyamanan supaya tidak perlu ketik ulang tiap buka halaman —
+// TIDAK dikirim ke mana-mana selain ke api_e_reports.php di server ini sendiri.
+const savedKey = localStorage.getItem('er_api_key');
+if (savedKey) document.getElementById('f-apikey').value = savedKey;
+
+const COLUMNS = [
+    { key: 'report_date',    label: 'Tanggal' },
+    { key: 'department',     label: 'Department' },
+    { key: 'line',           label: 'Line' },
+    { key: 'op',             label: 'OP' },
+    { key: 'machine_name',   label: 'Mesin' },
+    { key: 'shift',          label: 'Shift' },
+    { key: 'repair_start',   label: 'Mulai Perbaikan' },
+    { key: 'repair_finish',  label: 'Selesai Perbaikan' },
+    { key: 'duration_minutes', label: 'Durasi (mnt)' },
+    { key: 'problem',        label: 'Masalah' },
+    { key: 'action',         label: 'Tindakan' },
+    { key: 'status',         label: 'Status' },
+    { key: 'reported_by',    label: 'Dilaporkan Oleh' },
+    { key: 'pic',            label: 'PIC' },
+];
+
+let lastData = [];
+
+function buildUrl() {
+    const p = new URLSearchParams();
+    const add = (id, param) => {
+        const v = document.getElementById(id).value.trim();
+        if (v) p.set(param, v);
+    };
+    add('f-apikey', 'api_key');
+    add('f-start', 'start_date');
+    add('f-end', 'end_date');
+    add('f-department', 'department');
+    add('f-line', 'line');
+    add('f-op', 'op');
+    add('f-machine', 'machine_name');
+    add('f-status', 'status');
+    add('f-source', 'source');
+    p.set('limit', document.getElementById('f-limit').value);
+    return 'api_e_reports.php?' + p.toString();
+}
+
+function renderTable(rows) {
+    const thead = document.getElementById('result-thead');
+    const tbody = document.getElementById('result-tbody');
+    thead.innerHTML = COLUMNS.map(c => `<th>${c.label}</th>`).join('');
+    tbody.innerHTML = rows.map(row => {
+        const cells = COLUMNS.map(c => {
+            let val = row[c.key];
+            if (c.key === 'status' && val) {
+                const cls = val === 'selesai' ? 'status-selesai' : 'status-belum';
+                return `<td><span class="status-pill ${cls}">${val}</span></td>`;
+            }
+            return `<td>${val === null || val === undefined || val === '' ? '—' : String(val)}</td>`;
+        }).join('');
+        return `<tr>${cells}</tr>`;
+    }).join('');
+}
+
+function toCsv(rows) {
+    const header = COLUMNS.map(c => c.label).join(',');
+    const lines = rows.map(row => COLUMNS.map(c => {
+        let val = row[c.key] ?? '';
+        val = String(val).replace(/"/g, '""');
+        return /[",\n]/.test(val) ? `"${val}"` : val;
+    }).join(','));
+    return [header, ...lines].join('\n');
+}
+
+document.getElementById('btn-fetch').addEventListener('click', async () => {
+    const apiKey = document.getElementById('f-apikey').value.trim();
+    const statusEl = document.getElementById('fetch-status');
+    const fetchBtn = document.getElementById('btn-fetch');
+    const csvBtn = document.getElementById('btn-csv');
+    const resultPanel = document.getElementById('result-panel');
+    const emptyPanel = document.getElementById('empty-panel');
+
+    if (!apiKey) {
+        statusEl.textContent = 'API key wajib diisi.';
+        statusEl.className = 'text-xs text-red-500';
+        return;
+    }
+    localStorage.setItem('er_api_key', apiKey);
+
+    fetchBtn.disabled = true;
+    statusEl.textContent = 'Mengambil data...';
+    statusEl.className = 'text-xs text-slate-500';
+    resultPanel.classList.add('hidden'); resultPanel.style.display = 'none';
+    emptyPanel.classList.add('hidden'); emptyPanel.style.display = 'none';
+
+    try {
+        const res = await fetch(buildUrl());
+        const rawText = await res.text();
+
+        let json;
+        try {
+            json = JSON.parse(rawText);
+        } catch (parseErr) {
+            // Respons bukan JSON valid — biasanya tanda ada error PHP (fatal
+            // error/warning) atau path api_e_reports.php salah/404. Tampilkan
+            // potongan respons mentahnya biar gampang didiagnosis.
+            statusEl.textContent = `Server merespons tapi bukan format yang diharapkan (HTTP ${res.status}). Cuplikan respons: "${rawText.slice(0, 150)}"`;
+            statusEl.className = 'text-xs text-red-500';
+            csvBtn.disabled = true;
+            return;
+        }
+
+        if (!json.success) {
+            statusEl.textContent = json.message || 'Terjadi kesalahan.';
+            statusEl.className = 'text-xs text-red-500';
+            csvBtn.disabled = true;
+            return;
+        }
+
+        lastData = json.data;
+        if (lastData.length === 0) {
+            emptyPanel.classList.remove('hidden'); emptyPanel.style.display = '';
+            statusEl.textContent = '';
+            csvBtn.disabled = true;
+        } else {
+            renderTable(lastData);
+            document.getElementById('result-count').textContent =
+                `Menampilkan ${json.count} dari ${json.total} total data`;
+            resultPanel.classList.remove('hidden'); resultPanel.style.display = '';
+            statusEl.textContent = '';
+            csvBtn.disabled = false;
+        }
+    } catch (err) {
+        // Ini baru benar-benar gagal terhubung (network error / file api_e_reports.php
+        // tidak ditemukan sama sekali di server / CORS diblokir browser).
+        statusEl.textContent = `Gagal terhubung ke server: ${err.message}`;
+        statusEl.className = 'text-xs text-red-500';
+        csvBtn.disabled = true;
+    } finally {
+        fetchBtn.disabled = false;
+    }
+});
+
+document.getElementById('btn-csv').addEventListener('click', () => {
+    if (lastData.length === 0) return;
+    const csv = toCsv(lastData);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `e_report_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+});
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+    ['f-start','f-end','f-department','f-line','f-op','f-machine'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('f-status').value = '';
+    document.getElementById('f-source').value = '';
+    document.getElementById('f-limit').value = '100';
+});
+</script>
+
+</body>
+</html>

@@ -34,6 +34,8 @@ $rangeStart = trim($_GET['start'] ?? '');
 $rangeEnd   = trim($_GET['end']   ?? '');
 $dept    = trim($_GET['dept']   ?? '');
 $source  = trim($_GET['source'] ?? '');
+$line    = trim($_GET['line']   ?? '');
+$op      = trim($_GET['op']     ?? '');
 
 // ── Helper: nama bulan Indonesia — dipakai untuk label periode & tidak
 // bergantung ke setlocale() (sering tidak konsisten antar server).
@@ -172,6 +174,18 @@ if ($dept !== '') {
     $whereDate .= " AND r.department = " . $pdo->quote($dept);
     $periodeLabel .= '  |  Dept: ' . $dept;
     $filename      .= '_' . preg_replace('/[^A-Za-z0-9]+/', '', $dept);
+}
+
+// Filter Line & OP — sinkron dengan filter yang sama di history_report.php.
+if ($line !== '') {
+    $whereDate .= " AND r.line = " . $pdo->quote($line);
+    $periodeLabel .= '  |  Line: ' . $line;
+    $filename      .= '_' . preg_replace('/[^A-Za-z0-9]+/', '', $line);
+}
+if ($op !== '') {
+    $whereDate .= " AND r.op = " . $pdo->quote($op);
+    $periodeLabel .= '  |  OP: ' . $op;
+    $filename      .= '_' . preg_replace('/[^A-Za-z0-9]+/', '', $op);
 }
 
 if ($source === 'conrod' || $source === 'maintenance') {
@@ -724,6 +738,27 @@ $centerCols = $isPureMaintenanceExport
 // Dipakai di semua mergeCells/style/autofilter yang sebelumnya hardcode 'T'.
 $lastCol = $isPureMaintenanceExport ? 'Z' : ($useCollapsedFormat ? 'Y' : 'T');
 
+// [HEADER-COLOR] Header hijau (198754) dipakai untuk kolom bagian
+// Maintenance/Technician, header oranye (FB8B24 — warna modul E-Report yang
+// sama dengan tombol Cari & badge di atas) dipakai untuk kolom bagian Conrod
+// — supaya dua sumber data gampang dibedakan sekilas dalam 1 baris header
+// yang sama. Didefinisikan di luar percabangan mode supaya bisa dipakai baik
+// di MODE DAILY maupun MODE MONTHLY/RANGE (dulu cuma didefinisikan di dalam
+// blok mode daily, jadi undefined saat export mode monthly/range).
+$styleHdrMaint = [
+    'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
+    'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
+];
+$styleHdrConrod = [
+    'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
+    'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FB8B24']],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
+];
+// Alias lama ($styleHdr) dipertahankan sebagai default untuk jalur non-collapsed
+// (fallback lama).
+$styleHdr = $styleHdrMaint;
+
 // ═════════════════════════════════════════════════════════════════════════════
 // MODE DAILY — 1 sheet, 1 blok per record
 // ═════════════════════════════════════════════════════════════════════════════
@@ -757,11 +792,6 @@ if ($mode === 'daily') {
         'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '334155']],
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER],
     ];
-    $styleHdr = [
-        'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
-        'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
-        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
-    ];
 
     $startRow = 4;
 
@@ -788,9 +818,22 @@ if ($mode === 'daily') {
             $sheet->getRowDimension($infoRow)->setRowHeight(18);
             $startRow++;
 
+            // [HEADER-COLOR] Warna header sekarang ditentukan per-KOLOM, bukan lagi
+            // per-blok/chain — kolom A:P (bagian Conrod: No s/d Submitted At
+            // (Conrod)) SELALU oranye, kolom Q:Y (bagian Maintenance: Continued By
+            // s/d Submitted At (Maintenance)) SELALU hijau. Ini berlaku sama persis
+            // untuk semua user (admin_conrod maupun admin_maintenance) dan semua
+            // filter Sumber — supaya hasil export selalu identik siapa pun yang
+            // klik ekspor. Format "Laporan Awal/Lanjutan" (isPureMaintenanceExport)
+            // tidak punya konsep split Conrod/Maintenance ini, jadi tetap 1 warna.
             $hdrRow = $startRow;
             $sheet->fromArray($colHeaders, NULL, "A{$hdrRow}");
-            $sheet->getStyle("A{$hdrRow}:{$lastCol}{$hdrRow}")->applyFromArray($styleHdr);
+            if ($isPureMaintenanceExport) {
+                $sheet->getStyle("A{$hdrRow}:{$lastCol}{$hdrRow}")->applyFromArray($styleHdrMaint);
+            } else {
+                $sheet->getStyle("A{$hdrRow}:P{$hdrRow}")->applyFromArray($styleHdrConrod);
+                $sheet->getStyle("Q{$hdrRow}:{$lastCol}{$hdrRow}")->applyFromArray($styleHdrMaint);
+            }
             $sheet->getRowDimension($hdrRow)->setRowHeight(-1);
             $startRow++;
 
@@ -827,9 +870,16 @@ if ($mode === 'daily') {
             $sheet->getRowDimension($infoRow)->setRowHeight(18);
             $startRow++;
 
+            // [HEADER-COLOR] Fallback lama (1 baris = 1 record) — warna header
+            // tetap ditentukan per-blok berdasarkan asal root chain-nya, sama
+            // seperti jalur collapsed format di atas.
+            $rootForColor = findChainRoot($r, $rowsById);
+            $isChainConrod = !empty($rootForColor['foreman']) || (($rootForColor['source_role'] ?? null) === 'admin_conrod');
+            $hdrStyle = $isChainConrod ? $styleHdrConrod : $styleHdrMaint;
+
             $hdrRow = $startRow;
             $sheet->fromArray($colHeaders, NULL, "A{$hdrRow}");
-            $sheet->getStyle("A{$hdrRow}:{$lastCol}{$hdrRow}")->applyFromArray($styleHdr);
+            $sheet->getStyle("A{$hdrRow}:{$lastCol}{$hdrRow}")->applyFromArray($hdrStyle);
             // [FIX-WRAP-HDR] -1 = auto-height, supaya header yang wrap (2+ baris) full terlihat
             $sheet->getRowDimension($hdrRow)->setRowHeight(-1);
             $startRow++;
@@ -922,13 +972,23 @@ if ($mode === 'daily') {
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
 
-    // Header kolom — warna hijau (198754), sama seperti sheet Summary sebelumnya
+    // [HEADER-COLOR] Header kolom — 1 header global untuk seluruh sheet (mode
+    // Monthly/Range tidak dipecah per-blok seperti mode Daily). Warna sekarang
+    // ditentukan per-KOLOM, sama seperti mode Daily: A:P (bagian Conrod) SELALU
+    // oranye, Q:Y (bagian Maintenance) SELALU hijau — tidak lagi bergantung pada
+    // $isPureConrodExport, jadi hasilnya identik untuk semua role & filter Sumber.
+    // Format "Laporan Awal/Lanjutan" (isPureMaintenanceExport) tetap 1 warna hijau.
     $sheet->fromArray($colHeaders, NULL, 'A4');
-    $sheet->getStyle("A4:{$lastCol}4")->applyFromArray([
-        'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
-        'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
-        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
-    ]);
+    if ($isPureMaintenanceExport) {
+        $sheet->getStyle("A4:{$lastCol}4")->applyFromArray([
+            'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
+            'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
+            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
+        ]);
+    } else {
+        $sheet->getStyle('A4:P4')->applyFromArray($styleHdrConrod);
+        $sheet->getStyle("Q4:{$lastCol}4")->applyFromArray($styleHdrMaint);
+    }
     // [FIX-WRAP-HDR] -1 = auto-height, supaya header yang wrap (2+ baris) full terlihat
     $sheet->getRowDimension(4)->setRowHeight(-1);
 
@@ -1085,4 +1145,3 @@ header('Content-Length: ' . filesize($tmpFile));
 readfile($tmpFile);
 unlink($tmpFile);
 exit;
-    

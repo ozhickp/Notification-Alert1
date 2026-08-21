@@ -15,6 +15,58 @@ $pdo->exec("
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 ");
 
+// [SHIFT-SCHEDULE] Jam per shift disimpan di tabel `shift_schedules` (dibuat &
+// diisi lewat shift_schedules_setup.sql — dijalankan SEKALI lewat phpMyAdmin,
+// bukan di sini, supaya tidak ada DDL/INSERT yang percuma diulang tiap
+// request). File ini cuma BACA (SELECT) dari tabel itu lewat
+// resolveShiftForDatetime() di bawah, dipakai untuk auto-isi field Shift di
+// form Laporan Awal admin_conrod berdasarkan "Waktu Kejadian" yang diinput.
+//
+// Tentukan nama shift ('Shift 1'/'Shift 2'/'Shift 3') dari sebuah datetime.
+// Day-type ditentukan dari hari: Jumat = friday, Sabtu/Minggu = holiday
+// (SEMENTARA, sampai tabel hari libur khusus [item #2] dibuat — nanti tanggal
+// merah spesifik di hari kerja biasa juga akan di-override jadi 'holiday'
+// lewat tabel itu), selain itu = weekday. Shift 3 selalu overnight, jadi
+// deteksinya: kalau jam kejadian masih SEBELUM jam mulai Shift 1, berarti itu
+// bagian dari Shift 3 yang mulai H-1 (tidak perlu tahu jadwal H-1 secara
+// eksplisit — cukup pakai batas Shift 1 hari ini sebagai titik potongnya).
+function resolveShiftForDatetime(PDO $pdo, string $datetime): ?string
+{
+    $ts = strtotime($datetime);
+    if (!$ts) return null;
+
+    $dow = (int)date('N', $ts); // 1=Senin ... 7=Minggu
+    if ($dow === 5) {
+        $dayType = 'friday';
+    } elseif ($dow >= 6) {
+        $dayType = 'holiday'; // Sabtu/Minggu — sementara ikut jadwal holiday
+    } else {
+        $dayType = 'weekday'; // Senin-Kamis
+    }
+
+    $stmt = $pdo->prepare("
+        SELECT shift_name, start_time, end_time
+        FROM shift_schedules
+        WHERE day_type = ?
+        ORDER BY start_time ASC
+    ");
+    $stmt->execute([$dayType]);
+    $shifts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if (count($shifts) < 3) return null; // schedule belum lengkap/di-setup
+
+    $timeOfDay = date('H:i:s', $ts);
+    [$s1, $s2, $s3] = $shifts; // terurut start_time ASC → Shift1, Shift2, Shift3
+
+    if ($timeOfDay < $s1['start_time']) {
+        return $s3['shift_name']; // sebelum Shift 1 mulai → masih Shift 3 kemarin
+    } elseif ($timeOfDay < $s2['start_time']) {
+        return $s1['shift_name'];
+    } elseif ($timeOfDay < $s3['start_time']) {
+        return $s2['shift_name'];
+    }
+    return $s3['shift_name'];
+}
+
 // E-Report bisa diakses semua role yang login: admin_maintenance, technician,
 // admin_conrod, dan superadmin.
 if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_ADMIN_CONROD, ROLE_SUPERADMIN], true)) {
@@ -54,6 +106,14 @@ $canConvertSchedule = in_array($role, [ROLE_ADMIN_MAINTENANCE, ROLE_SUPERADMIN],
 // ─── AJAX ─────────────────────────────────────────────────────────────────────
 if (isset($_GET['ajax'])) {
     header('Content-Type: application/json');
+
+    // [SHIFT-SCHEDULE] Dipanggil dari JS tiap kali field "Waktu Kejadian" (tanggal
+    // + jam) di form Laporan Awal admin_conrod diisi/diubah, untuk auto-isi Shift.
+    if ($_GET['ajax'] === 'resolve_shift') {
+        $datetime = trim($_GET['datetime'] ?? '');
+        echo json_encode(['shift' => $datetime ? resolveShiftForDatetime($pdo, $datetime) : null]);
+        exit;
+    }
 
     if ($_GET['ajax'] === 'technicians') {
         $rows = $pdo->query("SELECT id, name FROM technician WHERE is_active = 1 ORDER BY name")->fetchAll();
@@ -1554,8 +1614,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                             <i class="fas fa-play-circle text-slate-300 mr-1"></i> Waktu Kejadian <span class="text-red-400">*</span>
                                         </label>
                                         <div class="flex gap-2">
-                                            <input type="date" id="inp-start-date" class="form-field" style="flex:1;">
-                                            <input type="time" id="inp-start-time" class="form-field" style="flex:1;">
+                                            <input type="date" id="inp-start-date" class="form-field" style="flex:1;" oninput="autoResolveShift()">
+                                            <input type="time" id="inp-start-time" class="form-field" style="flex:1;" oninput="autoResolveShift()">
                                         </div>
                                         <div class="text-[10px] text-slate-400 mt-1">Tanggal & jam diisi manual</div>
                                     </div>
@@ -1574,6 +1634,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                     <div>
                                         <label class="form-label block mb-1.5">
                                             <i class="fas fa-user-clock text-slate-300 mr-1"></i> Shift <span class="text-red-400">*</span>
+                                            <span class="text-slate-300 font-normal normal-case text-[10px]">(otomatis, bisa diubah manual)</span>
                                         </label>
                                         <div class="choice-btn-group" id="shift-btn-group">
                                             <button type="button" class="choice-btn" data-val="Shift 1" onclick="setShift(this)">Shift 1</button>
@@ -2417,6 +2478,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
             btn.classList.add('active');
             document.getElementById('inp-shift').value = btn.getAttribute('data-val');
             checkAllFieldsFilled();
+        }
+
+        // [SHIFT-SCHEDULE] Auto-isi Shift di form Laporan Awal admin_conrod, dari
+        // tanggal+jam "Waktu Kejadian" yang diinput — bukan jam saat submit, supaya
+        // tetap akurat kalau laporan diisi belakangan untuk kejadian yang sudah
+        // lewat. Tombol Shift tetap bisa diklik manual untuk override kalau perlu
+        // (debounce 250ms supaya tidak nembak AJAX di setiap ketikan/geser jam).
+        let shiftAutoFetchTimer = null;
+
+        function autoResolveShift() {
+            if (!IS_CONROD_ONLY) return;
+            const d = document.getElementById('inp-start-date').value;
+            const t = document.getElementById('inp-start-time').value;
+            if (!d || !t) return;
+
+            clearTimeout(shiftAutoFetchTimer);
+            shiftAutoFetchTimer = setTimeout(() => {
+                fetch(`dashboard_report.php?ajax=resolve_shift&datetime=${encodeURIComponent(d + ' ' + t)}`)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (!data.shift) return;
+                        document.querySelectorAll('#shift-btn-group .choice-btn').forEach(b => {
+                            b.classList.toggle('active', b.getAttribute('data-val') === data.shift);
+                        });
+                        document.getElementById('inp-shift').value = data.shift;
+                        checkAllFieldsFilled();
+                    })
+                    .catch(() => {
+                        /* diam-diam gagal — user tetap bisa pilih shift manual */ });
+            }, 250);
         }
 
         function setStatus(btn) {
