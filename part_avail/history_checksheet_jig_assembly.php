@@ -20,6 +20,10 @@ if (empty($_SESSION['checksheet_unlocked']) || ($_SESSION['checksheet_area'] ?? 
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
+// ─── Role identification (untuk munculkan menu Approval di sidebar) ────────
+$currentRole = $_SESSION['role'] ?? '';
+$canOpenApprovalMenu = in_array($currentRole, ['superadmin', 'admin_maintenance'], true);
+
 function jigAssemblyQuarterLabel(int $quarter): string
 {
     $labels = [1 => 'Kuartal 1 (Jan–Mar)', 2 => 'Kuartal 2 (Apr–Jun)', 3 => 'Kuartal 3 (Jul–Sep)', 4 => 'Kuartal 4 (Okt–Des)'];
@@ -864,6 +868,12 @@ if (empty($availableYears)) $availableYears = [date('Y')];
                 <i class="fas fa-pen-to-square"></i>
                 <span class="nav-label">Draft</span>
             </a>
+            <?php if ($canOpenApprovalMenu): ?>
+                <a href="approval_checksheet.php" onclick="navigateTo(event,'approval_checksheet.php')" class="nav-item" title="Approval">
+                    <i class="fas fa-user-check"></i>
+                    <span class="nav-label">Approval</span>
+                </a>
+            <?php endif; ?>
         </nav>
 
         <div id="sidebar-footer">

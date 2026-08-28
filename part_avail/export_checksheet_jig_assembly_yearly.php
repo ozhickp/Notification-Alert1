@@ -112,19 +112,40 @@ if (file_exists('assets/company_logo.jpg')) {
     $logo->setWorksheet($sheet);
 }
 
-$sheet->mergeCells('A1:K1');
+$sheet->mergeCells('A1:I2');
 $sheet->setCellValue('A1', 'JIG ASSEMBLY ANNUAL CHECK SHEET REPORT');
 $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
 $sheet->getStyle('A1')->getAlignment()
     ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
-$sheet->getRowDimension(1)->setRowHeight(45);
+$sheet->getRowDimension(1)->setRowHeight(25);
+$sheet->getRowDimension(2)->setRowHeight(20);
 
-$sheet->mergeCells('A2:K2');
-$sheet->setCellValue('A2', 'Tahun : ' . $tahun . '  (pengecekan setiap 3 bulan sekali)');
-$sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-$sheet->getStyle('A2')->getFont()->setSize(11);
+$sheet->mergeCells('A3:I4');
+$sheet->setCellValue('A3', 'Tahun : ' . $tahun . '  (pengecekan setiap 3 bulan sekali)');
+$sheet->getStyle('A3')->getAlignment()
+    ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
+$sheet->getStyle('A3')->getFont()->setSize(11);
+$sheet->getRowDimension(3)->setRowHeight(16);
+$sheet->getRowDimension(4)->setRowHeight(14);
 
-$headerRow = 4;
+// ── Blok No. Doc / Revisi / Tgl / Halaman ─────────────────────────────────────
+$docLabelStyle = ['font' => ['bold' => true, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+$docValueStyle = ['font' => ['bold' => false, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+$sheet->setCellValue('J1', 'No. Doc');
+$sheet->setCellValue('K1', 'F-AS-08');
+$sheet->setCellValue('J2', 'Revisi');
+$sheet->setCellValue('K2', '00');
+$sheet->setCellValue('J3', 'Tgl');
+$sheet->setCellValue('K3', '06-04-2026');
+$sheet->setCellValue('J4', 'Halaman');
+$sheet->getStyle('J1:J4')->applyFromArray($docLabelStyle);
+$sheet->getStyle('K1:K4')->applyFromArray($docValueStyle);
+
+$sheet->getStyle('A1:K4')->applyFromArray([
+    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_MEDIUM, 'color' => ['rgb' => '94A3B8']]],
+]);
+
+$headerRow = 5;
 $sheet->fromArray(
     ['No', 'Periode', 'Checker', 'Tanggal Cek', 'Submitted', 'Total Item', 'OK', 'NG', 'Compliance', 'Keterangan', 'Edited'],
     NULL,
@@ -233,6 +254,35 @@ $sheet->getRowDimension($row)->setRowHeight(18);
 
 $sheet->getStyle("A{$headerRow}:K{$row}")->applyFromArray([
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
+]);
+
+// ── Blok Tanda Tangan (Checked By / Approved By) ──────────────────────────────
+$sigRow = $row + 2;
+$sheet->mergeCells("A{$sigRow}:E{$sigRow}");
+$sheet->setCellValue("A{$sigRow}", 'Checked By,');
+$sheet->mergeCells("G{$sigRow}:K{$sigRow}");
+$sheet->setCellValue("G{$sigRow}", 'Approved By,');
+$sheet->getStyle("A{$sigRow}:K{$sigRow}")->applyFromArray([
+    'font'      => ['bold' => true, 'size' => 10],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+]);
+for ($i = 0; $i <= 3; $i++) $sheet->getRowDimension($sigRow + $i)->setRowHeight(18);
+
+$lineRow = $sigRow + 4;
+$sheet->mergeCells("A{$lineRow}:E{$lineRow}");
+$sheet->setCellValue("A{$lineRow}", '( ______________________ )');
+$sheet->mergeCells("G{$lineRow}:K{$lineRow}");
+$sheet->setCellValue("G{$lineRow}", '( ______________________ )');
+$sheet->getStyle("A{$lineRow}:K{$lineRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+
+$captionRow = $lineRow + 1;
+$sheet->mergeCells("A{$captionRow}:E{$captionRow}");
+$sheet->setCellValue("A{$captionRow}", 'Checker / Nama & Tanggal');
+$sheet->mergeCells("G{$captionRow}:K{$captionRow}");
+$sheet->setCellValue("G{$captionRow}", 'Supervisor / Nama & Tanggal');
+$sheet->getStyle("A{$captionRow}:K{$captionRow}")->applyFromArray([
+    'font'      => ['italic' => true, 'size' => 8],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
 ]);
 
 $fixedWidths = ['A' => 5, 'B' => 24, 'C' => 16, 'D' => 13, 'E' => 17, 'F' => 10, 'G' => 7, 'H' => 7, 'I' => 11, 'J' => 30, 'K' => 11];

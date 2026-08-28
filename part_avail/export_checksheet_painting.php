@@ -78,19 +78,40 @@ if (file_exists('assets/company_logo.jpg')) {
     $logo->setWorksheet($sheet);
 }
 
-$sheet->mergeCells('A1:G1');
+$sheet->mergeCells('A1:E2');
 $sheet->setCellValue('A1', 'PAINTING MONTHLY CHECK SHEET REPORT');
 $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
 $sheet->getStyle('A1')->getAlignment()
     ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
-$sheet->getRowDimension(1)->setRowHeight(45);
+$sheet->getRowDimension(1)->setRowHeight(25);
+$sheet->getRowDimension(2)->setRowHeight(20);
 
-$sheet->mergeCells('A2:G2');
-$sheet->setCellValue('A2', 'Bulan : ' . date('F Y', strtotime($bulan . '-01')));
-$sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-$sheet->getStyle('A2')->getFont()->setSize(11);
+$sheet->mergeCells('A3:E4');
+$sheet->setCellValue('A3', 'Bulan : ' . date('F Y', strtotime($bulan . '-01')));
+$sheet->getStyle('A3')->getAlignment()
+    ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
+$sheet->getStyle('A3')->getFont()->setSize(11);
+$sheet->getRowDimension(3)->setRowHeight(16);
+$sheet->getRowDimension(4)->setRowHeight(14);
 
-$infoRow = 3;
+// ── Blok No. Doc / Revisi / Tgl / Halaman ─────────────────────────────────────
+$docLabelStyle = ['font' => ['bold' => true, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+$docValueStyle = ['font' => ['bold' => false, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+$sheet->setCellValue('F1', 'No. Doc');
+$sheet->setCellValue('G1', 'F-PS-01');
+$sheet->setCellValue('F2', 'Revisi');
+$sheet->setCellValue('G2', '00');
+$sheet->setCellValue('F3', 'Tgl');
+$sheet->setCellValue('G3', '06-04-2026');
+$sheet->setCellValue('F4', 'Halaman');
+$sheet->getStyle('F1:F4')->applyFromArray($docLabelStyle);
+$sheet->getStyle('G1:G4')->applyFromArray($docValueStyle);
+
+$sheet->getStyle('A1:G4')->applyFromArray([
+    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_MEDIUM, 'color' => ['rgb' => '94A3B8']]],
+]);
+
+$infoRow = 5;
 $sheet->mergeCells("A{$infoRow}:G{$infoRow}");
 $sheet->setCellValue("A{$infoRow}", sprintf(
     "Checker: %s  |  Tanggal Cek: %s  |  Submitted: %s",
@@ -105,7 +126,7 @@ $sheet->getStyle("A{$infoRow}")->applyFromArray([
 ]);
 $sheet->getRowDimension($infoRow)->setRowHeight(18);
 
-$headerRow = 5;
+$headerRow = 6;
 $sheet->fromArray(['No', 'Unit', 'Part yang Dicek', 'Action', 'Result', 'Keterangan', 'Diedit'], NULL, "A{$headerRow}");
 $sheet->getStyle("A{$headerRow}:G{$headerRow}")->applyFromArray([
     'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
@@ -193,6 +214,35 @@ foreach ($grouped as $result => $rows) {
     ];
     foreach ($rows as $r) $sheet->getStyle("E{$r}")->applyFromArray($style);
 }
+
+// ── Blok Tanda Tangan (Checked By / Approved By) ──────────────────────────────
+$sigRow = $row + 2;
+$sheet->mergeCells("A{$sigRow}:C{$sigRow}");
+$sheet->setCellValue("A{$sigRow}", 'Checked By,');
+$sheet->mergeCells("E{$sigRow}:G{$sigRow}");
+$sheet->setCellValue("E{$sigRow}", 'Approved By,');
+$sheet->getStyle("A{$sigRow}:G{$sigRow}")->applyFromArray([
+    'font'      => ['bold' => true, 'size' => 10],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+]);
+for ($i = 0; $i <= 3; $i++) $sheet->getRowDimension($sigRow + $i)->setRowHeight(18);
+
+$lineRow = $sigRow + 4;
+$sheet->mergeCells("A{$lineRow}:C{$lineRow}");
+$sheet->setCellValue("A{$lineRow}", '( ______________________ )');
+$sheet->mergeCells("E{$lineRow}:G{$lineRow}");
+$sheet->setCellValue("E{$lineRow}", '( ______________________ )');
+$sheet->getStyle("A{$lineRow}:G{$lineRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+
+$captionRow = $lineRow + 1;
+$sheet->mergeCells("A{$captionRow}:C{$captionRow}");
+$sheet->setCellValue("A{$captionRow}", 'Checker / Nama & Tanggal');
+$sheet->mergeCells("E{$captionRow}:G{$captionRow}");
+$sheet->setCellValue("E{$captionRow}", 'Supervisor / Nama & Tanggal');
+$sheet->getStyle("A{$captionRow}:G{$captionRow}")->applyFromArray([
+    'font'      => ['italic' => true, 'size' => 8],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+]);
 
 $fixedWidths = ['A' => 5, 'B' => 24, 'C' => 46, 'D' => 12, 'E' => 10, 'F' => 26, 'G' => 9];
 foreach ($fixedWidths as $col => $w) $sheet->getColumnDimension($col)->setWidth($w);

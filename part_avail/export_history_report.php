@@ -25,6 +25,7 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Drawing;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
 // ── Parameter ──────────────────────────────────────────────────────────────────
 $mode    = $_GET['mode']    ?? 'daily';
@@ -528,6 +529,78 @@ function setInternalLink($sheet, string $cellCoord, int $targetRow)
     $sheet->getStyle($cellCoord)->getFont()->setUnderline(true)->getColor()->setRGB('2563EB');
 }
 
+// ── [ADD-DOC-HEADER] Blok No. Doc / Revisi / Tgl / Halaman ────────────────────
+// Menyamai posisi & urutan yang sudah dipakai di export_checksheet_painting.php
+// & export_checksheet_daily.php: 2 kolom TERAKHIR tabel, disusun vertikal
+// No. Doc (baris 1) → Revisi (baris 2) → Tgl (baris 3) → Halaman (baris 4).
+// No. Doc & Tgl sengaja dikosongkan dulu — belum ada nomor dokumen resminya.
+function addDocInfoBlock($sheet, string $lastCol): void
+{
+    $lastColIdx = Coordinate::columnIndexFromString($lastCol);
+    $labelCol   = Coordinate::stringFromColumnIndex(max($lastColIdx - 1, 1));
+    $valueCol   = $lastCol;
+
+    $docLabelStyle = ['font' => ['bold' => true, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+    $docValueStyle = ['font' => ['bold' => false, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+
+    $sheet->setCellValue("{$labelCol}1", 'No. Doc');
+    $sheet->setCellValue("{$valueCol}1", ''); // [dikosongkan dulu]
+    $sheet->setCellValue("{$labelCol}2", 'Revisi');
+    $sheet->setCellValue("{$valueCol}2", '00');
+    $sheet->setCellValue("{$labelCol}3", 'Tgl');
+    $sheet->setCellValue("{$valueCol}3", ''); // [dikosongkan dulu]
+    $sheet->setCellValue("{$labelCol}4", 'Halaman');
+
+    $sheet->getStyle("{$labelCol}1:{$labelCol}4")->applyFromArray($docLabelStyle);
+    $sheet->getStyle("{$valueCol}1:{$valueCol}4")->applyFromArray($docValueStyle);
+
+    $sheet->getStyle("A1:{$valueCol}4")->applyFromArray([
+        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_MEDIUM, 'color' => ['rgb' => '94A3B8']]],
+    ]);
+}
+
+// ── [ADD-SIGNATURE] Blok Checked By / Approved By ─────────────────────────────
+// Menyamai format yang sudah dipakai di export_checksheet_painting.php &
+// export_checksheet_daily.php. Ditaruh $afterRow (baris kosong setelah
+// konten terakhir sheet), dibagi 2 kolom (kiri: Checked By, kanan: Approved By).
+function addSignatureBlock($sheet, string $lastCol, int $afterRow): void
+{
+    $lastColIdx = Coordinate::columnIndexFromString($lastCol);
+    $midIdx     = max(intdiv($lastColIdx, 2), 1);
+    $midCol     = Coordinate::stringFromColumnIndex($midIdx);
+    $nextCol    = Coordinate::stringFromColumnIndex($midIdx + 1);
+
+    $sigRow = $afterRow;
+    $sheet->mergeCells("A{$sigRow}:{$midCol}{$sigRow}");
+    $sheet->setCellValue("A{$sigRow}", 'Checked By,');
+    $sheet->mergeCells("{$nextCol}{$sigRow}:{$lastCol}{$sigRow}");
+    $sheet->setCellValue("{$nextCol}{$sigRow}", 'Approved By,');
+    $sheet->getStyle("A{$sigRow}:{$lastCol}{$sigRow}")->applyFromArray([
+        'font'      => ['bold' => true, 'size' => 10],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+    ]);
+    for ($i = 0; $i <= 3; $i++) {
+        $sheet->getRowDimension($sigRow + $i)->setRowHeight(18);
+    }
+
+    $lineRow = $sigRow + 4;
+    $sheet->mergeCells("A{$lineRow}:{$midCol}{$lineRow}");
+    $sheet->setCellValue("A{$lineRow}", '( ______________________ )');
+    $sheet->mergeCells("{$nextCol}{$lineRow}:{$lastCol}{$lineRow}");
+    $sheet->setCellValue("{$nextCol}{$lineRow}", '( ______________________ )');
+    $sheet->getStyle("A{$lineRow}:{$lastCol}{$lineRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+
+    $captionRow = $lineRow + 1;
+    $sheet->mergeCells("A{$captionRow}:{$midCol}{$captionRow}");
+    $sheet->setCellValue("A{$captionRow}", 'Checker / Nama & Tanggal');
+    $sheet->mergeCells("{$nextCol}{$captionRow}:{$lastCol}{$captionRow}");
+    $sheet->setCellValue("{$nextCol}{$captionRow}", 'Supervisor / Nama & Tanggal');
+    $sheet->getStyle("A{$captionRow}:{$lastCol}{$captionRow}")->applyFromArray([
+        'font'      => ['italic' => true, 'size' => 8],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+    ]);
+}
+
 // ── Shared styles ─────────────────────────────────────────────────────────────
 $styleDivider = [
     'font'      => ['bold' => true, 'size' => 9, 'color' => ['rgb' => '64748B'], 'italic' => true],
@@ -738,6 +811,13 @@ $centerCols = $isPureMaintenanceExport
 // Dipakai di semua mergeCells/style/autofilter yang sebelumnya hardcode 'T'.
 $lastCol = $isPureMaintenanceExport ? 'Z' : ($useCollapsedFormat ? 'Y' : 'T');
 
+// [ADD-DOC-HEADER] Blok No. Doc / Revisi / Tgl / Halaman selalu memakai 2
+// kolom TERAKHIR tabel (persis seperti export_checksheet_painting &
+// export_checksheet_daily) — judul & periode di-merge hanya sampai $titleCol
+// (2 kolom sebelum lastCol) supaya tidak menabrak blok ini.
+$lastColIdx = Coordinate::columnIndexFromString($lastCol);
+$titleCol   = Coordinate::stringFromColumnIndex(max($lastColIdx - 2, 1));
+
 // [HEADER-COLOR] Header hijau (198754) dipakai untuk kolom bagian
 // Maintenance/Technician, header oranye (FB8B24 — warna modul E-Report yang
 // sama dengan tombol Cari & badge di atas) dipakai untuk kolom bagian Conrod
@@ -776,16 +856,22 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet);
     }
 
-    $sheet->mergeCells("A1:{$lastCol}1");
+    $sheet->mergeCells("A1:{$titleCol}1");
     $sheet->setCellValue('A1', $reportTitle);
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet->getRowDimension(1)->setRowHeight(45);
-    $sheet->mergeCells("A2:{$lastCol}2");
+    $sheet->mergeCells("A2:{$titleCol}2");
     $sheet->setCellValue('A2', $periodeLabel);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
+    $sheet->getRowDimension(2)->setRowHeight(20);
+    $sheet->getRowDimension(3)->setRowHeight(16);
+    $sheet->getRowDimension(4)->setRowHeight(16);
+
+    // [ADD-DOC-HEADER] No. Doc / Revisi / Tgl / Halaman (No. Doc & Tgl kosong dulu)
+    addDocInfoBlock($sheet, $lastCol);
 
     $styleInfo = [
         'font'      => ['bold' => true, 'size' => 9, 'color' => ['rgb' => 'FFFFFF']],
@@ -793,7 +879,9 @@ if ($mode === 'daily') {
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER],
     ];
 
-    $startRow = 4;
+    // [ADD-DOC-HEADER] Konten blok pertama digeser mulai baris 5 (bukan 4 lagi)
+    // supaya baris 1–4 tersedia penuh untuk blok No. Doc/Revisi/Tgl/Halaman.
+    $startRow = 5;
 
     if ($useCollapsedFormat) {
         // [CONROD-COLLAPSE] 1 blok = 1 chain (root + seluruh follow-up digabung
@@ -938,10 +1026,14 @@ if ($mode === 'daily') {
         }
     }
 
+    // [ADD-SIGNATURE] Checked By / Approved By — $startRow sudah menyisakan
+    // 2 baris kosong setelah blok/chain terakhir.
+    addSignatureBlock($sheet, $lastCol, $startRow);
+
     foreach ($colWidths as $col => $w) {
         $sheet->getColumnDimension($col)->setWidth($w);
     }
-    $sheet->freezePane('A4');
+    $sheet->freezePane('A5');
 
     // ═════════════════════════════════════════════════════════════════════════════
     // MODE MONTHLY — 1 sheet, format Detail (18 kolom lengkap) dengan header
@@ -961,16 +1053,21 @@ if ($mode === 'daily') {
         $logo->setWorksheet($sheet);
     }
 
-    $sheet->mergeCells("A1:{$lastCol}1");
+    $sheet->mergeCells("A1:{$titleCol}1");
     $sheet->setCellValue('A1', $reportTitle);
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
     $sheet->getStyle('A1')->getAlignment()
         ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
     $sheet->getRowDimension(1)->setRowHeight(45);
-    $sheet->mergeCells("A2:{$lastCol}2");
+    $sheet->mergeCells("A2:{$titleCol}2");
     $sheet->setCellValue('A2', $periodeLabel);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle('A2')->getFont()->setSize(11);
+    $sheet->getRowDimension(2)->setRowHeight(20);
+    $sheet->getRowDimension(3)->setRowHeight(16);
+
+    // [ADD-DOC-HEADER] No. Doc / Revisi / Tgl / Halaman (No. Doc & Tgl kosong dulu)
+    addDocInfoBlock($sheet, $lastCol);
 
     // [HEADER-COLOR] Header kolom — 1 header global untuk seluruh sheet (mode
     // Monthly/Range tidak dipecah per-blok seperti mode Daily). Warna sekarang
@@ -978,21 +1075,23 @@ if ($mode === 'daily') {
     // oranye, Q:Y (bagian Maintenance) SELALU hijau — tidak lagi bergantung pada
     // $isPureConrodExport, jadi hasilnya identik untuk semua role & filter Sumber.
     // Format "Laporan Awal/Lanjutan" (isPureMaintenanceExport) tetap 1 warna hijau.
-    $sheet->fromArray($colHeaders, NULL, 'A4');
+    // [ADD-DOC-HEADER] Header kolom digeser ke baris 5 (bukan 4 lagi) supaya
+    // baris 1–4 tersedia penuh untuk blok No. Doc/Revisi/Tgl/Halaman.
+    $sheet->fromArray($colHeaders, NULL, 'A5');
     if ($isPureMaintenanceExport) {
-        $sheet->getStyle("A4:{$lastCol}4")->applyFromArray([
+        $sheet->getStyle("A5:{$lastCol}5")->applyFromArray([
             'font'      => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 9],
             'fill'      => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '198754']],
             'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER, 'wrapText' => true],
         ]);
     } else {
-        $sheet->getStyle('A4:P4')->applyFromArray($styleHdrConrod);
-        $sheet->getStyle("Q4:{$lastCol}4")->applyFromArray($styleHdrMaint);
+        $sheet->getStyle('A5:P5')->applyFromArray($styleHdrConrod);
+        $sheet->getStyle("Q5:{$lastCol}5")->applyFromArray($styleHdrMaint);
     }
     // [FIX-WRAP-HDR] -1 = auto-height, supaya header yang wrap (2+ baris) full terlihat
-    $sheet->getRowDimension(4)->setRowHeight(-1);
+    $sheet->getRowDimension(5)->setRowHeight(-1);
 
-    $row           = 5;
+    $row           = 6;
     $prevDate      = '';
     $dataRows      = [];
 
@@ -1094,13 +1193,13 @@ if ($mode === 'daily') {
         }
     }
 
-    if ($row > 5) {
-        $sheet->getStyle("A4:{$lastCol}" . ($row - 1))->applyFromArray($styleBorder);
+    if ($row > 6) {
+        $sheet->getStyle("A5:{$lastCol}" . ($row - 1))->applyFromArray($styleBorder);
     }
 
     // AutoFilter di header — supaya user bisa filter/sort langsung dari kolom manapun.
     if (!empty($dataRows)) {
-        $sheet->setAutoFilter("A4:{$lastCol}" . $dataRows[count($dataRows) - 1]);
+        $sheet->setAutoFilter("A5:{$lastCol}" . $dataRows[count($dataRows) - 1]);
     }
 
     // ── Baris Total : total record + total durasi — style sama seperti baris
@@ -1119,10 +1218,13 @@ if ($mode === 'daily') {
     ]);
     $sheet->getRowDimension($row)->setRowHeight(18);
 
+    // [ADD-SIGNATURE] Checked By / Approved By, 2 baris setelah baris TOTAL.
+    addSignatureBlock($sheet, $lastCol, $row + 2);
+
     foreach ($colWidths as $col => $w) {
         $sheet->getColumnDimension($col)->setWidth($w);
     }
-    $sheet->freezePane('A5');
+    $sheet->freezePane('A6');
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────────

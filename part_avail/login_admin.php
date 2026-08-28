@@ -1,11 +1,18 @@
 <?php
-// ── login_admin.php ── Login untuk Admin ──
+
 session_start();
 require_once __DIR__ . '/config.php';
 
+$superadminRedirectWhitelist = ['dashboard_admin.php', 'approval_checksheet.php'];
+
+$requestedRedirect = trim($_GET['redirect'] ?? $_POST['redirect'] ?? '');
+$redirectTarget = in_array($requestedRedirect, $superadminRedirectWhitelist, true)
+    ? $requestedRedirect
+    : 'dashboard_admin.php';
+
 // Redirect jika sudah login sebagai admin
 if (isset($_SESSION['user_id']) && $_SESSION['role'] === 'superadmin') {
-    header('Location: dashboard_admin.php');
+    header('Location: ' . $redirectTarget);
     exit;
 }
 
@@ -40,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_id']  = $user['id'];
             $_SESSION['username'] = $user['username'];
             $_SESSION['role']     = $user['role'];
-            header('Location: dashboard_admin.php');
+            header('Location: ' . $redirectTarget);
             exit;
         }
     }
@@ -220,6 +227,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             <form method="POST" action="" class="space-y-5" novalidate>
 
+                <input type="hidden" name="redirect" value="<?= htmlspecialchars($requestedRedirect) ?>">
+
                 <div>
                     <label class="label-text block mb-1.5">Username atau Email</label>
                     <input type="text" name="identifier" required
@@ -262,7 +271,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <!-- Back to user login -->
         <div class="text-center mt-6 fade-up-3">
-            <a href="login_user.php"
+            <a href="login_user.php<?= $requestedRedirect !== '' ? '?redirect=' . urlencode($requestedRedirect) : '' ?>"
                 class="btn-back inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />

@@ -112,19 +112,40 @@ if (file_exists('assets/company_logo.jpg')) {
     $logo->setWorksheet($sheet);
 }
 
-$sheet->mergeCells('A1:L1');
+$sheet->mergeCells('A1:J2');
 $sheet->setCellValue('A1', 'PAINTING ANNUAL CHECK SHEET REPORT');
 $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
 $sheet->getStyle('A1')->getAlignment()
     ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
-$sheet->getRowDimension(1)->setRowHeight(45);
+$sheet->getRowDimension(1)->setRowHeight(25);
+$sheet->getRowDimension(2)->setRowHeight(20);
 
-$sheet->mergeCells('A2:L2');
-$sheet->setCellValue('A2', 'Tahun : ' . $tahun);
-$sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-$sheet->getStyle('A2')->getFont()->setSize(11);
+$sheet->mergeCells('A3:J4');
+$sheet->setCellValue('A3', 'Tahun : ' . $tahun);
+$sheet->getStyle('A3')->getAlignment()
+    ->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER);
+$sheet->getStyle('A3')->getFont()->setSize(11);
+$sheet->getRowDimension(3)->setRowHeight(16);
+$sheet->getRowDimension(4)->setRowHeight(14);
 
-$headerRow = 4;
+// ── Blok No. Doc / Revisi / Tgl / Halaman ─────────────────────────────────────
+$docLabelStyle = ['font' => ['bold' => true, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+$docValueStyle = ['font' => ['bold' => false, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+$sheet->setCellValue('K1', 'No. Doc');
+$sheet->setCellValue('L1', 'F-PS-02');
+$sheet->setCellValue('K2', 'Revisi');
+$sheet->setCellValue('L2', '00');
+$sheet->setCellValue('K3', 'Tgl');
+$sheet->setCellValue('L3', '06-04-2026');
+$sheet->setCellValue('K4', 'Halaman');
+$sheet->getStyle('K1:K4')->applyFromArray($docLabelStyle);
+$sheet->getStyle('L1:L4')->applyFromArray($docValueStyle);
+
+$sheet->getStyle('A1:L4')->applyFromArray([
+    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_MEDIUM, 'color' => ['rgb' => '94A3B8']]],
+]);
+
+$headerRow = 5;
 $sheet->fromArray(
     ['No', 'Bulan', 'Checker', 'Tanggal Cek', 'Submitted', 'Total Item', 'Checked', 'OK', 'NG', 'Compliance', 'Keterangan', 'Edited'],
     NULL,
@@ -233,6 +254,35 @@ $sheet->getRowDimension($row)->setRowHeight(18);
 
 $sheet->getStyle("A{$headerRow}:L{$row}")->applyFromArray([
     'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => '94A3B8']]],
+]);
+
+// ── Blok Tanda Tangan (Checked By / Approved By) ──────────────────────────────
+$sigRow = $row + 2;
+$sheet->mergeCells("A{$sigRow}:E{$sigRow}");
+$sheet->setCellValue("A{$sigRow}", 'Checked By,');
+$sheet->mergeCells("G{$sigRow}:L{$sigRow}");
+$sheet->setCellValue("G{$sigRow}", 'Approved By,');
+$sheet->getStyle("A{$sigRow}:L{$sigRow}")->applyFromArray([
+    'font'      => ['bold' => true, 'size' => 10],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+]);
+for ($i = 0; $i <= 3; $i++) $sheet->getRowDimension($sigRow + $i)->setRowHeight(18);
+
+$lineRow = $sigRow + 4;
+$sheet->mergeCells("A{$lineRow}:E{$lineRow}");
+$sheet->setCellValue("A{$lineRow}", '( ______________________ )');
+$sheet->mergeCells("G{$lineRow}:L{$lineRow}");
+$sheet->setCellValue("G{$lineRow}", '( ______________________ )');
+$sheet->getStyle("A{$lineRow}:L{$lineRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+
+$captionRow = $lineRow + 1;
+$sheet->mergeCells("A{$captionRow}:E{$captionRow}");
+$sheet->setCellValue("A{$captionRow}", 'Checker / Nama & Tanggal');
+$sheet->mergeCells("G{$captionRow}:L{$captionRow}");
+$sheet->setCellValue("G{$captionRow}", 'Supervisor / Nama & Tanggal');
+$sheet->getStyle("A{$captionRow}:L{$captionRow}")->applyFromArray([
+    'font'      => ['italic' => true, 'size' => 8],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
 ]);
 
 $fixedWidths = ['A' => 5, 'B' => 14, 'C' => 16, 'D' => 13, 'E' => 17, 'F' => 10, 'G' => 9, 'H' => 7, 'I' => 7, 'J' => 11, 'K' => 30, 'L' => 11];

@@ -3,29 +3,91 @@
 require_once __DIR__ . '/config.php';
 
 if (session_status() === PHP_SESSION_NONE) session_start();
-if (empty($_SESSION['checksheet_unlocked']) || ($_SESSION['checksheet_area'] ?? '') !== 'maintenance') {
+
+// ─── Gate akses: WAJIB login akun sistem utama ─────────────────────────────
+$currentRole  = $_SESSION['role'] ?? '';
+$isLoggedIn   = !empty($_SESSION['user_id']) || !empty($_SESSION['username']);
+
+// Belum login sama sekali -> lempar ke halaman login utama (login_user.php,
+// yang juga punya tombol "Login sebagai Admin" ke login_admin.php).
+if (!$isLoggedIn) {
     if (isset($_GET['ajax'])) {
         header('Content-Type: application/json');
-        http_response_code(403);
+        http_response_code(401);
         echo json_encode(['error' => 'unauthorized']);
         exit;
     }
-    header('Location: checksheet_gate.php?redirect=history_checksheet.php');
+    header('Location: login_user.php?redirect=approval_checksheet.php');
+    exit;
+}
+
+// Sudah login, tapi role tidak diizinkan -> tolak akses (403), jangan tampilkan halaman
+// Superadmin: role disimpan sebagai string literal 'superadmin' (lihat login_admin.php).
+// Admin Maintenance: role disimpan lewat constant ROLE_ADMIN_MAINTENANCE (lihat login_user.php / config.php).
+$isApprover = ($currentRole === 'superadmin') || ($currentRole === ROLE_ADMIN_MAINTENANCE);
+if (!$isApprover) {
+    if (isset($_GET['ajax'])) {
+        header('Content-Type: application/json');
+        http_response_code(403);
+        echo json_encode(['error' => 'forbidden', 'message' => 'Menu Approval hanya untuk role superadmin / admin_maintenance.']);
+        exit;
+    }
+    http_response_code(403);
+    echo '<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8">'
+        . '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        . '<title>Akses Ditolak — Maintenance Hub</title>'
+        . '<style>body{font-family:sans-serif;background:#f1f5f9;height:100vh;margin:0;display:flex;align-items:center;justify-content:center;}'
+        . '.box{background:#fff;border-radius:16px;padding:32px 40px;box-shadow:0 4px 20px rgba(0,0,0,.06);text-align:center;max-width:380px;}'
+        . 'h1{font-size:1rem;color:#dc2626;margin:0 0 8px;}p{font-size:.85rem;color:#64748b;margin:0 0 20px;}'
+        . 'a{display:inline-block;background:#c4550f;color:#fff;text-decoration:none;font-weight:700;font-size:.8rem;padding:10px 20px;border-radius:10px;}</style>'
+        . '</head><body><div class="box"><h1>Akses Ditolak</h1>'
+        . '<p>Menu Approval Check Sheet hanya bisa diakses oleh role <b>superadmin</b> dan <b>admin_maintenance</b>. '
+        . 'Akun Anda (role: ' . htmlspecialchars($currentRole ?: '-') . ') tidak memiliki izin ke halaman ini.</p>'
+        . '<a href="index.php">Kembali ke Menu Utama</a></div></body></html>';
     exit;
 }
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-// ─── Role identification ────────────────────────────────────────────────────
-// CATATAN: Aksi approve/reject SUDAH DIPINDAH ke approval_checksheet.php supaya
-// halaman History ini tetap murni untuk melihat riwayat (tidak "rancu" dengan
-// tombol approval). $isApprover sengaja selalu false di sini — jangan diubah —
-// karena men-set true akan memunculkan lagi UI approve/reject/batch di halaman
-// ini. Kalau butuh approve/reject, buka menu Approval.
-$currentRole  = $_SESSION['role'] ?? '';
-$isApprover   = false;
-$canOpenApprovalMenu = in_array($currentRole, ['superadmin', 'admin_maintenance'], true);
+// ─── Approver identification ───────────────────────────────────────────────
+// Sudah dipastikan login + role diizinkan di atas.
 $approverName = $_SESSION['username'] ?? $_SESSION['name'] ?? ($currentRole !== '' ? $currentRole : 'Unknown');
+
+// ─── Konfigurasi jenis checksheet yang bisa di-approve dari halaman ini ───────
+// MODIFIKASI: Approval Check Sheet digabung supaya Maintenance, Painting, dan
+// Jig Assembly bisa direview di satu tempat (tab pemilih jenis di UI).
+// Catatan: painting_checksheet_submissions & jig_assembly_submissions perlu kolom
+// approval_status/approved_by/approved_at/approval_note (migrasi disiapkan terpisah).
+$TYPE_CONFIG = [
+    'maintenance' => [
+        'label'         => 'Maintenance',
+        'table'         => 'checksheet_submissions',
+        'detail_table'  => 'checksheet_submission_details',
+        'result_col'    => 'result',
+    ],
+    'painting' => [
+        'label'         => 'Painting',
+        'table'         => 'painting_checksheet_submissions',
+        'detail_table'  => 'painting_checksheet_submission_details',
+        'result_col'    => 'result',
+    ],
+    'jig_assembly' => [
+        'label'         => 'Jig Assembly',
+        'table'         => 'jig_assembly_submissions',
+        'detail_table'  => 'jig_assembly_submission_details',
+        'result_col'    => 'visual_result',
+    ],
+];
+
+function resolveApprovalType(): string
+{
+    global $TYPE_CONFIG;
+    $t = $_GET['type'] ?? ($_POST['type'] ?? 'maintenance');
+    if (!is_string($t) || !array_key_exists($t, $TYPE_CONFIG)) {
+        return 'maintenance';
+    }
+    return $t;
+}
 
 // ─── AJAX: fetch history data ─────────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
@@ -33,6 +95,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     @ini_set('display_errors', 0);
     header('Content-Type: application/json');
 
+    $type   = resolveApprovalType();
     $mode   = $_GET['mode']   ?? 'daily';     // daily | monthly
     $value  = $_GET['value']  ?? '';          // YYYY-MM-DD | YYYY-MM
     $page   = max(1, (int)($_GET['page'] ?? 1));
@@ -41,24 +104,81 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
     $approvalFilter = isset($_GET['approval']) ? trim($_GET['approval']) : ''; // '', pending, approved, rejected
 
-    if ($value === '') {
-        echo json_encode(['rows' => [], 'total' => 0]);
+    if ($type === 'maintenance') {
+        if ($value === '') {
+            echo json_encode(['rows' => [], 'total' => 0]);
+            exit;
+        }
+
+        // Filter tanggal/bulan dasar
+        if ($mode === 'daily') {
+            $where = "WHERE DATE(s.check_date) = ?";
+        } else {
+            $where = "WHERE DATE_FORMAT(s.check_date, '%Y-%m') = ?";
+        }
+        $params = [$value];
+
+        // INTEGRASI SERVER-SIDE SEARCH: Tambah kondisi pencarian global jika parameter search diisi
+        if ($search !== '') {
+            $where .= " AND (s.machine_name LIKE ? OR s.department LIKE ? OR s.line LIKE ? OR s.op LIKE ? OR s.checker LIKE ?)";
+            $searchParam = "%{$search}%";
+            $params = array_merge($params, [$searchParam, $searchParam, $searchParam, $searchParam, $searchParam]);
+        }
+
+        if (in_array($approvalFilter, ['pending', 'approved', 'rejected'], true)) {
+            $where .= " AND s.approval_status = ?";
+            $params[] = $approvalFilter;
+        }
+
+        // Hitung total records yang sesuai dengan filter tanggal + keyword search
+        $countStmt = $pdo->prepare("SELECT COUNT(*) FROM checksheet_submissions s $where");
+        $countStmt->execute($params);
+        $total = (int)$countStmt->fetchColumn();
+
+        $stmt = $pdo->prepare("
+            SELECT s.id, s.check_date, s.department, s.line, s.op,
+                   s.machine_name, s.machine_type, s.category_key,
+                   s.checker, s.submitted_at,
+                   s.approval_status, s.approved_by, s.approved_at, s.approval_note,
+                   COUNT(d.id) AS total_items,
+                   SUM(d.result = 'V')  AS ok_count,
+                   SUM(d.result = 'X')  AS problem_count,
+                   SUM(d.result = 'R')  AS repair_count,
+                   SUM(d.result = 'RO') AS outsider_count,
+                   SUM(d.result = '-')  AS na_count
+            FROM checksheet_submissions s
+            LEFT JOIN checksheet_submission_details d ON d.submission_id = s.id
+            $where
+            GROUP BY s.id
+            ORDER BY s.submitted_at DESC
+            LIMIT $limit OFFSET $offset
+        ");
+        $stmt->execute($params);
+        $rows = $stmt->fetchAll();
+
+        echo json_encode(['rows' => $rows, 'total' => $total, 'limit' => $limit]);
         exit;
     }
 
-    // Filter tanggal/bulan dasar
-    if ($mode === 'daily') {
-        $where = "WHERE DATE(s.check_date) = ?";
-    } else {
-        $where = "WHERE DATE_FORMAT(s.check_date, '%Y-%m') = ?";
-    }
-    $params = [$value];
+    // ── Painting / Jig Assembly: tidak wajib pilih tanggal, tampilkan semua submission
+    // sesuai filter search + status approval, diurutkan dari yang terbaru ──
+    $cfg         = $TYPE_CONFIG[$type];
+    $table       = $cfg['table'];
+    $detailTable = $cfg['detail_table'];
+    $resultCol   = $cfg['result_col'];
 
-    // INTEGRASI SERVER-SIDE SEARCH: Tambah kondisi pencarian global jika parameter search diisi
+    $where  = "WHERE 1=1";
+    $params = [];
+
     if ($search !== '') {
-        $where .= " AND (s.machine_name LIKE ? OR s.department LIKE ? OR s.line LIKE ? OR s.op LIKE ? OR s.checker LIKE ?)";
         $searchParam = "%{$search}%";
-        $params = array_merge($params, [$searchParam, $searchParam, $searchParam, $searchParam, $searchParam]);
+        if ($type === 'painting') {
+            $where .= " AND (s.checker LIKE ? OR s.period_month LIKE ? OR s.check_date LIKE ?)";
+            $params = array_merge($params, [$searchParam, $searchParam, $searchParam]);
+        } else {
+            $where .= " AND (s.checker LIKE ? OR s.check_date LIKE ?)";
+            $params = array_merge($params, [$searchParam, $searchParam]);
+        }
     }
 
     if (in_array($approvalFilter, ['pending', 'approved', 'rejected'], true)) {
@@ -66,24 +186,19 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
         $params[] = $approvalFilter;
     }
 
-    // Hitung total records yang sesuai dengan filter tanggal + keyword search
-    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM checksheet_submissions s $where");
+    $countStmt = $pdo->prepare("SELECT COUNT(*) FROM $table s $where");
     $countStmt->execute($params);
     $total = (int)$countStmt->fetchColumn();
 
+    $periodCol = $type === 'painting' ? 's.period_month,' : '';
     $stmt = $pdo->prepare("
-        SELECT s.id, s.check_date, s.department, s.line, s.op,
-               s.machine_name, s.machine_type, s.category_key,
-               s.checker, s.submitted_at,
+        SELECT s.id, $periodCol s.check_date, s.checker, s.submitted_at,
                s.approval_status, s.approved_by, s.approved_at, s.approval_note,
                COUNT(d.id) AS total_items,
-               SUM(d.result = 'V')  AS ok_count,
-               SUM(d.result = 'X')  AS problem_count,
-               SUM(d.result = 'R')  AS repair_count,
-               SUM(d.result = 'RO') AS outsider_count,
-               SUM(d.result = '-')  AS na_count
-        FROM checksheet_submissions s
-        LEFT JOIN checksheet_submission_details d ON d.submission_id = s.id
+               SUM(d.$resultCol = 'OK') AS ok_count,
+               SUM(d.$resultCol = 'NG') AS ng_count
+        FROM $table s
+        LEFT JOIN $detailTable d ON d.submission_id = s.id
         $where
         GROUP BY s.id
         ORDER BY s.submitted_at DESC
@@ -93,6 +208,82 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $rows = $stmt->fetchAll();
 
     echo json_encode(['rows' => $rows, 'total' => $total, 'limit' => $limit]);
+    exit;
+}
+
+// ─── AJAX: fetch ALL submission id yang sesuai filter (untuk "Select All" lintas halaman) ──
+// Dipakai oleh checkbox header supaya centang bisa mencakup SELURUH hasil filter/search,
+// bukan cuma baris yang sedang tampil di halaman aktif.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'history_ids') {
+    error_reporting(0);
+    @ini_set('display_errors', 0);
+    header('Content-Type: application/json');
+
+    $type   = resolveApprovalType();
+    $mode   = $_GET['mode']   ?? 'daily';
+    $value  = $_GET['value']  ?? '';
+    $search = isset($_GET['search']) ? trim($_GET['search']) : '';
+    $approvalFilter = isset($_GET['approval']) ? trim($_GET['approval']) : '';
+
+    if ($type === 'maintenance') {
+        if ($value === '') {
+            echo json_encode(['ids' => []]);
+            exit;
+        }
+
+        if ($mode === 'daily') {
+            $where = "WHERE DATE(s.check_date) = ?";
+        } else {
+            $where = "WHERE DATE_FORMAT(s.check_date, '%Y-%m') = ?";
+        }
+        $params = [$value];
+
+        if ($search !== '') {
+            $where .= " AND (s.machine_name LIKE ? OR s.department LIKE ? OR s.line LIKE ? OR s.op LIKE ? OR s.checker LIKE ?)";
+            $searchParam = "%{$search}%";
+            $params = array_merge($params, [$searchParam, $searchParam, $searchParam, $searchParam, $searchParam]);
+        }
+
+        if (in_array($approvalFilter, ['pending', 'approved', 'rejected'], true)) {
+            $where .= " AND s.approval_status = ?";
+            $params[] = $approvalFilter;
+        }
+
+        $stmt = $pdo->prepare("SELECT s.id FROM checksheet_submissions s $where ORDER BY s.submitted_at DESC");
+        $stmt->execute($params);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        echo json_encode(['ids' => $ids, 'total' => count($ids)]);
+        exit;
+    }
+
+    $cfg   = $TYPE_CONFIG[$type];
+    $table = $cfg['table'];
+
+    $where  = "WHERE 1=1";
+    $params = [];
+
+    if ($search !== '') {
+        $searchParam = "%{$search}%";
+        if ($type === 'painting') {
+            $where .= " AND (s.checker LIKE ? OR s.period_month LIKE ? OR s.check_date LIKE ?)";
+            $params = array_merge($params, [$searchParam, $searchParam, $searchParam]);
+        } else {
+            $where .= " AND (s.checker LIKE ? OR s.check_date LIKE ?)";
+            $params = array_merge($params, [$searchParam, $searchParam]);
+        }
+    }
+
+    if (in_array($approvalFilter, ['pending', 'approved', 'rejected'], true)) {
+        $where .= " AND s.approval_status = ?";
+        $params[] = $approvalFilter;
+    }
+
+    $stmt = $pdo->prepare("SELECT s.id FROM $table s $where ORDER BY s.submitted_at DESC");
+    $stmt->execute($params);
+    $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+    echo json_encode(['ids' => $ids, 'total' => count($ids)]);
     exit;
 }
 
@@ -167,11 +358,94 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'detail') {
     error_reporting(0);
     @ini_set('display_errors', 0);
     header('Content-Type: application/json');
-    $id = (int)($_GET['id'] ?? 0);
+    $id   = (int)($_GET['id'] ?? 0);
+    $type = resolveApprovalType();
     if (!$id) {
         echo json_encode([]);
         exit;
     }
+
+    // ── Painting: flatten detail per unit jadi list generik (no, part, standard, result, note) ──
+    if ($type === 'painting') {
+        $subStmt = $pdo->prepare("SELECT check_date, period_month, checker,
+                                          approval_status, approved_by, approved_at, approval_note
+                                   FROM painting_checksheet_submissions WHERE id = ?");
+        $subStmt->execute([$id]);
+        $sub = $subStmt->fetch();
+
+        $stmt = $pdo->prepare("
+            SELECT no, unit_name, part, action_status, result, note
+            FROM painting_checksheet_submission_details
+            WHERE submission_id = ?
+            ORDER BY unit_name, no
+        ");
+        $stmt->execute([$id]);
+        $items = array_map(function ($d) {
+            return [
+                'no'       => $d['no'],
+                'part'     => $d['unit_name'] . ' — ' . $d['part'],
+                'standard' => $d['action_status'] === 'checked' ? 'Checked' : 'Unchecked',
+                'result'   => $d['result'],
+                'note'     => $d['note'],
+            ];
+        }, $stmt->fetchAll());
+
+        echo json_encode([
+            'items'           => $items,
+            'check_date'      => $sub['period_month'] ?? ($sub['check_date'] ?? null),
+            'photo_path'      => null,
+            'approval_status' => $sub['approval_status'] ?? 'pending',
+            'approved_by'     => $sub['approved_by'] ?? null,
+            'approved_at'     => $sub['approved_at'] ?? null,
+            'approval_note'   => $sub['approval_note'] ?? null,
+            'is_approver'     => $GLOBALS['isApprover'],
+        ]);
+        exit;
+    }
+
+    // ── Jig Assembly: flatten detail per mesin/jig + checkpoint jadi list generik ──
+    if ($type === 'jig_assembly') {
+        $subStmt = $pdo->prepare("SELECT check_date, checker,
+                                          approval_status, approved_by, approved_at, approval_note
+                                   FROM jig_assembly_submissions WHERE id = ?");
+        $subStmt->execute([$id]);
+        $sub = $subStmt->fetch();
+
+        $stmt = $pdo->prepare("
+            SELECT d.visual_result, d.actual_diameter, d.note,
+                   m.no AS machine_no, m.machine_name, m.jig_name,
+                   c.no AS cp_no, c.check_point, c.is_diameter, c.standard_value
+            FROM jig_assembly_submission_details d
+            JOIN jig_assembly_machines m ON m.id = d.machine_id
+            JOIN jig_assembly_checkpoints c ON c.id = d.checkpoint_id
+            WHERE d.submission_id = ?
+            ORDER BY m.sort_order, m.id, c.sort_order, c.no
+        ");
+        $stmt->execute([$id]);
+        $items = array_map(function ($d) {
+            return [
+                'no'       => $d['cp_no'],
+                'part'     => $d['machine_no'] . '. ' . $d['machine_name'] . ' — ' . $d['jig_name'] . ' : ' . $d['check_point'],
+                'standard' => $d['is_diameter'] ? $d['standard_value'] : '-',
+                'result'   => $d['visual_result'] . ($d['actual_diameter'] !== null && $d['actual_diameter'] !== '' ? " ({$d['actual_diameter']})" : ''),
+                'note'     => $d['note'],
+            ];
+        }, $stmt->fetchAll());
+
+        echo json_encode([
+            'items'           => $items,
+            'check_date'      => $sub['check_date'] ?? null,
+            'photo_path'      => null,
+            'approval_status' => $sub['approval_status'] ?? 'pending',
+            'approved_by'     => $sub['approved_by'] ?? null,
+            'approved_at'     => $sub['approved_at'] ?? null,
+            'approval_note'   => $sub['approval_note'] ?? null,
+            'is_approver'     => $GLOBALS['isApprover'],
+        ]);
+        exit;
+    }
+
+    // ── Maintenance (default) ──
     // Ambil interval dari checksheet_items via LEFT JOIN
     $stmt = $pdo->prepare("
         SELECT d.id AS detail_id, d.no, d.part, d.standard, d.result, d.note,
@@ -398,6 +672,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'approve' && $_SERVER['REQUEST_MET
     $ids    = $input['ids'] ?? [];
     $action = $input['action'] ?? ''; // 'approve' | 'reject'
     $note   = trim($input['note'] ?? '');
+    $type   = (isset($input['type']) && array_key_exists($input['type'], $TYPE_CONFIG)) ? $input['type'] : 'maintenance';
+    $table  = $TYPE_CONFIG[$type]['table'];
 
     $ids = is_array($ids) ? $ids : [$ids];
     $ids = array_values(array_unique(array_filter(array_map('intval', $ids), fn($v) => $v > 0)));
@@ -417,7 +693,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'approve' && $_SERVER['REQUEST_MET
 
     try {
         $stmt = $pdo->prepare("
-            UPDATE checksheet_submissions
+            UPDATE $table
             SET approval_status = ?, approved_by = ?, approved_at = NOW(), approval_note = ?
             WHERE id IN ($inList)
         ");
@@ -523,7 +799,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>History Check Sheet — Maintenance Hub</title>
+    <title>Approval Check Sheet — Maintenance Hub</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -1236,6 +1512,30 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             color: #334155;
         }
 
+        /* ── Type Tab (Maintenance / Painting / Jig Assembly) ── */
+        .type-tab-btn {
+            padding: 9px 18px;
+            font-size: .8rem;
+            font-weight: 800;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all .15s;
+            border: none;
+            background: #f1f5f9;
+            color: #64748b;
+        }
+
+        .type-tab-btn.active {
+            background: linear-gradient(135deg, #c4550f, #e36414);
+            color: #fff;
+            box-shadow: 0 3px 10px rgba(196, 85, 15, .25);
+        }
+
+        .type-tab-btn:not(.active):hover {
+            background: #e2e8f0;
+            color: #334155;
+        }
+
         .dept-card {
             background: #fff;
             border: 1.5px solid #e2e8f0;
@@ -1357,16 +1657,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 <i class="fas fa-clipboard-check"></i>
                 <span class="nav-label">Check Sheet</span>
             </a>
-            <a href="history_checksheet.php" onclick="navigateTo(event,'history_checksheet.php')" class="nav-item active" title="History">
+            <a href="history_checksheet.php" onclick="navigateTo(event,'history_checksheet.php')" class="nav-item" title="History">
                 <i class="fas fa-history"></i>
                 <span class="nav-label">History</span>
             </a>
-            <?php if ($canOpenApprovalMenu): ?>
-                <a href="approval_checksheet.php" onclick="navigateTo(event,'approval_checksheet.php')" class="nav-item" title="Approval">
-                    <i class="fas fa-user-check"></i>
-                    <span class="nav-label">Approval</span>
-                </a>
-            <?php endif; ?>
+            <a href="approval_checksheet.php" onclick="navigateTo(event,'approval_checksheet.php')" class="nav-item active" title="Approval">
+                <i class="fas fa-user-check"></i>
+                <span class="nav-label">Approval</span>
+            </a>
         </nav>
 
         <div id="sidebar-footer">
@@ -1381,50 +1679,76 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         <div class="topbar">
             <div class="flex items-center gap-3">
                 <div class="w-7 h-7 rounded-lg bg-[#fdf4ee] flex items-center justify-center">
-                    <i class="fas fa-history text-[#e36414] text-xs"></i>
+                    <i class="fas fa-user-check text-[#e36414] text-xs"></i>
                 </div>
                 <div>
-                    <div class="text-sm font-bold text-slate-800">History Check Sheet</div>
-                    <div class="text-[10px] text-slate-400 font-medium">Riwayat & export hasil pengecekan harian / bulanan</div>
+                    <div class="text-sm font-bold text-slate-800">Approval Check Sheet</div>
+                    <div class="text-[10px] text-slate-400 font-medium">Review, approve, atau reject hasil pengecekan check sheet</div>
                 </div>
+            </div>
+            <div class="flex items-center gap-2.5 pl-3 pr-1 py-1 rounded-full border border-slate-200 bg-slate-50">
+                <div class="w-7 h-7 rounded-full bg-[#c4550f] flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-[11px] font-bold"><?php echo strtoupper(substr($approverName, 0, 1)); ?></span>
+                </div>
+                <div class="leading-tight">
+                    <div class="text-xs font-bold text-slate-800"><?php echo htmlspecialchars($approverName); ?></div>
+                    <div class="text-[10px] text-slate-400 font-medium capitalize"><?php echo htmlspecialchars(str_replace('_', ' ', $currentRole)); ?></div>
+                </div>
+                <a href="<?php echo $currentRole === 'superadmin' ? 'logout_admin.php' : 'logout_user.php'; ?>" title="Logout" class="w-7 h-7 rounded-full hover:bg-slate-200 flex items-center justify-center transition-all">
+                    <i class="fas fa-sign-out-alt text-slate-400 text-xs"></i>
+                </a>
             </div>
         </div>
 
         <div class="p-6 space-y-4 flex-1 flex flex-col min-h-0">
 
-            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex-shrink-0">
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-2 flex-shrink-0 flex gap-1.5 flex-wrap">
+                <button class="type-tab-btn active" id="type-btn-maintenance" onclick="switchType('maintenance')">
+                    <i class="fas fa-tools mr-1.5"></i>Maintenance
+                </button>
+                <button class="type-tab-btn" id="type-btn-painting" onclick="switchType('painting')">
+                    <i class="fas fa-paint-roller mr-1.5"></i>Painting
+                </button>
+                <button class="type-tab-btn" id="type-btn-jig_assembly" onclick="switchType('jig_assembly')">
+                    <i class="fas fa-cogs mr-1.5"></i>Jig Assembly
+                </button>
+            </div>
+
+            <div id="filter-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex-shrink-0">
                 <div class="flex flex-wrap gap-3 items-end">
-                    <div>
-                        <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Mode</label>
-                        <div class="flex rounded-xl border border-slate-200 overflow-hidden">
-                            <button id="btn-mode-daily"
-                                onclick="setMode('daily')"
-                                class="px-4 py-2 text-xs font-bold transition-all bg-[#c4550f] text-white">
-                                <i class="fas fa-calendar-day mr-1.5"></i>Harian
-                            </button>
-                            <button id="btn-mode-monthly"
-                                onclick="setMode('monthly')"
-                                class="px-4 py-2 text-xs font-bold transition-all bg-white text-slate-500 hover:bg-slate-50">
-                                <i class="fas fa-calendar-alt mr-1.5"></i>Bulanan
-                            </button>
+                    <div id="date-mode-group" class="flex flex-wrap gap-3 items-end">
+                        <div>
+                            <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Mode</label>
+                            <div class="flex rounded-xl border border-slate-200 overflow-hidden">
+                                <button id="btn-mode-daily"
+                                    onclick="setMode('daily')"
+                                    class="px-4 py-2 text-xs font-bold transition-all bg-[#c4550f] text-white">
+                                    <i class="fas fa-calendar-day mr-1.5"></i>Harian
+                                </button>
+                                <button id="btn-mode-monthly"
+                                    onclick="setMode('monthly')"
+                                    class="px-4 py-2 text-xs font-bold transition-all bg-white text-slate-500 hover:bg-slate-50">
+                                    <i class="fas fa-calendar-alt mr-1.5"></i>Bulanan
+                                </button>
+                            </div>
                         </div>
-                    </div>
 
-                    <div>
-                        <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                            <span id="picker-label">Tanggal</span>
-                        </label>
-                        <input type="date" id="inp-date" class="form-field" style="min-width:170px;">
-                    </div>
+                        <div>
+                            <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                                <span id="picker-label">Tanggal</span>
+                            </label>
+                            <input type="date" id="inp-date" class="form-field" style="min-width:170px;">
+                        </div>
 
-                    <button onclick="loadHistory(1)"
-                        class="px-5 py-2.5 rounded-xl bg-[#c4550f] hover:bg-[#a8420b] text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm">
-                        <i class="fas fa-search text-xs"></i> Cari
-                    </button>
+                        <button onclick="loadHistory(1)"
+                            class="px-5 py-2.5 rounded-xl bg-[#c4550f] hover:bg-[#a8420b] text-white text-sm font-bold transition-all flex items-center gap-2 shadow-sm">
+                            <i class="fas fa-search text-xs"></i> Cari
+                        </button>
+                    </div>
 
                     <div class="flex-1"></div>
 
-                    <div class="flex gap-2">
+                    <div class="flex gap-2" id="maintenance-only-actions">
                         <button onclick="openCheckerSummary()"
                             class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-sm">
                             <i class="fas fa-user-check"></i> View Checker
@@ -1475,7 +1799,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     <div class="flex items-center gap-1.5 tab-history-only ml-2">
                         <span class="text-[11px] text-slate-400 font-medium">Status:</span>
                         <select id="inp-approval-filter" onchange="changeApprovalFilter()" class="form-field text-xs cursor-pointer bg-slate-50" style="height:32px; padding-top:0; padding-bottom:0; min-width:110px;">
-                            <option value="">Semua</option>
+                            <option value="" selected>Semua</option>
                             <option value="pending">Pending</option>
                             <option value="approved">Approved</option>
                             <option value="rejected">Rejected</option>
@@ -1507,7 +1831,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     <div class="table-scroll-container flex-1 min-h-0">
                         <table class="hist-table w-full" id="hist-table" style="display:none;">
                             <thead>
-                                <tr>
+                                <tr id="hist-thead-row">
                                     <th class="text-center w-8" id="th-checkbox" style="display:none;">
                                         <input type="checkbox" id="chk-select-all" onchange="toggleSelectAll(this)">
                                     </th>
@@ -1758,12 +2082,131 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         let limitPerPage = 20;
         let searchTimeout = null;
         let selectedIds = new Set();
-        let currentApprovalFilter = '';
+        let currentApprovalFilter = ''; // MODIFIKASI: default "Semua" agar submission yang sudah di-approve/reject tetap tampil, tidak hilang dari daftar
         let currentSubmissionId = null;
         let currentItems = [];
         let currentDetailArgs = null;
         let editMode = false;
         let currentApprovalStatus = 'pending';
+
+        // ── MODIFIKASI: Approval gabungan — pilih jenis checksheet (Maintenance/Painting/Jig Assembly) ──
+        let currentType = 'maintenance';
+        const TYPE_CONFIG = {
+            maintenance: {
+                label: 'Maintenance',
+                requiresDate: true,
+                searchPlaceholder: 'Cari mesin, dept, line, checker…',
+                hasCompletion: true,
+                emptyMsg: {
+                    title: 'Pilih tanggal / bulan lalu klik Cari',
+                    sub: 'Data history checksheet akan tampil di sini'
+                }
+            },
+            painting: {
+                label: 'Painting',
+                requiresDate: false,
+                searchPlaceholder: 'Cari checker atau periode…',
+                hasCompletion: false,
+                emptyMsg: {
+                    title: 'Belum ada submission Painting',
+                    sub: 'Data checksheet painting akan tampil di sini'
+                }
+            },
+            jig_assembly: {
+                label: 'Jig Assembly',
+                requiresDate: false,
+                searchPlaceholder: 'Cari checker atau tanggal…',
+                hasCompletion: false,
+                emptyMsg: {
+                    title: 'Belum ada submission Jig Assembly',
+                    sub: 'Data checksheet jig assembly akan tampil di sini'
+                }
+            },
+        };
+
+        function switchType(type) {
+            if (!TYPE_CONFIG[type] || type === currentType) return;
+            currentType = type;
+            const cfg = TYPE_CONFIG[type];
+
+            document.querySelectorAll('.type-tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('type-btn-' + type).classList.add('active');
+
+            document.getElementById('date-mode-group').style.display = cfg.requiresDate ? 'flex' : 'none';
+            document.getElementById('maintenance-only-actions').style.display = cfg.hasCompletion ? 'flex' : 'none';
+            // Kartu filter (mode/tanggal/cari + aksi maintenance) disembunyikan total kalau
+            // tidak ada satupun kontennya yang relevan untuk tipe ini (Painting/Jig Assembly),
+            // supaya tidak menyisakan kartu putih kosong di antara tab jenis dan Riwayat Submission.
+            document.getElementById('filter-card').style.display = (cfg.requiresDate || cfg.hasCompletion) ? 'block' : 'none';
+            document.getElementById('tab-btn-completion').style.display = cfg.hasCompletion ? '' : 'none';
+            if (!cfg.hasCompletion) switchTab('history');
+
+            document.getElementById('inp-search').placeholder = cfg.searchPlaceholder;
+            document.getElementById('inp-search').value = '';
+            document.getElementById('btn-clear-search').style.display = 'none';
+            document.getElementById('inp-approval-filter').value = '';
+            currentApprovalFilter = '';
+
+            buildTableHeader(type);
+            clearSelection();
+            currentPage = 1;
+
+            if (cfg.requiresDate) {
+                document.getElementById('hist-table').style.display = 'none';
+                document.getElementById('hist-empty').style.display = 'flex';
+                document.getElementById('hist-empty').innerHTML = `
+                    <i class="fas fa-folder-open text-5xl mb-3 opacity-30"></i>
+                    <p class="font-bold text-sm">${cfg.emptyMsg.title}</p>
+                    <p class="text-xs mt-1">${cfg.emptyMsg.sub}</p>`;
+                document.getElementById('result-label').textContent = '';
+            } else {
+                loadHistory(1);
+            }
+        }
+
+        // Bangun ulang kolom tabel history sesuai jenis checksheet yang dipilih,
+        // karena Painting & Jig Assembly tidak punya department/line/op/machine/category.
+        function buildTableHeader(type) {
+            const row = document.getElementById('hist-thead-row');
+            const checkboxTh = `<th class="text-center w-8" id="th-checkbox" style="display:${IS_APPROVER ? 'table-cell' : 'none'};">
+                <input type="checkbox" id="chk-select-all" onchange="toggleSelectAll(this)"></th>`;
+            const noTh = `<th class="text-center w-10">No</th>`;
+
+            let cols;
+            if (type === 'maintenance') {
+                cols = `
+                    <th>Tanggal</th>
+                    <th>Department</th>
+                    <th>Line</th>
+                    <th>OP</th>
+                    <th>Mesin</th>
+                    <th>Checker</th>
+                    <th class="text-center">Category</th>
+                    <th class="text-center">Hasil</th>
+                    <th class="text-center">Submitted At</th>
+                    <th class="text-center">Approval</th>
+                    <th class="text-center w-16">Detail</th>`;
+            } else if (type === 'painting') {
+                cols = `
+                    <th>Periode</th>
+                    <th>Tanggal</th>
+                    <th>Checker</th>
+                    <th class="text-center">Hasil</th>
+                    <th class="text-center">Submitted At</th>
+                    <th class="text-center">Approval</th>
+                    <th class="text-center w-16">Detail</th>`;
+            } else {
+                cols = `
+                    <th>Tanggal</th>
+                    <th>Checker</th>
+                    <th class="text-center">Hasil</th>
+                    <th class="text-center">Submitted At</th>
+                    <th class="text-center">Approval</th>
+                    <th class="text-center w-16">Detail</th>`;
+            }
+
+            row.innerHTML = checkboxTh + noTh + cols;
+        }
 
         // ── Sidebar ───────────────────────────────────────────────────────────────
         function toggleSidebar() {
@@ -1847,11 +2290,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
         // ── Load history ──────────────────────────────────────────────────────────
         function loadHistory(page = 1) {
+            const cfg = TYPE_CONFIG[currentType];
             const value = document.getElementById('inp-date').value;
             const searchQuery = document.getElementById('inp-search').value.trim();
             const limitSelect = document.getElementById('inp-limit').value;
 
-            if (!value) {
+            if (cfg.requiresDate && !value) {
                 showToast('Pilih tanggal / bulan terlebih dahulu.', 'error');
                 return;
             }
@@ -1863,8 +2307,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             document.getElementById('hist-loading').style.display = 'block';
             document.getElementById('pagination').classList.add('hidden');
 
-            // MODIFIKASI: Menambahkan parameter &search, &limit, dan &approval ke endpoint AJAX backend
-            fetch(`history_checksheet.php?ajax=history&mode=${currentMode}&value=${encodeURIComponent(value)}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&approval=${encodeURIComponent(currentApprovalFilter)}`)
+            // MODIFIKASI: Menambahkan parameter &search, &limit, &approval, dan &type ke endpoint AJAX backend
+            const dateParams = cfg.requiresDate ? `&mode=${currentMode}&value=${encodeURIComponent(value)}` : '';
+            fetch(`approval_checksheet.php?ajax=history&type=${currentType}${dateParams}&page=${page}&limit=${limitPerPage}&search=${encodeURIComponent(searchQuery)}&approval=${encodeURIComponent(currentApprovalFilter)}`)
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('hist-loading').style.display = 'none';
@@ -1880,8 +2325,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                         } else {
                             document.getElementById('hist-empty').innerHTML = `
                             <i class="fas fa-inbox text-5xl mb-3 opacity-30"></i>
-                            <p class="font-bold text-sm">Tidak ada data untuk periode ini</p>
-                            <p class="text-xs mt-1">Coba pilih tanggal / bulan yang lain</p>`;
+                            <p class="font-bold text-sm">${cfg.emptyMsg.title}</p>
+                            <p class="text-xs mt-1">${cfg.emptyMsg.sub}</p>`;
                         }
                         document.getElementById('result-label').textContent = `0 submission ditemukan`;
                         return;
@@ -1896,7 +2341,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     showToast('Gagal memuat data.', 'error');
                 });
 
-            loadCompletionRate();
+            if (cfg.hasCompletion) loadCompletionRate();
         }
 
         // ── Render table ──────────────────────────────────────────────────────────
@@ -1916,53 +2361,93 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
             rows.forEach((row, idx) => {
                 const no = (page - 1) * limitPerPage + idx + 1;
-                const catColors = {
-                    'MC': 'bg-blue-100 text-blue-700',
-                    'SPM': 'bg-purple-100 text-purple-700',
-                    'ASSEMBLING': 'bg-teal-100 text-teal-700',
-                    'PAINTING': 'bg-pink-100 text-pink-700',
-                    'TEST_RUNNING': 'bg-orange-100 text-orange-700',
-                    'PACKING': 'bg-green-100 text-green-700',
-                    'BOILER': 'bg-red-100 text-red-700',
-                    'KOMPRESSOR': 'bg-cyan-100 text-cyan-700',
-                };
-                const catCls = catColors[row.category_key] || 'bg-slate-100 text-slate-600';
                 const approvalStatus = row.approval_status || 'pending';
                 const approvalBadge = approvalBadgeMap[approvalStatus] || approvalBadgeMap['pending'];
                 const isChecked = selectedIds.has(row.id) ? 'checked' : '';
+                const checkboxCell = `
+                <td class="text-center" style="display:${IS_APPROVER ? 'table-cell' : 'none'};">
+                    <input type="checkbox" class="row-checkbox" data-id="${row.id}" ${isChecked} onchange="toggleRowSelect(${row.id}, this)">
+                </td>
+                <td class="text-center text-slate-400 font-bold text-xs">${no}</td>`;
+                const submittedCell = `<td class="text-slate-400 text-xs text-center">${row.submitted_at?.slice(0,16) ?? '-'}</td>`;
+                const approvalCell = `<td class="text-center">${approvalBadge}</td>`;
 
                 const tr = document.createElement('tr');
                 tr.className = 'fade-in';
                 tr.style.animationDelay = `${idx * 15}ms`;
-                tr.innerHTML = `
-                <td class="text-center" style="display:${IS_APPROVER ? 'table-cell' : 'none'};">
-                    <input type="checkbox" class="row-checkbox" data-id="${row.id}" ${isChecked} onchange="toggleRowSelect(${row.id}, this)">
-                </td>
-                <td class="text-center text-slate-400 font-bold text-xs">${no}</td>
-                <td class="font-semibold text-slate-700">${row.check_date}</td>
-                <td class="text-slate-600">${row.department}</td>
-                <td class="text-slate-600">${row.line}</td>
-                <td class="text-slate-500 text-center">${row.op || '-'}</td>
-                <td class="font-medium text-slate-700 max-w-[150px] truncate" title="${row.machine_name}">${row.machine_name}</td>
-                <td>${row.checker}</td>
-                <td class="text-center"><span class="px-2 py-0.5 rounded-lg text-[10px] font-bold ${catCls}">${row.category_key}</span></td>
-                <td class="text-center">
-                    <div class="flex items-center justify-center gap-1 flex-wrap">
-                        <span class="pill pill-v" title="OK (V)">${row.ok_count}</span>
-                        <span class="pill pill-x" title="Problem (X)">${row.problem_count}</span>
-                        <span class="pill pill-r" title="Repair (R)">${row.repair_count}</span>
-                        <span class="pill pill-ro" title="Outsider (RO)">${row.outsider_count}</span>
-                        <span class="pill pill-na" title="N/A">${row.na_count}</span>
-                    </div>
-                </td>
-                <td class="text-slate-400 text-xs text-center">${row.submitted_at?.slice(0,16) ?? '-'}</td>
-                <td class="text-center">${approvalBadge}</td>
-                <td class="text-center">
-                    <button onclick="openDetail(${row.id}, '${esc(row.department)}', '${esc(row.line)}', '${esc(row.op)}', '${esc(row.machine_name)}', '${esc(row.checker)}', '${row.check_date}')"
-                        class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-[#fde8d5] hover:text-[#e36414] text-slate-500 transition-all inline-flex items-center justify-center">
-                        <i class="fas fa-eye text-xs"></i>
-                    </button>
-                </td>`;
+
+                if (currentType === 'maintenance') {
+                    const catColors = {
+                        'MC': 'bg-blue-100 text-blue-700',
+                        'SPM': 'bg-purple-100 text-purple-700',
+                        'ASSEMBLING': 'bg-teal-100 text-teal-700',
+                        'PAINTING': 'bg-pink-100 text-pink-700',
+                        'TEST_RUNNING': 'bg-orange-100 text-orange-700',
+                        'PACKING': 'bg-green-100 text-green-700',
+                        'BOILER': 'bg-red-100 text-red-700',
+                        'KOMPRESSOR': 'bg-cyan-100 text-cyan-700',
+                    };
+                    const catCls = catColors[row.category_key] || 'bg-slate-100 text-slate-600';
+                    const subtitle = `${esc(row.department)} — ${esc(row.line)} (OP: ${esc(row.op) || '-'}) | Mesin: ${esc(row.machine_name)} | Checker: ${esc(row.checker)} | ${row.check_date}`;
+                    tr.innerHTML = checkboxCell + `
+                    <td class="font-semibold text-slate-700">${row.check_date}</td>
+                    <td class="text-slate-600">${row.department}</td>
+                    <td class="text-slate-600">${row.line}</td>
+                    <td class="text-slate-500 text-center">${row.op || '-'}</td>
+                    <td class="font-medium text-slate-700 max-w-[150px] truncate" title="${row.machine_name}">${row.machine_name}</td>
+                    <td>${row.checker}</td>
+                    <td class="text-center"><span class="px-2 py-0.5 rounded-lg text-[10px] font-bold ${catCls}">${row.category_key}</span></td>
+                    <td class="text-center">
+                        <div class="flex items-center justify-center gap-1 flex-wrap">
+                            <span class="pill pill-v" title="OK (V)">${row.ok_count}</span>
+                            <span class="pill pill-x" title="Problem (X)">${row.problem_count}</span>
+                            <span class="pill pill-r" title="Repair (R)">${row.repair_count}</span>
+                            <span class="pill pill-ro" title="Outsider (RO)">${row.outsider_count}</span>
+                            <span class="pill pill-na" title="N/A">${row.na_count}</span>
+                        </div>
+                    </td>` + submittedCell + approvalCell + `
+                    <td class="text-center">
+                        <button onclick="openDetail(${row.id}, '${esc(subtitle)}')"
+                            class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-[#fde8d5] hover:text-[#e36414] text-slate-500 transition-all inline-flex items-center justify-center">
+                            <i class="fas fa-eye text-xs"></i>
+                        </button>
+                    </td>`;
+                } else if (currentType === 'painting') {
+                    const subtitle = `Painting | Periode: ${esc(row.period_month || '-')} | Checker: ${esc(row.checker)} | ${row.check_date || '-'}`;
+                    tr.innerHTML = checkboxCell + `
+                    <td class="font-semibold text-slate-700">${row.period_month || '-'}</td>
+                    <td class="text-slate-600">${row.check_date || '-'}</td>
+                    <td>${row.checker}</td>
+                    <td class="text-center">
+                        <div class="flex items-center justify-center gap-1 flex-wrap">
+                            <span class="pill pill-v" title="OK">${row.ok_count}</span>
+                            <span class="pill pill-x" title="NG">${row.ng_count}</span>
+                        </div>
+                    </td>` + submittedCell + approvalCell + `
+                    <td class="text-center">
+                        <button onclick="openDetail(${row.id}, '${esc(subtitle)}')"
+                            class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-[#fde8d5] hover:text-[#e36414] text-slate-500 transition-all inline-flex items-center justify-center">
+                            <i class="fas fa-eye text-xs"></i>
+                        </button>
+                    </td>`;
+                } else { // jig_assembly
+                    const subtitle = `Jig Assembly | Checker: ${esc(row.checker)} | ${row.check_date || '-'}`;
+                    tr.innerHTML = checkboxCell + `
+                    <td class="font-semibold text-slate-700">${row.check_date || '-'}</td>
+                    <td>${row.checker}</td>
+                    <td class="text-center">
+                        <div class="flex items-center justify-center gap-1 flex-wrap">
+                            <span class="pill pill-v" title="OK">${row.ok_count}</span>
+                            <span class="pill pill-x" title="NG">${row.ng_count}</span>
+                        </div>
+                    </td>` + submittedCell + approvalCell + `
+                    <td class="text-center">
+                        <button onclick="openDetail(${row.id}, '${esc(subtitle)}')"
+                            class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-[#fde8d5] hover:text-[#e36414] text-slate-500 transition-all inline-flex items-center justify-center">
+                            <i class="fas fa-eye text-xs"></i>
+                        </button>
+                    </td>`;
+                }
                 tbody.appendChild(tr);
             });
 
@@ -1976,7 +2461,26 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 searchLabel.style.display = 'none';
             }
 
+            updateSelectAllHeaderState(rows);
             updateBatchBar();
+        }
+
+        // Sinkronkan status checkbox header ("centang semua") berdasarkan baris yang sedang tampil,
+        // supaya kalau semua baris di halaman ini sudah terpilih (misal habis "select all" lintas
+        // halaman), header ikut kecentang; kalau cuma sebagian, tampilkan indeterminate.
+        function updateSelectAllHeaderState(rows) {
+            const selectAll = document.getElementById('chk-select-all');
+            if (!selectAll || !IS_APPROVER) return;
+
+            if (!rows || rows.length === 0) {
+                selectAll.checked = false;
+                selectAll.indeterminate = false;
+                return;
+            }
+
+            const selectedCount = rows.filter(r => selectedIds.has(r.id)).length;
+            selectAll.checked = selectedCount === rows.length;
+            selectAll.indeterminate = selectedCount > 0 && selectedCount < rows.length;
         }
 
         // ── Approval filter ──────────────────────────────────────────────────────
@@ -1986,14 +2490,53 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
         }
 
         // ── Selection & batch approve/reject ─────────────────────────────────────
+        // MODIFIKASI: "Select All" sekarang mengambil SELURUH id yang cocok dengan filter
+        // tanggal/bulan + search + status approval yang sedang aktif (bukan cuma baris
+        // yang sedang tampil di halaman ini). Jadi kalau lagi search / filter, centang
+        // header akan menandai semua hasil yang cocok meski tersebar di banyak halaman.
         function toggleSelectAll(checkbox) {
-            document.querySelectorAll('.row-checkbox').forEach(cb => {
-                cb.checked = checkbox.checked;
-                const id = parseInt(cb.dataset.id, 10);
-                if (checkbox.checked) selectedIds.add(id);
-                else selectedIds.delete(id);
-            });
-            updateBatchBar();
+            const wantSelect = checkbox.checked;
+
+            // Biar user tahu prosesnya jalan (bisa jadi ribuan data), disable dulu sementara fetch.
+            checkbox.disabled = true;
+
+            fetchAllFilteredIds()
+                .then(ids => {
+                    if (wantSelect) {
+                        ids.forEach(id => selectedIds.add(id));
+                    } else {
+                        ids.forEach(id => selectedIds.delete(id));
+                    }
+
+                    // Sinkronkan checkbox yang sedang tampil di halaman ini
+                    document.querySelectorAll('.row-checkbox').forEach(cb => {
+                        const id = parseInt(cb.dataset.id, 10);
+                        cb.checked = selectedIds.has(id);
+                    });
+
+                    checkbox.checked = wantSelect;
+                    checkbox.disabled = false;
+                    updateBatchBar();
+                })
+                .catch(() => {
+                    checkbox.checked = !wantSelect;
+                    checkbox.disabled = false;
+                    showToast('Gagal mengambil seluruh data untuk dipilih.', 'error');
+                });
+        }
+
+        // Ambil semua id (tanpa pagination) yang cocok dengan filter tanggal/bulan + search + approval aktif.
+        function fetchAllFilteredIds() {
+            const cfg = TYPE_CONFIG[currentType];
+            const value = document.getElementById('inp-date').value;
+            const searchQuery = document.getElementById('inp-search').value.trim();
+
+            if (cfg.requiresDate && !value) return Promise.resolve([]);
+
+            const dateParams = cfg.requiresDate ? `&mode=${currentMode}&value=${encodeURIComponent(value)}` : '';
+            return fetch(`approval_checksheet.php?ajax=history_ids&type=${currentType}${dateParams}&search=${encodeURIComponent(searchQuery)}&approval=${encodeURIComponent(currentApprovalFilter)}`)
+                .then(r => r.json())
+                .then(data => Array.isArray(data.ids) ? data.ids : []);
         }
 
         function toggleRowSelect(id, checkbox) {
@@ -2006,7 +2549,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             selectedIds.clear();
             document.querySelectorAll('.row-checkbox').forEach(cb => cb.checked = false);
             const selectAll = document.getElementById('chk-select-all');
-            if (selectAll) selectAll.checked = false;
+            if (selectAll) {
+                selectAll.checked = false;
+                selectAll.indeterminate = false;
+            }
             updateBatchBar();
         }
 
@@ -2030,7 +2576,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             const label = action === 'approve' ? 'approve' : 'reject';
             if (!confirm(`Yakin ${label} ${selectedIds.size} submission terpilih?`)) return;
 
-            fetch('history_checksheet.php?ajax=approve', {
+            fetch('approval_checksheet.php?ajax=approve', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -2038,7 +2584,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     body: JSON.stringify({
                         ids: Array.from(selectedIds),
                         action,
-                        note
+                        note,
+                        type: currentType
                     })
                 })
                 .then(r => r.json())
@@ -2211,7 +2758,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
 
         function refreshModalActionButtons() {
             const status = currentApprovalStatus;
-            document.getElementById('btn-modal-edit').style.display = (status !== 'approved') ? 'inline-flex' : 'none';
+            // MODIFIKASI: Edit inline cuma didukung untuk checksheet Maintenance di halaman ini.
+            document.getElementById('btn-modal-edit').style.display = (currentType === 'maintenance' && status !== 'approved') ? 'inline-flex' : 'none';
             document.getElementById('btn-modal-approve').style.display = (IS_APPROVER && status === 'pending') ? 'inline-flex' : 'none';
             document.getElementById('btn-modal-reject').style.display = (IS_APPROVER && status === 'pending') ? 'inline-flex' : 'none';
             document.getElementById('btn-modal-save').style.display = 'none';
@@ -2219,22 +2767,17 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             document.getElementById('modal-reject-form').style.display = 'none';
         }
 
-        function openDetail(id, dept, line, op, machine, checker, date) {
+        function openDetail(id, subtitle) {
             currentSubmissionId = id;
             currentDetailArgs = {
                 id,
-                dept,
-                line,
-                op,
-                machine,
-                checker,
-                date
+                subtitle
             };
             editMode = false;
 
             document.getElementById('modal-overlay').classList.add('open');
             document.getElementById('modal-title').textContent = `Detail Submission #${id}`;
-            document.getElementById('modal-subtitle').textContent = `${dept} — ${line} (OP: ${op || '-'}) | Mesin: ${machine} | Checker: ${checker} | ${date}`;
+            document.getElementById('modal-subtitle').textContent = subtitle;
             document.getElementById('modal-approval-badge').innerHTML = '';
             document.getElementById('modal-approval-note').style.display = 'none';
 
@@ -2244,7 +2787,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             document.getElementById('modal-photo-section').style.display = 'none';
             document.getElementById('modal-reject-note').value = '';
 
-            fetch(`history_checksheet.php?ajax=detail&id=${id}`)
+            fetch(`approval_checksheet.php?ajax=detail&type=${currentType}&id=${id}`)
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('modal-loading').style.display = 'none';
@@ -2317,7 +2860,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 });
             });
 
-            fetch('history_checksheet.php?ajax=update_detail', {
+            fetch('approval_checksheet.php?ajax=update_detail', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -2333,7 +2876,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                         showToast(`Perubahan disimpan (${data.updated} item diubah).`, 'success');
                         editMode = false;
                         const args = currentDetailArgs;
-                        openDetail(args.id, args.dept, args.line, args.op, args.machine, args.checker, args.date);
+                        openDetail(args.id, args.subtitle);
                         loadHistory(currentPage);
                     } else {
                         showToast(data.error || 'Gagal menyimpan perubahan.', 'error');
@@ -2353,7 +2896,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                 }
             }
 
-            fetch('history_checksheet.php?ajax=approve', {
+            fetch('approval_checksheet.php?ajax=approve', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -2361,7 +2904,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     body: JSON.stringify({
                         ids: [currentSubmissionId],
                         action,
-                        note
+                        note,
+                        type: currentType
                     })
                 })
                 .then(r => r.json())
@@ -2369,7 +2913,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
                     if (data.success) {
                         showToast(`Submission berhasil di-${action === 'approve' ? 'approve' : 'reject'}.`, 'success');
                         const args = currentDetailArgs;
-                        openDetail(args.id, args.dept, args.line, args.op, args.machine, args.checker, args.date);
+                        openDetail(args.id, args.subtitle);
                         loadHistory(currentPage);
                     } else {
                         showToast(data.error || 'Gagal memproses approval.', 'error');
@@ -2439,7 +2983,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             const modeLabel = currentMode === 'daily' ? `Tanggal: ${value}` : `Bulan: ${value}`;
             document.getElementById('checker-modal-subtitle').textContent = modeLabel;
 
-            fetch(`history_checksheet.php?ajax=checker_summary&mode=${currentMode}&value=${encodeURIComponent(value)}`)
+            fetch(`approval_checksheet.php?ajax=checker_summary&mode=${currentMode}&value=${encodeURIComponent(value)}`)
                 .then(r => r.json())
                 .then(rows => {
                     document.getElementById('checker-modal-loading').style.display = 'none';
@@ -2602,7 +3146,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'completion_rate') {
             document.getElementById('completion-loading').style.display = 'block';
             document.getElementById('completion-content').style.display = 'none';
 
-            fetch(`history_checksheet.php?ajax=completion_rate&mode=${currentMode}&value=${encodeURIComponent(value)}`)
+            fetch(`approval_checksheet.php?ajax=completion_rate&mode=${currentMode}&value=${encodeURIComponent(value)}`)
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('completion-loading').style.display = 'none';

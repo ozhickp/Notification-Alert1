@@ -17,6 +17,10 @@ if (empty($_SESSION['checksheet_unlocked']) || ($_SESSION['checksheet_area'] ?? 
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
+// ─── Role identification (untuk munculkan menu Approval di sidebar) ────────
+$currentRole = $_SESSION['role'] ?? '';
+$canOpenApprovalMenu = in_array($currentRole, ['superadmin', 'admin_maintenance'], true);
+
 // ─── Helper: label bulan Indonesia dari 'YYYY-MM' ──────────────────────────
 function indoMonthLabel(string $periodYm): string
 {
@@ -774,6 +778,12 @@ $defaultExportMonth = in_array($currentPeriod, $availableMonths, true) ? $curren
                 <i class="fas fa-pen-to-square"></i>
                 <span class="nav-label">Draft</span>
             </a>
+            <?php if ($canOpenApprovalMenu): ?>
+                <a href="approval_checksheet.php" onclick="navigateTo(event,'approval_checksheet.php')" class="nav-item" title="Approval">
+                    <i class="fas fa-user-check"></i>
+                    <span class="nav-label">Approval</span>
+                </a>
+            <?php endif; ?>
         </nav>
 
         <div id="sidebar-footer">

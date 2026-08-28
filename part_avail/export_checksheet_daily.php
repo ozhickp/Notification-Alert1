@@ -112,18 +112,40 @@ if (file_exists('assets/company_logo.jpg')) {
     $logo->setWorksheet($sheet);
 }
 
-$sheet->mergeCells('A1:M1');
+$sheet->mergeCells('A1:K2');
 $sheet->setCellValue('A1', 'DAILY CHECK SHEET REPORT');
 $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(15);
 $sheet->getStyle('A1')->getAlignment()
     ->setHorizontal(Alignment::HORIZONTAL_CENTER)
     ->setVertical(Alignment::VERTICAL_CENTER);
-$sheet->getRowDimension(1)->setRowHeight(45);
+$sheet->getRowDimension(1)->setRowHeight(25);
+$sheet->getRowDimension(2)->setRowHeight(20);
 
-$sheet->mergeCells('A2:M2');
-$sheet->setCellValue('A2', 'Tanggal : ' . $tanggal);
-$sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
-$sheet->getStyle('A2')->getFont()->setSize(11);
+$sheet->mergeCells('A3:K4');
+$sheet->setCellValue('A3', 'Tanggal : ' . $tanggal);
+$sheet->getStyle('A3')->getAlignment()
+    ->setHorizontal(Alignment::HORIZONTAL_CENTER)
+    ->setVertical(Alignment::VERTICAL_CENTER);
+$sheet->getStyle('A3')->getFont()->setSize(11);
+$sheet->getRowDimension(3)->setRowHeight(16);
+$sheet->getRowDimension(4)->setRowHeight(14);
+
+// ── Blok No. Doc / Revisi / Tgl / Halaman ─────────────────────────────────────
+$docLabelStyle = ['font' => ['bold' => true, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+$docValueStyle = ['font' => ['bold' => false, 'size' => 9], 'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT, 'vertical' => Alignment::VERTICAL_CENTER]];
+$sheet->setCellValue('L1', 'No. Doc');
+$sheet->setCellValue('M1', 'F-MA-01');
+$sheet->setCellValue('L2', 'Revisi');
+$sheet->setCellValue('M2', '00');
+$sheet->setCellValue('L3', 'Tgl');
+$sheet->setCellValue('M3', '01-06-2026');
+$sheet->setCellValue('L4', 'Halaman');
+$sheet->getStyle('L1:L4')->applyFromArray($docLabelStyle);
+$sheet->getStyle('M1:M4')->applyFromArray($docValueStyle);
+
+$sheet->getStyle('A1:M4')->applyFromArray([
+    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_MEDIUM, 'color' => ['rgb' => '94A3B8']]],
+]);
 
 $headers = [
     'No',
@@ -141,7 +163,7 @@ $headers = [
     'Submitted At'
 ];
 
-$startRow = 4;
+$startRow = 5;
 
 // Kumpulkan range result untuk coloring massal di akhir
 $resultRanges = []; // ['range' => 'G5', 'result' => 'V']
@@ -243,6 +265,35 @@ foreach ($groupedResult as $result => $rows) {
     }
 }
 
+// ── Blok Tanda Tangan (Checked By / Approved By) ──────────────────────────────
+$sigRow = $startRow;
+$sheet->mergeCells("A{$sigRow}:F{$sigRow}");
+$sheet->setCellValue("A{$sigRow}", 'Checked By,');
+$sheet->mergeCells("H{$sigRow}:M{$sigRow}");
+$sheet->setCellValue("H{$sigRow}", 'Approved By,');
+$sheet->getStyle("A{$sigRow}:M{$sigRow}")->applyFromArray([
+    'font'      => ['bold' => true, 'size' => 10],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+]);
+for ($i = 0; $i <= 3; $i++) $sheet->getRowDimension($sigRow + $i)->setRowHeight(18);
+
+$lineRow = $sigRow + 4;
+$sheet->mergeCells("A{$lineRow}:F{$lineRow}");
+$sheet->setCellValue("A{$lineRow}", '( ______________________ )');
+$sheet->mergeCells("H{$lineRow}:M{$lineRow}");
+$sheet->setCellValue("H{$lineRow}", '( ______________________ )');
+$sheet->getStyle("A{$lineRow}:M{$lineRow}")->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+
+$captionRow = $lineRow + 1;
+$sheet->mergeCells("A{$captionRow}:F{$captionRow}");
+$sheet->setCellValue("A{$captionRow}", 'Checker / Nama & Tanggal');
+$sheet->mergeCells("H{$captionRow}:M{$captionRow}");
+$sheet->setCellValue("H{$captionRow}", 'Supervisor / Nama & Tanggal');
+$sheet->getStyle("A{$captionRow}:M{$captionRow}")->applyFromArray([
+    'font'      => ['italic' => true, 'size' => 8],
+    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
+]);
+
 // [FIX-2] Ganti setAutoSize(true) ke fixed width
 // autoSize wajib mengukur teks tiap cell → sangat lambat untuk data banyak
 $fixedWidths = [
@@ -263,7 +314,7 @@ $fixedWidths = [
 foreach ($fixedWidths as $col => $w) {
     $sheet->getColumnDimension($col)->setWidth($w);
 }
-$sheet->freezePane('A4');
+$sheet->freezePane('A5');
 
 // ── Export ────────────────────────────────────────────────────────────────────
 // [FIX-3] Save ke file temp dulu, baru stream ke browser

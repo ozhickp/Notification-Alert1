@@ -2,11 +2,8 @@
 session_start();
 require_once __DIR__ . '/config.php';
 
-// Whitelist halaman yang boleh dijadikan redirect tujuan, per role.
-// admin_maintenance tetap seperti role 'user' lama (akses semua 4 halaman).
-// technician & admin_conrod cuma boleh masuk ke e-report.
 $redirect_map = [
-    ROLE_ADMIN_MAINTENANCE => ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php', 'dashboard_report.php'],
+    ROLE_ADMIN_MAINTENANCE => ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php', 'dashboard_report.php', 'approval_checksheet.php'],
     ROLE_TECHNICIAN        => ['dashboard_report.php'],
     ROLE_ADMIN_CONROD      => ['dashboard_report.php'],
 ];
@@ -18,7 +15,7 @@ function resolveRedirect(string $role, string $requested, array $redirect_map): 
 }
 
 $requestedRedirect = trim($_GET['redirect'] ?? $_POST['redirect'] ?? '');
-$redirect = in_array($requestedRedirect, ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php', 'dashboard_report.php'], true)
+$redirect = in_array($requestedRedirect, ['dashboard_user.php', 'dashboard_part.php', 'history_maintenance.php', 'dashboard_report.php', 'approval_checksheet.php'], true)
     ? $requestedRedirect
     : 'dashboard_user.php'; // dipakai cuma buat isi hidden input form, nilai final tetap dihitung ulang lewat resolveRedirect()
 
@@ -298,7 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="divider my-4">atau</div>
 
             <!-- Admin Login Button -->
-            <a href="login_admin.php"
+            <a href="login_admin.php<?= $requestedRedirect !== '' ? '?redirect=' . urlencode($requestedRedirect) : '' ?>"
                 class="btn-outline flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-medium">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
