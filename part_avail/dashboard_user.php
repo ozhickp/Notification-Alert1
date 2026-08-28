@@ -1936,6 +1936,16 @@ HTML;
             color: #fff;
         }
 
+        .nav-pill.active-flowchart {
+            background: #f9eef5;
+            color: #5f0f40;
+        }
+
+        .nav-pill.active-flowchart .np-icon {
+            background: #5f0f40;
+            color: #fff;
+        }
+
         .nav-pill:not([class*="active"]):hover {
             background: #f1f5f9;
             color: #1e293b;
@@ -2102,6 +2112,10 @@ HTML;
                 <a href="history_maintenance.php" class="nav-pill">
                     <span class="np-icon"><i class="fas fa-history"></i></span>
                     <span class="np-label">History</span>
+                </a>
+                <a href="flowchart.php" class="nav-pill">
+                    <span class="np-icon"><i class="fas fa-sitemap"></i></span>
+                    <span class="np-label">Flowchart</span>
                 </a>
             </div>
             <div id="sidebar-footer">
