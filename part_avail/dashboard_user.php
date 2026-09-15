@@ -2715,6 +2715,7 @@ HTML;
                                                 data-line="<?= htmlspecialchars($row['line'] ?? '') ?>"
                                                 data-reminder="<?= (int)$reminder ?>"
                                                 data-days="<?= (int)$days ?>"
+                                                data-machine="<?= htmlspecialchars($row['machine_name'] ?? '', ENT_QUOTES) ?>"
                                                 data-search="<?= htmlspecialchars($srch) ?>">
                                                 <td class="px-5 py-3">
                                                     <div class="font-bold text-sm text-slate-800 whitespace-nowrap">
@@ -2739,7 +2740,7 @@ HTML;
                                                     <span class="badge <?= $msClass ?>" data-ms-badge><?= strtoupper($maintSt) ?></span>
                                                 </td>
                                                 <td class="px-5 py-3 text-center">
-                                                    <div class="flex items-center justify-center gap-1.5">
+                                                    <div class="flex items-center justify-center gap-1.5" data-action-cell>
                                                         <button onclick="showPrevEditModal(<?= $row['id'] ?>)"
                                                             class="bg-[#8b1a6b] text-white p-2 rounded-lg hover:bg-[#8b1a6b] transition" title="Edit">
                                                             <i class="fas fa-edit text-xs"></i>
@@ -2753,9 +2754,10 @@ HTML;
                                                             if ($dueCount > 0):
                                                         ?>
                                                                 <button onclick="showPrevMachineReportModal('<?= htmlspecialchars($mName, ENT_QUOTES) ?>')"
+                                                                    data-report-btn data-machine="<?= htmlspecialchars($mName, ENT_QUOTES) ?>"
                                                                     class="bg-emerald-500 text-white p-2 rounded-lg hover:bg-emerald-600 transition relative" title="Report Mesin (<?= $dueCount ?> job)">
                                                                     <i class="fas fa-clipboard-check text-xs"></i>
-                                                                    <span class="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[9px] font-black rounded-full min-w-[16px] h-4 px-0.5 flex items-center justify-center leading-none"><?= $dueCount ?></span>
+                                                                    <span class="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[9px] font-black rounded-full min-w-[16px] h-4 px-0.5 flex items-center justify-center leading-none" data-report-count><?= $dueCount ?></span>
                                                                 </button>
                                                         <?php
                                                             endif;
@@ -3504,6 +3506,69 @@ HTML;
                         newDays,
                         reminder
                     };
+                }
+
+                // Setelah update baris di tabel preventive tanpa reload (lihat
+                // submitPrevMachineReport), 2 hal jadi tidak sinkron kalau dibiarkan:
+                //   1) Urutan baris — tabel awalnya di-sort oleh server berdasarkan
+                //      Change Date Plan/Remaining Days, tapi baris yang baru saja
+                //      direport punya Remaining Days baru yang jauh berbeda, jadi
+                //      urutan tampilan jadi berantakan kalau baris tidak dipindah.
+                //   2) Tombol hijau "Report Mesin" — server hanya menempelkannya ke
+                //      SATU baris per mesin (baris paling atas/mendesak saat load
+                //      awal). Setelah baris itu direport dan Remaining Days-nya jadi
+                //      besar, baris itu bukan lagi yang paling mendesak untuk mesin
+                //      tsb, tapi tombolnya tetap nempel di situ kalau tidak dipindah.
+                // Fungsi ini menata ulang urutan baris (ASC by Remaining Days, sama
+                // seperti sorting awal dari server) lalu memindahkan tombol Report
+                // Mesin ke baris teratas untuk tiap mesin, sesuai sisa job due yang
+                // tercatat di prevDueJobsData saat ini.
+                function resortAndFixPrevTable() {
+                    const tbody = document.getElementById('prevSchedBody');
+                    if (!tbody) return;
+                    const rows = Array.from(tbody.querySelectorAll('tr.prev-sched-row'));
+                    if (rows.length === 0) return;
+
+                    rows.sort((a, b) => (parseInt(a.dataset.days) || 0) - (parseInt(b.dataset.days) || 0));
+                    rows.forEach(row => tbody.appendChild(row));
+
+                    const seenMachine = new Set();
+                    rows.forEach(row => {
+                        const machine = row.dataset.machine || '';
+                        const actionCell = row.querySelector('[data-action-cell]');
+                        const existingBtn = row.querySelector('[data-report-btn]');
+                        if (!machine || !actionCell) return;
+
+                        if (seenMachine.has(machine)) {
+                            // Bukan baris pertama untuk mesin ini lagi — tombol report
+                            // tidak boleh dobel di sini.
+                            if (existingBtn) existingBtn.remove();
+                            return;
+                        }
+                        seenMachine.add(machine);
+
+                        const dueJobs = prevDueJobsData[machine] || [];
+                        if (dueJobs.length === 0) {
+                            if (existingBtn) existingBtn.remove();
+                            return;
+                        }
+
+                        let btn = existingBtn;
+                        if (!btn) {
+                            btn = document.createElement('button');
+                            btn.setAttribute('data-report-btn', '');
+                            btn.setAttribute('data-machine', machine);
+                            btn.className = 'bg-emerald-500 text-white p-2 rounded-lg hover:bg-emerald-600 transition relative';
+                            btn.innerHTML = `<i class="fas fa-clipboard-check text-xs"></i><span class="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[9px] font-black rounded-full min-w-[16px] h-4 px-0.5 flex items-center justify-center leading-none" data-report-count></span>`;
+                            btn.onclick = () => showPrevMachineReportModal(machine);
+                            actionCell.appendChild(btn);
+                        } else if (btn.parentElement !== actionCell) {
+                            actionCell.appendChild(btn);
+                        }
+                        btn.title = `Report Mesin (${dueJobs.length} job)`;
+                        const countEl = btn.querySelector('[data-report-count]');
+                        if (countEl) countEl.textContent = dueJobs.length;
+                    });
                 }
 
                 // Update 4 kartu statistik (Overdue/Alert/Reminder/Secure) di atas tabel,
@@ -4334,9 +4399,23 @@ HTML;
                             if (prevDueJobsData[machineName]) {
                                 prevDueJobsData[machineName] = prevDueJobsData[machineName].filter(j => !submittedIds.includes(j.id));
                             }
+                            // Tata ulang urutan baris & posisi tombol Report Mesin di
+                            // tabel belakang modal, supaya tidak berantakan/salah tempat
+                            // begitu modal ini ditutup nanti.
+                            resortAndFixPrevTable();
                             setTimeout(() => {
-                                showPrevMachineReportModal(machineName);
+                                // PENTING: kembalikan HTML tombol ASLI dulu (termasuk
+                                // <span id="prevMachineReportSelectedCount"> di dalamnya)
+                                // SEBELUM showPrevMachineReportModal dipanggil. Urutan
+                                // sebaliknya menyebabkan updatePrevMachineReportCount()
+                                // (dipanggil dari dalam showPrevMachineReportModal) mencari
+                                // span tsb padahal sudah hilang (karena innerHTML tombol
+                                // saat itu masih "Menyimpan..."), sehingga terjadi error
+                                // dan baris kode pengembalian teks tombol tidak pernah
+                                // sempat jalan — itulah sebabnya tombol terlihat macet
+                                // bertuliskan "Menyimpan...".
                                 btn.innerHTML = originalHtml;
+                                showPrevMachineReportModal(machineName);
                                 // updatePrevMachineReportCount() (dipanggil di dalam
                                 // showPrevMachineReportModal) yang akan menentukan ulang
                                 // disabled/enabled-nya btn sesuai job yang masih dicentang.

@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/downtime_helper.php';
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
@@ -507,10 +508,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'history') {
     $stmtCount->execute($params);
     $total = (int)$stmtCount->fetchColumn();
 
-    // Hitung total duration_minutes untuk seluruh periode (bukan hanya halaman aktif)
-    $stmtSum = $pdo->prepare("SELECT COALESCE(SUM(duration_minutes), 0) FROM e_reports r $where");
-    $stmtSum->execute($params);
-    $totalMinutes = (int)$stmtSum->fetchColumn();
+    // Hitung total downtime untuk seluruh periode (bukan hanya halaman aktif).
+    // CATATAN (revisi downtime): sebelumnya ini cuma SUM(duration_minutes),
+    // yang bisa menghitung dobel waktu kalau ada >1 problem beririsan di
+    // mesin yang sama, dan belum mengecualikan waktu libur. Sekarang dihitung
+    // lewat calculateAdjustedDowntimeMinutes() (downtime_helper.php):
+    //   - union (gabung) rentang waktu yang overlap, per mesin (department+line+op+machine_name)
+    //   - baris yang repair_finish-nya masih kosong ("belum selesai") dikecualikan dulu
+    //   - waktu yang jatuh di tanggal/shift libur (tabel holiday_settings) dipotong
+    $stmtForCalc = $pdo->prepare("
+        SELECT r.department, r.line, r.op, r.machine_name, r.repair_start, r.repair_finish
+        FROM e_reports r
+        $where
+    ");
+    $stmtForCalc->execute($params);
+    $totalMinutes = calculateAdjustedDowntimeMinutes($pdo, $stmtForCalc->fetchAll());
 
     $stmt = $pdo->prepare("
         SELECT r.id, r.parent_id, r.report_date, r.department, r.line, r.op, r.shift,
@@ -2099,6 +2111,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             <a href="history_report.php" class="nav-item active" title="History Report">
                 <i class="fas fa-history"></i>
                 <span class="nav-label">History Report</span>
+            </a>
+            <a href="holiday_settings.php" class="nav-item" title="Holiday Settings">
+                <i class="fas fa-calendar-day"></i>
+                <span class="nav-label">Holiday Settings</span>
             </a>
         </nav>
 

@@ -1307,6 +1307,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                 <i class="fas fa-history"></i>
                 <span class="nav-label">History Report</span>
             </a>
+            <a href="holiday_settings.php" class="nav-item" title="Holiday Settings">
+                <i class="fas fa-calendar-day"></i>
+                <span class="nav-label">Holiday Settings</span>
+            </a>
         </nav>
 
         <div id="sidebar-footer">
@@ -1600,6 +1604,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                                         <i class="fas fa-link"></i> Lanjutan
                                     </button>
                                 </div>
+                            <?php endif; ?>
+                            <?php if ($isConrodOnly): ?>
+                                <a href="import_excel_conrod.php" class="text-xs font-semibold text-green-700 bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
+                                    <i class="fas fa-file-excel"></i> Import dari Excel
+                                </a>
                             <?php endif; ?>
                         </div>
 
@@ -2506,7 +2515,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_report'])) {
                         checkAllFieldsFilled();
                     })
                     .catch(() => {
-                        /* diam-diam gagal — user tetap bisa pilih shift manual */ });
+                        /* diam-diam gagal — user tetap bisa pilih shift manual */
+                    });
             }, 250);
         }
 
