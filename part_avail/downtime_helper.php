@@ -22,7 +22,6 @@ if (!function_exists('mergeTimeIntervals')) {
 }
 
 if (!function_exists('resolveDayTypeForDate')) {
-
     function resolveDayTypeForDate(int $ts): string
     {
         $dow = (int)date('N', $ts); // 1=Senin ... 7=Minggu
@@ -117,15 +116,28 @@ if (!function_exists('getHolidayRowsInRange')) {
 }
 
 if (!function_exists('subtractHolidayMinutes')) {
+    /**
+     * Hitung menit libur yang beririsan dengan interval [startTs, endTs].
+     *
+     * Semua libur diubah dulu jadi interval waktu absolut, di-union, baru
+     * dihitung overlap-nya. Dengan begitu:
+     *  - Libur "Shift 3 tgl D" (D 23:00 → D+1 07:00) dan libur "sehari penuh
+     *    tgl D+1" (D+1 00:00 → 24:00) tidak terpotong dua kali di 00:00–07:00.
+     *  - Libur Shift 3 dari HARI SEBELUMNYA tetap terbaca untuk downtime yang
+     *    baru mulai lewat tengah malam (query mulai dari H-1).
+     */
     function subtractHolidayMinutes(PDO $pdo, int $startTs, int $endTs, ?string $department, ?string $line): float
     {
-        if ($endTs <= $startTs) return 0;
+        if ($endTs <= $startTs) return 0.0;
 
         $startDate = date('Y-m-d', $startTs);
         $endDate   = date('Y-m-d', $endTs);
 
-        $holidayRows = getHolidayRowsInRange($pdo, $startDate, $endDate, $department, $line);
-        if (empty($holidayRows)) return 0;
+        // Shift 3 tanggal D menjangkau sampai pagi D+1, jadi libur H-1 ikut diambil.
+        $queryStart = date('Y-m-d', strtotime('-1 day', strtotime($startDate . ' 00:00:00')));
+
+        $holidayRows = getHolidayRowsInRange($pdo, $queryStart, $endDate, $department, $line);
+        if (empty($holidayRows)) return 0.0;
 
         // Susun map tanggal → 'ALL' (libur sehari penuh) atau daftar nama shift.
         $holidayMap = []; // ['2026-09-15' => 'ALL' | ['Shift 1', 'Shift 2']]
@@ -136,43 +148,45 @@ if (!function_exists('subtractHolidayMinutes')) {
                 continue;
             }
             if (($holidayMap[$d] ?? null) === 'ALL') continue; // sudah full day, tidak perlu ditambah
-            $shiftNames = array_map('trim', explode(',', $row['shifts']));
-            $holidayMap[$d] = array_unique(array_merge($holidayMap[$d] ?? [], $shiftNames));
+            $shiftNames = array_filter(array_map('trim', explode(',', $row['shifts'])), 'strlen');
+            $holidayMap[$d] = array_values(array_unique(array_merge($holidayMap[$d] ?? [], $shiftNames)));
         }
 
-        $subtracted = 0.0;
-        $cursorTs = strtotime($startDate . ' 00:00:00');
+        // Kumpulkan jendela libur absolut [ts_awal, ts_akhir).
+        $holidayIntervals = [];
+        $cursorTs   = strtotime($queryStart . ' 00:00:00');
         $endBoundTs = strtotime($endDate . ' 00:00:00');
 
         while ($cursorTs <= $endBoundTs) {
             $curDateStr = date('Y-m-d', $cursorTs);
-            $dayStart   = $cursorTs;
             $dayEnd     = strtotime('+1 day', $cursorTs);
 
             if (isset($holidayMap[$curDateStr])) {
                 if ($holidayMap[$curDateStr] === 'ALL') {
-                    // Sehari penuh libur → potong overlap [start,end] dengan [dayStart,dayEnd)
-                    $overlapStart = max($startTs, $dayStart);
-                    $overlapEnd   = min($endTs, $dayEnd);
-                    if ($overlapEnd > $overlapStart) {
-                        $subtracted += ($overlapEnd - $overlapStart) / 60;
-                    }
+                    $holidayIntervals[] = [$cursorTs, $dayEnd];
                 } else {
-                    // Libur cuma shift tertentu → butuh jendela waktu tiap shift
                     $windows = getShiftWindowsForDate($pdo, $curDateStr);
                     foreach ($holidayMap[$curDateStr] as $shiftName) {
                         if (!isset($windows[$shiftName])) continue; // shift_schedules belum lengkap
-                        [$wStart, $wEnd] = $windows[$shiftName];
-                        $overlapStart = max($startTs, $wStart);
-                        $overlapEnd   = min($endTs, $wEnd);
-                        if ($overlapEnd > $overlapStart) {
-                            $subtracted += ($overlapEnd - $overlapStart) / 60;
-                        }
+                        $holidayIntervals[] = $windows[$shiftName];
                     }
                 }
             }
 
             $cursorTs = $dayEnd;
+        }
+
+        if (empty($holidayIntervals)) return 0.0;
+
+        // Union dulu supaya jendela yang bertumpuk tidak dihitung dua kali,
+        // lalu ambil overlap dengan interval downtime.
+        $subtracted = 0.0;
+        foreach (mergeTimeIntervals($holidayIntervals) as [$hStart, $hEnd]) {
+            $overlapStart = max($startTs, $hStart);
+            $overlapEnd   = min($endTs, $hEnd);
+            if ($overlapEnd > $overlapStart) {
+                $subtracted += ($overlapEnd - $overlapStart) / 60;
+            }
         }
 
         return $subtracted;

@@ -24,7 +24,6 @@ $pdo->exec("
 try {
     $pdo->exec("ALTER TABLE holiday_settings ADD COLUMN batch_id VARCHAR(36) DEFAULT NULL AFTER description");
 } catch (\Throwable $e) {
-
 }
 
 requireRole([ROLE_ADMIN_MAINTENANCE, ROLE_ADMIN_CONROD, ROLE_SUPERADMIN]);
@@ -114,7 +113,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'create' && $_SERVER['REQUEST_METH
         exit;
     }
 
-    $totalDays = (strtotime($endDate) - strtotime($startDate)) / 86400 + 1;
+    $totalDays = (int) round((strtotime($endDate) - strtotime($startDate)) / 86400) + 1;
     if ($totalDays > 366) {
         echo json_encode(['success' => false, 'message' => 'Rentang tanggal terlalu panjang (maksimal 366 hari).']);
         exit;
@@ -156,7 +155,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'create' && $_SERVER['REQUEST_METH
             : 'Hari libur berhasil ditambahkan.';
         echo json_encode(['success' => true, 'message' => $msg]);
     } catch (\Exception $e) {
-        $pdo->rollBack();
+        if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
     }
     exit;
@@ -169,7 +168,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'delete' && $_SERVER['REQUEST_METH
 
     if ($batchId !== '') {
         if ($isConrodOnly) {
-            $chk = $pdo->prepare("SELECT COUNT(*) FROM holiday_settings WHERE batch_id = ? AND department <> ?");
+            $chk = $pdo->prepare("SELECT COUNT(*) FROM holiday_settings WHERE batch_id = ? AND (department IS NULL OR department <> ?)");
             $chk->execute([$batchId, LOCKED_CONROD_DEPARTMENT]);
             if ((int)$chk->fetchColumn() > 0) {
                 echo json_encode(['success' => false, 'message' => 'Anda hanya bisa menghapus hari libur untuk department Connecting Rod.']);
@@ -273,7 +272,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'delete' && $_SERVER['REQUEST_METH
     <div class="max-w-5xl mx-auto">
         <div class="flex items-center justify-between mb-6">
             <div>
-                <a href="index.php" class="text-slate-400 hover:text-slate-600 text-sm"><i class="fas fa-arrow-left mr-1"></i> Kembali ke Hub</a>
+                <a href="dashboard_report.php" class="text-slate-400 hover:text-slate-600 text-sm"><i class="fas fa-arrow-left mr-1"></i> Kembali ke E-Reports</a>
                 <h1 class="text-2xl font-bold text-slate-800 mt-1"><i class="fas fa-calendar-xmark text-red-500 mr-2"></i>Pengaturan Hari Libur</h1>
                 <p class="text-slate-500 text-sm mt-1">Downtime yang jatuh di tanggal/shift yang ditandai libur di sini tidak akan dihitung sebagai downtime mesin (hanya "Waktu Produktif" yang dihitung).</p>
             </div>
@@ -362,6 +361,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'delete' && $_SERVER['REQUEST_METH
                         <label class="flex items-center gap-1 text-sm"><input type="checkbox" class="f-shift" value="Shift 2"> Shift 2</label>
                         <label class="flex items-center gap-1 text-sm"><input type="checkbox" class="f-shift" value="Shift 3"> Shift 3</label>
                     </div>
+                    <p class="text-[11px] text-slate-400 mt-1">Shift 3 dimulai malam tanggal yang dipilih dan berlanjut sampai pagi hari berikutnya.</p>
                 </div>
                 <div>
                     <label class="text-xs font-semibold text-slate-500">Keterangan</label>

@@ -16,6 +16,43 @@ $pdo->exec("
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 ");
 
+// ── [SYNC-FINISH] Maintenance mengisi repair_finish → "Time Finish" Conrod ikut terisi ──
+// Arah SINGKAT (satu arah): Maintenance → Conrod. Kebalikannya TIDAK ada — kalau Conrod
+// yang mengisi duluan, repair_finish di sisi Maintenance tetap kosong sampai Maintenance
+// sendiri yang mengisi lewat follow-up.
+// Aturan tulis ke conrod_finish_at (laporan awal/root Conrod):
+//   - masih kosong                                → diisi (dicatat di riwayat, recorded_by = "[AUTO] <username>")
+//   - sudah diisi MANUAL oleh Conrod / hasil import → TIDAK ditimpa (itu catatan mandiri Conrod)
+//   - sudah diisi oleh auto-sync sebelumnya        → diperbarui (mengikuti repair_finish terbaru)
+// Return true kalau nilai Conrod benar-benar berubah.
+if (!function_exists('syncConrodFinishFromMaintenance')) {
+    function syncConrodFinishFromMaintenance(PDO $pdo, int $rootId, string $finishDatetime, string $byUser): bool
+    {
+        $q = $pdo->prepare("
+            SELECT conrod_finish_at FROM e_reports
+            WHERE id = ? AND parent_id IS NULL
+              AND ((foreman IS NOT NULL AND foreman <> '') OR source_role = 'admin_conrod')
+        ");
+        $q->execute([$rootId]);
+        $root = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$root) return false; // bukan laporan Conrod → tidak ada yang disinkronkan
+
+        if (!empty($root['conrod_finish_at'])) {
+            $l = $pdo->prepare("SELECT recorded_by FROM conrod_finish_log WHERE report_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1");
+            $l->execute([$rootId]);
+            $lastBy = $l->fetchColumn();
+            if ($lastBy === false || strpos((string)$lastBy, '[AUTO]') !== 0) return false; // nilai milik Conrod
+            if ($root['conrod_finish_at'] === $finishDatetime) return false;                 // sudah sama
+        }
+
+        $pdo->prepare("INSERT INTO conrod_finish_log (report_id, finish_at, recorded_by) VALUES (?, ?, ?)")
+            ->execute([$rootId, $finishDatetime, '[AUTO] ' . $byUser]);
+        $pdo->prepare("UPDATE e_reports SET conrod_finish_at = ? WHERE id = ?")
+            ->execute([$finishDatetime, $rootId]);
+        return true;
+    }
+}
+
 if (!isset($_SESSION['user_id'], $_SESSION['role']) || !in_array($_SESSION['role'], [ROLE_ADMIN_MAINTENANCE, ROLE_TECHNICIAN, ROLE_ADMIN_CONROD, ROLE_SUPERADMIN], true)) {
     header('Location: index.php');
     exit;
@@ -864,6 +901,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
     $rootId = $orig['parent_id'] ?: $sourceId;
 
     try {
+        $pdo->beginTransaction();
         $stmt = $pdo->prepare("
             INSERT INTO e_reports
               (parent_id, department, `line`, op, shift, machine_name, machine_type, report_date,
@@ -889,8 +927,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'add_followup' && $_SERVER['REQUES
             $status,
             $role, // role sesi yang sedang login saat submit — direkam permanen, tidak bergantung JOIN ke tabel users lagi
         ]);
-        echo json_encode(['success' => true, 'message' => 'Informasi lanjutan berhasil disimpan.']);
+        // Kalau Maintenance mengisi repair_finish, Time Finish Conrod (laporan awal) ikut terisi.
+        $conrodSynced = false;
+        if ($finishDatetime !== null) {
+            $conrodSynced = syncConrodFinishFromMaintenance($pdo, (int)$rootId, $finishDatetime, $reportedBy);
+        }
+        $pdo->commit();
+        echo json_encode(['success' => true, 'message' => 'Informasi lanjutan berhasil disimpan.' . ($conrodSynced ? ' Waktu selesai Conrod ikut diperbarui.' : '')]);
     } catch (\Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => 'Gagal menyimpan: ' . $e->getMessage()]);
     }
     exit;

@@ -38,6 +38,28 @@ if (!function_exists('computeNextChangeDate')) {
     }
 }
 
+// ── Helper: status awal schedule (dipakai saat Report Preventive → Jadikan Predictive) ──
+// Logika sama dengan penambahan predictive manual (action 'add'): masuk window
+// bila overdue / <= 7 hari / <= reminder_activity.
+if (!function_exists('computeInitialScheduleStatus')) {
+    function computeInitialScheduleStatus(?string $changeDatePlan, int $reminderActivity): array
+    {
+        $remainingDay = null;
+        if (!empty($changeDatePlan)) {
+            $now = new DateTime('today');
+            $cdp = new DateTime($changeDatePlan);
+            $diff = (int)$now->diff($cdp)->days;
+            $remainingDay = ($cdp >= $now) ? $diff : -$diff;
+        }
+        $inWindow = ($remainingDay !== null && (
+            $remainingDay <= 0 ||
+            ($remainingDay >= 1 && $remainingDay <= 7) ||
+            ($reminderActivity > 0 && $remainingDay <= $reminderActivity)
+        ));
+        return [$remainingDay, $inWindow];
+    }
+}
+
 // ── Resolusi department/line dari ID → NAMA ─────────────────────────────────
 // Beberapa baris lama di schedules/schedules_preventive masih menyimpan
 // department/line sebagai ID angka FK (department → plants.id, line → line.id),
@@ -998,6 +1020,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
             $pdo->beginTransaction();
             try {
                 $successCount = 0;
+                $predCreatedCount = 0;   // jumlah schedule predictive baru dari report preventive ini
+                $predAlertIds = [];      // id predictive baru yang langsung masuk window → kirim email setelah commit
                 $updatedItems = []; // dikirim balik ke JS supaya tabel & kartu bisa di-update tanpa reload
 
                 foreach ($items as $idx => $item) {
@@ -1073,6 +1097,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
                         WHERE id = ?")
                         ->execute([$newUseDate, $newChangePlan, $newRemainingDay, $schedId]);
 
+                    // ── [BARU] Jadikan Schedule Predictive (opsional, per job) ──
+                    // Mekanisme TAMBAHAN: jadwal preventive di atas tetap di-update & berulang
+                    // seperti biasa. Kalau dicentang, dibuat 1 baris BARU di tabel `schedules`
+                    // (predictive) dengan data mesin diambil dari schedule preventive ini.
+                    if (!empty($item['to_predictive'])) {
+                        $pNameUnit   = trim($item['pred_name_unit'] ?? '') ?: (string)$sched['name_unit'];
+                        $pPoint      = trim($item['pred_maintenance_point'] ?? '') ?: (string)$sched['maintenance_point'];
+                        $pInterval   = (int)($item['pred_interval_month'] ?? 0);
+                        $pReminder   = (int)($item['pred_reminder_activity'] ?? 0);
+                        $pUseDate    = trim($item['pred_use_date'] ?? '');
+                        $pChangePlan = trim($item['pred_change_date_plan'] ?? '');
+
+                        if ($pNameUnit === '' || $pPoint === '' || $pInterval <= 0 || $pUseDate === '' || $pChangePlan === '') {
+                            throw new Exception('Data Schedule Predictive belum lengkap untuk: ' . $sched['maintenance_point']);
+                        }
+
+                        [$pRemaining, $pInWindow] = computeInitialScheduleStatus($pChangePlan, $pReminder);
+                        $pStatus = $pInWindow ? 'soon' : 'done';
+                        $pPart   = $pInWindow ? 'open' : 'close';
+
+                        $pdo->prepare("INSERT INTO schedules
+                            (department, line, operation_process, machine_name, process_machine, name_unit,
+                             maintenance_point, interval_month, use_date, change_date_plan,
+                             reminder_activity, remaining_day, maintenance_status, part_order, part_availability)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                            ->execute([
+                                $sched['department'],
+                                $sched['line'],
+                                $sched['operation_process'],
+                                $sched['machine_name'],
+                                $sched['process_machine'],
+                                $pNameUnit,
+                                $pPoint,
+                                $pInterval,
+                                $pUseDate,
+                                $pChangePlan,
+                                $pReminder,
+                                $pRemaining,
+                                $pStatus,
+                                $pPart,
+                                $pPart,
+                            ]);
+                        $newPredId = (int)$pdo->lastInsertId();
+                        $predCreatedCount++;
+                        if ($pInWindow && $newPredId > 0) $predAlertIds[] = $newPredId;
+                    }
+
                     $successCount++;
                     $updatedItems[] = [
                         'id'                => $schedId,
@@ -1084,12 +1155,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['prev_action'])) {
 
                 $pdo->commit();
 
+                // Email alert untuk schedule predictive baru yang langsung masuk window
+                // (di luar transaksi; kegagalan email tidak boleh membatalkan report).
+                if (!empty($predAlertIds)) {
+                    try {
+                        $reminderFile = __DIR__ . '/send_reminder.php';
+                        if (file_exists($reminderFile)) {
+                            if (!function_exists('sendNewScheduleAlert')) require_once $reminderFile;
+                            if (function_exists('sendNewScheduleAlert')) {
+                                foreach ($predAlertIds as $pid) sendNewScheduleAlert($pdo, $pid);
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        error_log('[Dashboard] sendNewScheduleAlert (prev→pred) gagal: ' . $e->getMessage());
+                    }
+                }
+
                 if ($successCount === 0) {
                     echo json_encode(['status' => 'error', 'message' => 'Tidak ada report yang berhasil disimpan']);
                 } else {
+                    $okMsg = "Berhasil menyimpan {$successCount} report preventive.";
+                    if ($predCreatedCount > 0) $okMsg .= " {$predCreatedCount} schedule predictive baru ditambahkan.";
                     echo json_encode([
                         'status'  => 'success',
-                        'message' => "Berhasil menyimpan {$successCount} report preventive.",
+                        'message' => $okMsg,
                         'data'    => $updatedItems,
                     ]);
                 }
@@ -2676,6 +2765,7 @@ HTML;
                                                 $prevMachineDueJobs[$r['machine_name']][] = [
                                                     'id'                => (int)$r['id'],
                                                     'maintenance_point' => $r['maintenance_point'],
+                                                    'name_unit'         => $r['name_unit'] ?? '',
                                                     'change_date_plan'  => $r['change_date_plan'],
                                                     'remaining_day'     => $rDays,
                                                     'department'        => $r['department'] ?? '',
@@ -4175,6 +4265,53 @@ HTML;
                                     <textarea id="pmr_note_${idx}" rows="2" placeholder="Tuliskan detail pekerjaan preventive maintenance..." oninput="updatePrevMachineReportCount()"
                                         class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-[#f2d4e8] outline-none transition text-sm resize-none"></textarea>
                                 </div>
+
+                                <!-- Jadikan Schedule Predictive (opsional) — jadwal preventive tetap berulang seperti biasa -->
+                                <div class="border border-orange-200 bg-orange-50/60 rounded-lg p-3">
+                                    <label class="flex items-start gap-2 cursor-pointer">
+                                        <input type="checkbox" id="pmr_pred_check_${idx}" class="mt-0.5 w-4 h-4 accent-[#fb8b24]" onchange="togglePrevPredDetail(${idx})">
+                                        <span class="text-xs text-slate-700">
+                                            <strong class="text-[#c2600a]"><i class="fas fa-chart-line mr-1"></i>Jadikan Schedule Predictive</strong>
+                                            <span class="block text-[11px] text-slate-400 mt-0.5">Tambahkan juga sebagai jadwal Predictive baru. Jadwal Preventive ini tidak berubah dan tetap berulang.</span>
+                                        </span>
+                                    </label>
+                                    <div id="pmr_pred_detail_${idx}" class="hidden mt-3 grid grid-cols-2 gap-3">
+                                        <div class="col-span-2">
+                                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Name Unit <span class="text-red-500">*</span></label>
+                                            <input type="text" id="pmr_pred_name_${idx}" value="${esc(job.name_unit || '')}" oninput="updatePrevMachineReportCount()"
+                                                class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-orange-100 outline-none transition text-sm bg-white" placeholder="Nama unit/part">
+                                        </div>
+                                        <div class="col-span-2">
+                                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Maintenance Point <span class="text-red-500">*</span></label>
+                                            <textarea id="pmr_pred_point_${idx}" rows="2" oninput="updatePrevMachineReportCount()"
+                                                class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-orange-100 outline-none transition text-sm resize-none bg-white" placeholder="Titik/poin perawatan">${esc(job.maintenance_point || '')}</textarea>
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Interval (bulan) <span class="text-red-500">*</span></label>
+                                            <input type="number" min="1" id="pmr_pred_interval_${idx}" oninput="syncPrevPredDate(${idx})"
+                                                class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-orange-100 outline-none transition text-sm bg-white" placeholder="mis. 6">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Reminder Activity (hari)</label>
+                                            <input type="number" min="0" id="pmr_pred_reminder_${idx}"
+                                                class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-orange-100 outline-none transition text-sm bg-white" placeholder="mis. 14">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Use Date (Last Change) <span class="text-red-500">*</span></label>
+                                            <input type="date" id="pmr_pred_usedate_${idx}" value="${today}" oninput="syncPrevPredDate(${idx})"
+                                                class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-orange-100 outline-none transition text-sm bg-white">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Change Date Plan <span class="text-red-500">*</span></label>
+                                            <input type="date" id="pmr_pred_change_${idx}" readonly oninput="updatePrevMachineReportCount()"
+                                                class="w-full border border-slate-200 rounded-lg px-3 py-2 focus:ring-4 focus:ring-orange-100 outline-none transition text-sm bg-slate-50">
+                                            <label class="flex items-center gap-1.5 mt-1 text-[11px] text-slate-500 cursor-pointer">
+                                                <input type="checkbox" id="pmr_pred_sync_${idx}" checked class="accent-[#fb8b24]" onchange="syncPrevPredDate(${idx})">
+                                                Otomatis: Use Date + Interval
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     `;
@@ -4247,6 +4384,55 @@ HTML;
                     updatePrevMachineReportCount();
                 }
 
+                // ── Jadikan Schedule Predictive (dari modal Report Preventive) ──────────────
+                function togglePrevPredDetail(idx) {
+                    const checked = document.getElementById(`pmr_pred_check_${idx}`).checked;
+                    document.getElementById(`pmr_pred_detail_${idx}`).classList.toggle('hidden', !checked);
+                    if (checked) {
+                        // Use Date predictive default mengikuti Tanggal Aktual Pekerjaan
+                        const actual = document.getElementById(`pmr_date_${idx}`)?.value;
+                        const ud = document.getElementById(`pmr_pred_usedate_${idx}`);
+                        if (actual && ud) ud.value = actual;
+                        syncPrevPredDate(idx);
+                    }
+                    updatePrevMachineReportCount();
+                }
+
+                // Change Date Plan = Use Date + Interval (bulan), bila checkbox "Otomatis" aktif.
+                function syncPrevPredDate(idx) {
+                    const sync = document.getElementById(`pmr_pred_sync_${idx}`);
+                    const changeEl = document.getElementById(`pmr_pred_change_${idx}`);
+                    changeEl.readOnly = sync.checked;
+                    changeEl.classList.toggle('bg-slate-50', sync.checked);
+                    if (sync.checked) {
+                        const useDate = document.getElementById(`pmr_pred_usedate_${idx}`).value;
+                        const interval = parseInt(document.getElementById(`pmr_pred_interval_${idx}`).value);
+                        if (useDate && interval > 0) {
+                            const d = new Date(useDate + 'T00:00:00');
+                            d.setMonth(d.getMonth() + interval);
+                            const y = d.getFullYear();
+                            const m = String(d.getMonth() + 1).padStart(2, '0');
+                            const dd = String(d.getDate()).padStart(2, '0');
+                            changeEl.value = `${y}-${m}-${dd}`;
+                        } else {
+                            changeEl.value = '';
+                        }
+                    }
+                    updatePrevMachineReportCount();
+                }
+
+                // Validasi field predictive untuk 1 job; return true bila lengkap / tidak dicentang.
+                function isPrevPredComplete(idx) {
+                    const cb = document.getElementById(`pmr_pred_check_${idx}`);
+                    if (!cb || !cb.checked) return true;
+                    const name = document.getElementById(`pmr_pred_name_${idx}`)?.value?.trim();
+                    const point = document.getElementById(`pmr_pred_point_${idx}`)?.value?.trim();
+                    const interval = parseInt(document.getElementById(`pmr_pred_interval_${idx}`)?.value);
+                    const useDate = document.getElementById(`pmr_pred_usedate_${idx}`)?.value;
+                    const change = document.getElementById(`pmr_pred_change_${idx}`)?.value;
+                    return !!(name && point && interval > 0 && useDate && change);
+                }
+
                 // ── Isi Cepat (preventive) ──────────────────────────────────────────────────
                 function onPrevQuickFillToggle() {
                     const on = document.getElementById('pmrQuickFillToggle').checked;
@@ -4304,6 +4490,7 @@ HTML;
                             const teknisi = document.getElementById(`pmr_teknisi_${idx}`)?.value?.trim();
                             const note = document.getElementById(`pmr_note_${idx}`)?.value?.trim();
                             if (!date || !teknisi || !note) allFilled = false;
+                            if (!isPrevPredComplete(idx)) allFilled = false;
                         }
                     });
                     document.getElementById('prevMachineReportSelectedCount').textContent = count;
@@ -4347,12 +4534,25 @@ HTML;
                             showErr(`❌ Lengkapi semua field (tanggal, teknisi, note) untuk: ${jobs[idx].maintenance_point}`);
                             return;
                         }
+                        if (!isPrevPredComplete(idx)) {
+                            showErr(`❌ Lengkapi data Schedule Predictive (name unit, point, interval, use date, change date) untuk: ${jobs[idx].maintenance_point}`);
+                            return;
+                        }
 
                         fd.append(`items[${selectedCount}][schedule_id]`, jobs[idx].id);
                         fd.append(`items[${selectedCount}][actual_date]`, date);
                         fd.append(`items[${selectedCount}][teknisi]`, teknisi);
                         fd.append(`items[${selectedCount}][note]`, note);
                         fd.append(`items[${selectedCount}][next_basis]`, basis);
+                        if (document.getElementById(`pmr_pred_check_${idx}`)?.checked) {
+                            fd.append(`items[${selectedCount}][to_predictive]`, '1');
+                            fd.append(`items[${selectedCount}][pred_name_unit]`, document.getElementById(`pmr_pred_name_${idx}`).value.trim());
+                            fd.append(`items[${selectedCount}][pred_maintenance_point]`, document.getElementById(`pmr_pred_point_${idx}`).value.trim());
+                            fd.append(`items[${selectedCount}][pred_interval_month]`, document.getElementById(`pmr_pred_interval_${idx}`).value);
+                            fd.append(`items[${selectedCount}][pred_reminder_activity]`, document.getElementById(`pmr_pred_reminder_${idx}`).value || '0');
+                            fd.append(`items[${selectedCount}][pred_use_date]`, document.getElementById(`pmr_pred_usedate_${idx}`).value);
+                            fd.append(`items[${selectedCount}][pred_change_date_plan]`, document.getElementById(`pmr_pred_change_${idx}`).value);
+                        }
                         submittedIds.push(jobs[idx].id);
                         selectedCount++;
                     }

@@ -7,6 +7,8 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
+use PhpOffice\PhpSpreadsheet\Style\NumberFormat;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
 
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
@@ -18,26 +20,45 @@ $currentUsername = $_SESSION['username'] ?? 'Unknown';
 
 const IMPORT_DEPARTMENT = 'Connecting Rod'; // sama seperti pembatasan admin_conrod di dashboard_report.php
 
+// Tabel riwayat "Waktu Selesai (Versi Conrod)" — DDL sama dengan dashboard_report.php/history_report.php.
+$pdo->exec("
+    CREATE TABLE IF NOT EXISTS conrod_finish_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        report_id INT NOT NULL,
+        finish_at DATETIME NOT NULL,
+        recorded_by VARCHAR(150) NOT NULL,
+        recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_report_id (report_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+");
+
 // ─── Download template Excel ───────────────────────────────────────────────
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'template') {
     $spreadsheet = new Spreadsheet();
     $sheet = $spreadsheet->getActiveSheet();
     $sheet->setTitle('Template Report Conrod');
 
-    $headers = ['Line', 'OP', 'Nama Mesin', 'Tanggal Kejadian (YYYY-MM-DD)', 'Jam Kejadian (HH:MM)', 'Shift', 'Foreman', 'Problem'];
+    $headers = ['Tanggal Kejadian (DD-MM-YYYY)', 'Foreman', 'Shift', 'Jam Kejadian (HH:MM)', 'Jam Selesai (HH:MM)', 'Line', 'OP', 'Problem'];
     $sheet->fromArray($headers, null, 'A1');
     $sheet->getStyle('A1:H1')->getFont()->setBold(true);
     foreach (range('A', 'H') as $col) {
-        $sheet->getColumnDimension($col)->setWidth(22);
+        $sheet->getColumnDimension($col)->setWidth(24);
     }
     $sheet->getColumnDimension('H')->setWidth(40);
 
+    // Kolom Tanggal (A), Jam Kejadian (D), Jam Selesai (E) diformat TEXT supaya Excel tidak
+    // mengubah apa yang diketik (mis. "05-06-2026" dibaca bulan-hari di Excel berlokal US).
+    // Nama mesin TIDAK ada di template — diisi otomatis dari Line + OP (master data machine_list).
+    foreach (['A', 'D', 'E'] as $col) {
+        $sheet->getStyle("{$col}2:{$col}1000")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_TEXT);
+    }
+
     // Baris contoh — dihapus dulu oleh user sebelum diisi data asli.
-    $sheet->fromArray(
-        ['Conrod 1', 'OP10', 'Grinding - Koyo Mattison', date('Y-m-d'), '07:30', 'Shift 1', 'Nama Foreman', 'Contoh problem/alarm yang terjadi'],
-        null,
-        'A2'
-    );
+    // Jam Selesai boleh dikosongkan (= belum selesai versi Conrod).
+    $sheet->fromArray(['', 'Nama Foreman', 'Shift 1', '', '', 'Conrod 1', 'OP10', 'Contoh problem/alarm yang terjadi'], null, 'A2');
+    $sheet->setCellValueExplicit('A2', date('d-m-Y'), DataType::TYPE_STRING);
+    $sheet->setCellValueExplicit('D2', '07:30', DataType::TYPE_STRING);
+    $sheet->setCellValueExplicit('E2', '08:15', DataType::TYPE_STRING);
 
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     header('Content-Disposition: attachment; filename="template_import_report_conrod.xlsx"');
@@ -73,17 +94,27 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'upload' && $_SERVER['REQUEST_METH
     $highestRow = $sheet->getHighestDataRow();
 
     $addedCount = 0;
+    $addedFinishedCount = 0; // yang Jam Selesai-nya terisi (= selesai versi Conrod)
     $duplicateCount = 0;
     $skippedInvalid = []; // ['row' => n, 'reason' => '...']
 
-    // Cache lookup machine_list supaya tidak query berulang untuk kombinasi yang sama.
+    // Cache lookup machine_list per kombinasi Line+OP supaya tidak query berulang.
     $machineCache = [];
 
+    // Kolom template: A Tanggal | B Foreman | C Shift | D Jam Kejadian | E Jam Selesai | F Line | G OP | H Problem
+    // conrod_finish_at diisi kalau Jam Selesai ada; repair_finish (milik Maintenance) TETAP NULL.
     $insertStmt = $pdo->prepare("
         INSERT INTO e_reports
           (department, `line`, op, shift, machine_name, machine_type, report_date,
-           repair_start, repair_finish, duration_minutes, reported_by, foreman, pic, problem, action, status, source_role, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, NULL, 'belum selesai', ?, NOW())
+           repair_start, repair_finish, duration_minutes, conrod_finish_at, reported_by, foreman, pic, problem, action, status, source_role, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, ?, NULL, 'belum selesai', ?, NOW())
+    ");
+    $finishLogStmt = $pdo->prepare("INSERT INTO conrod_finish_log (report_id, finish_at, recorded_by) VALUES (?, ?, ?)");
+
+    $machLookupStmt = $pdo->prepare("
+        SELECT `line`, op, machine_name, machine_type FROM machine_list
+        WHERE department = ? AND LOWER(TRIM(`line`)) = LOWER(TRIM(?)) AND LOWER(TRIM(op)) = LOWER(TRIM(?))
+        ORDER BY machine_name ASC
     ");
 
     $dupCheckStmt = $pdo->prepare("
@@ -98,22 +129,27 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'upload' && $_SERVER['REQUEST_METH
     ");
 
     for ($rowNum = 2; $rowNum <= $highestRow; $rowNum++) {
-        $line      = trim((string)$sheet->getCell("A{$rowNum}")->getCalculatedValue());
-        $op        = trim((string)$sheet->getCell("B{$rowNum}")->getCalculatedValue());
-        $machine   = trim((string)$sheet->getCell("C{$rowNum}")->getCalculatedValue());
-        $dateCell  = $sheet->getCell("D{$rowNum}");
-        $timeCell  = $sheet->getCell("E{$rowNum}");
-        $shift     = trim((string)$sheet->getCell("F{$rowNum}")->getCalculatedValue());
-        $foreman   = trim((string)$sheet->getCell("G{$rowNum}")->getCalculatedValue());
-        $problem   = trim((string)$sheet->getCell("H{$rowNum}")->getCalculatedValue());
+        $dateCell   = $sheet->getCell("A{$rowNum}");
+        $foreman    = trim((string)$sheet->getCell("B{$rowNum}")->getCalculatedValue());
+        $shift      = trim((string)$sheet->getCell("C{$rowNum}")->getCalculatedValue());
+        $startCell  = $sheet->getCell("D{$rowNum}");
+        $finishCell = $sheet->getCell("E{$rowNum}");
+        $line       = trim((string)$sheet->getCell("F{$rowNum}")->getCalculatedValue());
+        $op         = trim((string)$sheet->getCell("G{$rowNum}")->getCalculatedValue());
+        $problem    = trim((string)$sheet->getCell("H{$rowNum}")->getCalculatedValue());
+
+        $rawDate   = trim((string)$dateCell->getCalculatedValue());
+        $rawStart  = trim((string)$startCell->getCalculatedValue());
+        $rawFinish = trim((string)$finishCell->getCalculatedValue());
 
         // Lewati baris yang benar-benar kosong (mis. baris kosong di akhir file).
-        if ($line === '' && $op === '' && $machine === '' && $shift === '' && $foreman === '' && $problem === '') {
+        if ($rawDate === '' && $foreman === '' && $shift === '' && $rawStart === '' && $rawFinish === '' && $line === '' && $op === '' && $problem === '') {
             continue;
         }
 
-        if ($line === '' || $op === '' || $machine === '' || $shift === '' || $foreman === '' || $problem === '') {
-            $skippedInvalid[] = ['row' => $rowNum, 'reason' => 'Ada kolom wajib yang kosong (Line/OP/Mesin/Shift/Foreman/Problem).'];
+        // Jam Selesai TIDAK wajib (kosong = belum selesai versi Conrod).
+        if ($rawDate === '' || $foreman === '' || $shift === '' || $rawStart === '' || $line === '' || $op === '' || $problem === '') {
+            $skippedInvalid[] = ['row' => $rowNum, 'reason' => 'Ada kolom wajib yang kosong (Tanggal/Foreman/Shift/Jam Kejadian/Line/OP/Problem).'];
             continue;
         }
 
@@ -122,72 +158,111 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'upload' && $_SERVER['REQUEST_METH
             continue;
         }
 
-        $dateStr = normalizeExcelDate($dateCell);
-        $timeStr = normalizeExcelTime($timeCell);
-        if (!$dateStr || !$timeStr) {
-            $skippedInvalid[] = ['row' => $rowNum, 'reason' => 'Format Tanggal/Jam Kejadian tidak bisa dibaca.'];
+        $dateStr  = normalizeExcelDate($dateCell);
+        $startStr = normalizeExcelTime($startCell);
+        if (!$dateStr) {
+            $skippedInvalid[] = ['row' => $rowNum, 'reason' => "Tanggal Kejadian \"$rawDate\" tidak bisa dibaca (gunakan format DD-MM-YYYY)."];
             continue;
         }
-        $repairStart = "$dateStr $timeStr:00";
+        if (!$startStr) {
+            $skippedInvalid[] = ['row' => $rowNum, 'reason' => "Jam Kejadian \"$rawStart\" tidak bisa dibaca (gunakan format HH:MM)."];
+            continue;
+        }
+        $repairStart = "$dateStr $startStr:00";
 
-        // Validasi kombinasi Line/OP/Mesin terhadap master data machine_list —
-        // sekalian dipakai untuk auto-isi machine_type.
-        $machKey = strtolower($line . '|' . $op . '|' . $machine);
+        // Jam Selesai (opsional). Kalau diisi tapi formatnya salah → baris ditolak (tidak diam-diam dianggap kosong).
+        // Tanggal selesai = tanggal kejadian; kalau jam selesai lebih awal dari jam kejadian → lewat tengah
+        // malam (mis. kejadian 23:30, selesai 01:15) sehingga tanggal selesai = hari berikutnya.
+        $conrodFinishAt = null;
+        if ($rawFinish !== '') {
+            $finishStr = normalizeExcelTime($finishCell);
+            if (!$finishStr) {
+                $skippedInvalid[] = ['row' => $rowNum, 'reason' => "Jam Selesai \"$rawFinish\" tidak bisa dibaca (gunakan format HH:MM atau kosongkan)."];
+                continue;
+            }
+            $finishDateStr = ($finishStr < $startStr) ? date('Y-m-d', strtotime($dateStr . ' +1 day')) : $dateStr;
+            $conrodFinishAt = "$finishDateStr $finishStr:00";
+        }
+
+        // Nama mesin & machine_type diisi OTOMATIS dari master data machine_list berdasarkan Line + OP.
+        // Hanya bisa kalau Line+OP itu menunjuk tepat 1 mesin. Kalau 0 atau >1 → baris ditolak dengan alasan jelas.
+        $machKey = strtolower($line . '|' . $op);
         if (!array_key_exists($machKey, $machineCache)) {
-            $mstmt = $pdo->prepare("
-                SELECT machine_type FROM machine_list
-                WHERE department = ? AND LOWER(TRIM(`line`)) = LOWER(TRIM(?)) AND LOWER(TRIM(op)) = LOWER(TRIM(?)) AND LOWER(TRIM(machine_name)) = LOWER(TRIM(?))
-                LIMIT 1
-            ");
-            $mstmt->execute([IMPORT_DEPARTMENT, $line, $op, $machine]);
-            $machineCache[$machKey] = $mstmt->fetchColumn(); // false kalau tidak ketemu
+            $machLookupStmt->execute([IMPORT_DEPARTMENT, $line, $op]);
+            $found = $machLookupStmt->fetchAll();
+            $names = [];
+            foreach ($found as $f) {
+                $names[strtolower(trim($f['machine_name']))] = $f['machine_name'];
+            }
+            $machineCache[$machKey] = ['rows' => $found, 'names' => array_values($names)];
         }
-        $machineType = $machineCache[$machKey];
-        if ($machineType === false) {
-            $skippedInvalid[] = ['row' => $rowNum, 'reason' => "Kombinasi Line \"$line\" / OP \"$op\" / Mesin \"$machine\" tidak ditemukan di master data mesin."];
+        $mc = $machineCache[$machKey];
+        if (count($mc['names']) === 0) {
+            $skippedInvalid[] = ['row' => $rowNum, 'reason' => "Kombinasi Line \"$line\" / OP \"$op\" tidak ditemukan di master data mesin."];
             continue;
         }
+        if (count($mc['names']) > 1) {
+            $skippedInvalid[] = ['row' => $rowNum, 'reason' => "Line \"$line\" / OP \"$op\" punya lebih dari 1 mesin di master data (" . implode(', ', $mc['names']) . ") — nama mesin tidak bisa ditentukan otomatis."];
+            continue;
+        }
+        $mrow        = $mc['rows'][0];
+        $machine     = $mrow['machine_name'];
+        $machineType = $mrow['machine_type'];
+        $lineDb      = $mrow['line'];
+        $opDb        = $mrow['op'];
 
-        // Cek duplikat: Line + Mesin + Tanggal + Shift + Problem (semua cocok).
-        $dupCheckStmt->execute([IMPORT_DEPARTMENT, $line, $machine, $dateStr, $shift, $problem]);
+        // Cek duplikat: Department + Line + Mesin + Tanggal Kejadian + Shift + Problem (semua cocok).
+        $dupCheckStmt->execute([IMPORT_DEPARTMENT, $lineDb, $machine, $dateStr, $shift, $problem]);
         if ($dupCheckStmt->fetch()) {
             $duplicateCount++;
             continue;
         }
 
         try {
+            $pdo->beginTransaction();
             $insertStmt->execute([
                 IMPORT_DEPARTMENT,
-                $line,
-                $op,
+                $lineDb,
+                $opDb,
                 $shift,
                 $machine,
                 $machineType,
                 $dateStr,        // report_date — dianggap sama dengan tanggal kejadian
                 $repairStart,
-                $foreman,
+                $conrodFinishAt, // NULL kalau Jam Selesai kosong
                 $currentUsername,
+                $foreman,
                 $problem,
                 ROLE_ADMIN_CONROD,
             ]);
+            if ($conrodFinishAt !== null) {
+                // Sama seperti tombol "Tandai Selesai" manual: nilai + entri riwayat.
+                $finishLogStmt->execute([(int)$pdo->lastInsertId(), $conrodFinishAt, $currentUsername . ' (import Excel)']);
+                $addedFinishedCount++;
+            }
+            $pdo->commit();
             $addedCount++;
         } catch (\Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
             $skippedInvalid[] = ['row' => $rowNum, 'reason' => 'Gagal disimpan: ' . $e->getMessage()];
         }
     }
 
     echo json_encode([
-        'success'      => true,
-        'added'        => $addedCount,
-        'duplicate'    => $duplicateCount,
-        'invalid'      => $skippedInvalid,
-        'message'      => "$addedCount laporan berhasil ditambahkan, $duplicateCount dilewati karena duplikat" . (count($skippedInvalid) ? ', ' . count($skippedInvalid) . ' baris tidak valid.' : '.'),
+        'success'        => true,
+        'added'          => $addedCount,
+        'added_finished' => $addedFinishedCount,
+        'duplicate'      => $duplicateCount,
+        'invalid'        => $skippedInvalid,
+        'message'        => "$addedCount laporan berhasil ditambahkan ($addedFinishedCount sudah selesai versi Conrod), $duplicateCount dilewati karena duplikat" . (count($skippedInvalid) ? ', ' . count($skippedInvalid) . ' baris tidak valid.' : '.'),
     ]);
     exit;
 }
 
 /**
- * Normalisasi cell tanggal (bisa berupa serial date Excel atau teks) → 'YYYY-MM-DD'.
+ * Normalisasi cell tanggal → 'YYYY-MM-DD'.
+ * Menerima: serial date Excel, teks DD-MM-YYYY (juga DD/MM/YYYY & DD.MM.YYYY — format template baru),
+ * dan teks YYYY-MM-DD (format template lama). Teks selalu dibaca hari-bulan-tahun, bukan bulan-hari.
  */
 function normalizeExcelDate(\PhpOffice\PhpSpreadsheet\Cell\Cell $cell): ?string
 {
@@ -203,8 +278,18 @@ function normalizeExcelDate(\PhpOffice\PhpSpreadsheet\Cell\Cell $cell): ?string
         }
     }
 
-    $ts = strtotime((string)$value);
-    return $ts ? date('Y-m-d', $ts) : null;
+    $str = trim((string)$value);
+    if (preg_match('/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/', $str, $m)) {
+        return checkdate((int)$m[2], (int)$m[1], (int)$m[3])
+            ? sprintf('%04d-%02d-%02d', (int)$m[3], (int)$m[2], (int)$m[1])
+            : null;
+    }
+    if (preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})/', $str, $m)) {
+        return checkdate((int)$m[2], (int)$m[3], (int)$m[1])
+            ? sprintf('%04d-%02d-%02d', (int)$m[1], (int)$m[2], (int)$m[3])
+            : null;
+    }
+    return null;
 }
 
 /**
@@ -295,7 +380,7 @@ function normalizeExcelTime(\PhpOffice\PhpSpreadsheet\Cell\Cell $cell): ?string
     <div class="max-w-2xl mx-auto">
         <a href="dashboard_report.php" class="text-slate-400 hover:text-slate-600 text-sm"><i class="fas fa-arrow-left mr-1"></i> Kembali ke E-Report</a>
         <h1 class="text-2xl font-bold text-slate-800 mt-1 mb-1"><i class="fas fa-file-excel text-green-600 mr-2"></i>Import Report dari Excel</h1>
-        <p class="text-slate-500 text-sm mb-6">Tambah banyak Laporan Awal Conrod sekaligus. Baris yang datanya sama persis (Line, Mesin, Tanggal, Shift, Problem) dengan laporan yang sudah ada akan otomatis dilewati.</p>
+        <p class="text-slate-500 text-sm mb-6">Tambah banyak Laporan Awal Conrod sekaligus. Nama mesin diisi otomatis dari Line + OP. Jam Selesai boleh dikosongkan (= belum selesai). Baris yang datanya sama persis (Line, Mesin, Tanggal Kejadian, Shift, Problem) dengan laporan yang sudah ada akan otomatis dilewati.</p>
 
         <div class="card p-6 mb-4">
             <a href="import_excel_conrod.php?ajax=template" class="inline-flex items-center gap-2 text-blue-600 font-semibold text-sm mb-4">
